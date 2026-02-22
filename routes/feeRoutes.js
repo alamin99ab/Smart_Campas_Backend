@@ -1,0 +1,36 @@
+const express = require('express');
+const router = express.Router();
+const {
+    updateFee,
+    getClearance,
+    giveSpecialPermission,
+    revokeSpecialPermission,
+    getFeeReport,
+    getStudentFeeHistory,
+    getDueList,
+    exportFeeReport,
+    generateFeeSummaryPDF
+} = require('../controllers/feeController');
+const { protect, authorize } = require('../middleware/authMiddleware');
+const { principalOnly, accountantOnly } = require('../middleware/roleMiddleware');
+const { checkSchoolStatus } = require('../middleware/schoolMiddleware');
+
+router.use(protect);
+router.use(checkSchoolStatus);
+
+// Fee management
+router.post('/update', authorize('principal', 'accountant'), updateFee);
+router.get('/report', authorize('principal', 'accountant'), getFeeReport);
+router.get('/due-list', authorize('principal', 'accountant'), getDueList);
+router.get('/export', authorize('principal', 'accountant'), exportFeeReport);
+router.get('/summary-pdf', authorize('principal'), generateFeeSummaryPDF);
+
+// Student specific
+router.get('/clearance/:studentId', getClearance);
+router.get('/history/:studentId', getStudentFeeHistory);
+
+// Special permission (Principal only)
+router.put('/special-permission/:studentId', principalOnly, giveSpecialPermission);
+router.put('/revoke-permission/:studentId', principalOnly, revokeSpecialPermission);
+
+module.exports = router;
