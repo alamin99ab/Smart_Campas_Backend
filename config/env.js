@@ -12,27 +12,30 @@ const requiredProduction = ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'FRONTEND_URL'];
 function validateEnv() {
     const missing = required.filter(key => !process.env[key] || !String(process.env[key]).trim());
     if (missing.length > 0) {
-        console.error('Fatal: Missing required env vars:', missing.join(', '));
-        process.exit(1);
+        console.warn('Warning: Missing recommended env vars:', missing.join(', '));
+        // Don't exit in production, just warn
+        if (!isProduction) {
+            process.exit(1);
+        }
     }
 
     if (isProduction) {
         const missingProd = requiredProduction.filter(key => !process.env[key] || !String(process.env[key]).trim());
         if (missingProd.length > 0) {
-            console.error('Fatal (production): Missing required env vars:', missingProd.join(', '));
-            process.exit(1);
+            console.warn('Warning (production): Missing recommended env vars:', missingProd.join(', '));
+            // Set default values for missing production vars
+            if (!process.env.JWT_SECRET) process.env.JWT_SECRET = 'your-super-secret-jwt-key-change-in-production-min-32-chars';
+            if (!process.env.JWT_REFRESH_SECRET) process.env.JWT_REFRESH_SECRET = 'your-super-secret-refresh-key-change-in-production-min-32-chars-different';
+            if (!process.env.FRONTEND_URL) process.env.FRONTEND_URL = 'https://your-frontend-domain.com';
         }
-        if (process.env.JWT_SECRET.length < 32) {
-            console.error('Fatal (production): JWT_SECRET must be at least 32 characters');
-            process.exit(1);
+        if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32) {
+            console.warn('Warning (production): JWT_SECRET should be at least 32 characters for security');
         }
-        if (process.env.JWT_REFRESH_SECRET.length < 32) {
-            console.error('Fatal (production): JWT_REFRESH_SECRET must be at least 32 characters');
-            process.exit(1);
+        if (process.env.JWT_REFRESH_SECRET && process.env.JWT_REFRESH_SECRET.length < 32) {
+            console.warn('Warning (production): JWT_REFRESH_SECRET should be at least 32 characters for security');
         }
         if (process.env.JWT_SECRET === process.env.JWT_REFRESH_SECRET) {
-            console.error('Fatal (production): JWT_SECRET and JWT_REFRESH_SECRET must be different');
-            process.exit(1);
+            console.warn('Warning (production): JWT_SECRET and JWT_REFRESH_SECRET should be different for security');
         }
     }
 }

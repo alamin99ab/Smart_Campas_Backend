@@ -13,7 +13,8 @@ exports.getHealth = async (req, res) => {
 
     res.status(healthy ? 200 : 503).json({
         success: healthy,
-        status: healthy ? 'ok' : 'degraded',
+        status: healthy ? 'healthy' : 'degraded',
+        healthy: healthy,
         timestamp: new Date().toISOString(),
         uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
         service: 'Smart Campus API',

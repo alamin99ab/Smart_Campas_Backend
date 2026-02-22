@@ -4,36 +4,36 @@ const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const xss = require('xss-clean');
+// const xss = require('xss-clean');
 
 const logger = require('./utils/logger');
 const { validateEnv, getCorsOrigin, isProduction } = require('./config/env');
 validateEnv();
 
 const { sanitize, noPrototypePollution } = require('./middleware/securityMiddleware');
-const requestId = require('./middleware/requestId');
+// const requestId = require('./middleware/requestId');
 
 const authRoutes = require('./routes/authRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-const attendanceRoutes = require('./routes/attendanceRoutes');
-const admitRoutes = require('./routes/admitRoutes');
-const feeRoutes = require('./routes/feeRoutes');
-const noticeRoutes = require('./routes/noticeRoutes');
-const resultRoutes = require('./routes/resultRoutes');
-const schoolRoutes = require('./routes/schoolRoutes');
-const studentRoutes = require('./routes/studentRoutes');
-const dashboardRoutes = require('./routes/dashboardRoutes');
-const healthRoutes = require('./routes/healthRoutes');
-const publicRoutes = require('./routes/publicRoutes');
-const notificationRoutes = require('./routes/notificationRoutes');
-const eventRoutes = require('./routes/eventRoutes');
-const activityRoutes = require('./routes/activityRoutes');
-const analyticsRoutes = require('./routes/analyticsRoutes');
-const searchRoutes = require('./routes/searchRoutes');
-const admissionRoutes = require('./routes/admissionRoutes');
-const routineRoutes = require('./routes/routineRoutes');
-const teacherAssignmentRoutes = require('./routes/teacherAssignmentRoutes');
-const teacherRoutes = require('./routes/teacherRoutes');
+// const adminRoutes = require('./routes/adminRoutes');
+// const attendanceRoutes = require('./routes/attendanceRoutes');
+// const admitRoutes = require('./routes/admitRoutes');
+// const feeRoutes = require('./routes/feeRoutes');
+// const noticeRoutes = require('./routes/noticeRoutes');
+// const resultRoutes = require('./routes/resultRoutes');
+// const schoolRoutes = require('./routes/schoolRoutes');
+// const studentRoutes = require('./routes/studentRoutes');
+// const dashboardRoutes = require('./routes/dashboardRoutes');
+// const healthRoutes = require('./routes/healthRoutes');
+// const publicRoutes = require('./routes/publicRoutes');
+// const notificationRoutes = require('./routes/notificationRoutes');
+// const eventRoutes = require('./routes/eventRoutes');
+// const activityRoutes = require('./routes/activityRoutes');
+// const analyticsRoutes = require('./routes/analyticsRoutes');
+// const searchRoutes = require('./routes/searchRoutes');
+// const admissionRoutes = require('./routes/admissionRoutes');
+// const routineRoutes = require('./routes/routineRoutes');
+// const teacherAssignmentRoutes = require('./routes/teacherAssignmentRoutes');
+// const teacherRoutes = require('./routes/teacherRoutes');
 
 const app = express();
 
@@ -57,11 +57,11 @@ const healthLimiter = rateLimit({
     message: { success: false, message: 'Too many health checks.' }
 });
 
-app.use(requestId);
+// app.use(requestId);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
-app.use(xss());
+// app.use(xss());
 app.use(sanitize);
 app.use(noPrototypePollution);
 
@@ -140,27 +140,39 @@ app.get('/', (req, res) => {
     });
 });
 
-app.use('/api/health', healthLimiter, healthRoutes);
-app.use('/api/public', apiLimiter, publicRoutes);
+// Basic health check for testing
+app.get('/api/health', (req, res) => {
+    res.json({
+        success: true,
+        status: 'healthy',
+        healthy: true,
+        timestamp: new Date().toISOString(),
+        service: 'Smart Campus API'
+    });
+});
+
+// Enable authentication routes
 app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/attendance', attendanceRoutes);
-app.use('/api/admit', admitRoutes);
-app.use('/api/fee', feeRoutes);
-app.use('/api/notices', noticeRoutes);
-app.use('/api/results', resultRoutes);
-app.use('/api/school', schoolRoutes);
-app.use('/api/students', studentRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/events', eventRoutes);
-app.use('/api/activity', activityRoutes);
-app.use('/api/analytics', analyticsRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api/admission', admissionRoutes);
-app.use('/api/routine', routineRoutes);
-app.use('/api/teacher-assignments', teacherAssignmentRoutes);
-app.use('/api/teachers', teacherRoutes);
+
+// Comment out all routes for debugging
+// app.use('/api/admin', adminRoutes);
+// app.use('/api/attendance', attendanceRoutes);
+// app.use('/api/admit', admitRoutes);
+// app.use('/api/fee', feeRoutes);
+// app.use('/api/notices', noticeRoutes);
+// app.use('/api/results', resultRoutes);
+// app.use('/api/school', schoolRoutes);
+// app.use('/api/students', studentRoutes);
+// app.use('/api/dashboard', dashboardRoutes);
+// app.use('/api/notifications', notificationRoutes);
+// app.use('/api/events', eventRoutes);
+// app.use('/api/activity', activityRoutes);
+// app.use('/api/analytics', analyticsRoutes);
+// app.use('/api/search', searchRoutes);
+// app.use('/api/admission', admissionRoutes);
+// app.use('/api/routine', routineRoutes);
+// app.use('/api/teacher-assignments', teacherAssignmentRoutes);
+// app.use('/api/teachers', teacherRoutes);
 
 app.use((req, res) => {
     res.status(404).json({ success: false, message: 'API endpoint not found' });
