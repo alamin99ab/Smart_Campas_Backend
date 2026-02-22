@@ -33,6 +33,7 @@ const searchRoutes = require('./routes/searchRoutes');
 const admissionRoutes = require('./routes/admissionRoutes');
 const routineRoutes = require('./routes/routineRoutes');
 const teacherAssignmentRoutes = require('./routes/teacherAssignmentRoutes');
+const teacherRoutes = require('./routes/teacherRoutes');
 
 const app = express();
 
@@ -159,6 +160,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/admission', admissionRoutes);
 app.use('/api/routine', routineRoutes);
 app.use('/api/teacher-assignments', teacherAssignmentRoutes);
+app.use('/api/teachers', teacherRoutes);
 
 app.use((req, res) => {
     res.status(404).json({ success: false, message: 'API endpoint not found' });

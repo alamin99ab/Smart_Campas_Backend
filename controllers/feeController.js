@@ -756,14 +756,281 @@ const sendPaymentReceipt = async (student, fee, amount, method) => {
                 }
             });
         }
-    } catch (error) {
-        console.error('Send receipt error:', error);
-    }
-};
 
-// Helper function to get month name
-const getMonthName = (monthNumber) => {
-    const months = ['January', 'February', 'March', 'April', 'May', 'June',
-                   'July', 'August', 'September', 'October', 'November', 'December'];
-    return months[monthNumber - 1] || 'Unknown';
-};
+            // Summary row
+            const totalDue = fees.reduce((acc, f) => acc + (f.amountDue - f.amountPaid), 0);
+            const totalPaid = fees.reduce((acc, f) => acc + f.amountPaid, 0);
+            
+            worksheet.addRow({});
+            worksheet.addRow({
+                studentName: 'SUMMARY',
+                amountDue: totalPaid + totalDue,
+                amountPaid: totalPaid,
+                due: totalDue
+            });
+
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename=fee_report_${Date.now()}.xlsx`);
+
+            await workbook.xlsx.write(res);
+            res.end();
+
+        } catch (error) {
+            console.error('Export fee report error:', error);
+            res.status(500).json({ message: 'Failed to export report' });
+        }
+    };
+
+    // @desc    Generate Fee Collection Summary PDF
+    // @route   GET /api/fee/summary-pdf
+    // @access  Private (Principal only)
+    exports.generateFeeSummaryPDF = async (req, res) => {
+        const { month, year } = req.query;
+        
+        try {
+            if (!month || !year) {
+                return res.status(400).json({ message: 'Month and year required' });
+            }
+
+            const school = await School.findOne({ schoolCode: req.user.schoolCode });
+            
+            // Get fee summary
+            const summary = await Fee.aggregate([
+                {
+                    $match: {
+                        schoolCode: req.user.schoolCode,
+                        month: parseInt(month),
+                        year: parseInt(year)
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$status',
+                        count: { $sum: 1 },
+                        totalCollected: { $sum: '$amountPaid' },
+                        totalDue: { $sum: { $subtract: ['$amountDue', '$amountPaid'] } }
+                    }
+                }
+            ]);
+
+            // Get recent collections
+            const recentPayments = await PaymentHistory.find({
+                schoolCode: req.user.schoolCode,
+                month: parseInt(month),
+                year: parseInt(year)
+            })
+            .populate('studentId', 'name roll')
+            .populate('receivedBy', 'name')
+            .sort({ createdAt: -1 })
+            .limit(20);
+
+            // Create PDF
+            const doc = new PDFDocument({ margin: 50, size: 'A4' });
+
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=fee_summary_${month}_${year}.pdf`);
+
+            doc.pipe(res);
+
+            // Header
+            doc.fontSize(20)
+               .font('Helvetica-Bold')
+               .text(school.schoolName, { align: 'center' });
+            
+            doc.fontSize(16)
+               .text(`Fee Collection Summary`, { align: 'center' });
+            
+            doc.fontSize(12)
+               .text(`${getMonthName(month)} ${year}`, { align: 'center' });
+
+            doc.moveDown();
+
+            // Summary table
+            doc.fontSize(14).text('Collection Summary', 50);
+            doc.moveDown(0.5);
+
+            const summaryData = {
+                Paid: summary.find(s => s._id === 'Paid') || { count: 0, totalCollected: 0 },
+                Partial: summary.find(s => s._id === 'Partial') || { count: 0, totalCollected: 0 },
+                Unpaid: summary.find(s => s._id === 'Unpaid') || { count: 0, totalCollected: 0 }
+            };
+
+            const totalCollected = summaryData.Paid.totalCollected + summaryData.Partial.totalCollected;
+            const totalDue = summaryData.Paid.totalDue + summaryData.Partial.totalDue + summaryData.Unpaid.totalDue;
+
+            doc.fontSize(10);
+            doc.text(`Total Collected: ৳${totalCollected}`, 50, doc.y);
+            doc.text(`Total Due: ৳${totalDue}`, 50, doc.y + 20);
+            doc.text(`Paid Students: ${summaryData.Paid.count}`, 250, doc.y - 20);
+            doc.text(`Partial Students: ${summaryData.Partial.count}`, 250, doc.y);
+            doc.text(`Unpaid Students: ${summaryData.Unpaid.count}`, 250, doc.y + 20);
+
+            doc.moveDown(3);
+
+            // Recent collections
+            doc.fontSize(14).text('Recent Collections', 50);
+            doc.moveDown(0.5);
+
+            let y = doc.y;
+            recentPayments.forEach((payment, index) => {
+                if (index < 10) {
+                    doc.fontSize(9)
+                       .text(`${new Date(payment.createdAt).toLocaleDateString()}`, 50, y)
+                       .text(`${payment.studentId?.name || 'N/A'}`, 120, y)
+                       .text(`৳${payment.amount}`, 300, y)
+                       .text(`${payment.paymentMethod}`, 380, y);
+                    y += 15;
+                }
+            });
+
+            doc.end();
+
+        } catch (error) {
+            console.error('Generate PDF error:', error);
+            res.status(500).json({ message: 'Failed to generate PDF' });
+        }
+    };
+
+    // Helper function to update student's total due
+    const updateStudentTotalDue = async (studentId) => {
+        try {
+            const fees = await Fee.find({ studentId });
+            const totalDue = fees.reduce((acc, curr) => {
+                return acc + (curr.amountDue - curr.amountPaid);
+            }, 0);
+
+            await Student.findByIdAndUpdate(studentId, { totalDue });
+        } catch (error) {
+            console.error('Update student total due error:', error);
+        }
+    };
+
+    // Helper function to send payment receipt
+    const sendPaymentReceipt = async (student, fee, amount, method) => {
+        try {
+            // Send SMS
+            if (student.guardian?.phone) {
+                await sendSMS({
+                    to: student.guardian.phone,
+                    message: `Payment receipt: ৳${amount} received for ${student.name} (${fee.month}/${fee.year}). Thank you.`
+                });
+            }
+
+            // Send Email
+            if (student.guardian?.email) {
+                await sendEmail({
+                    to: student.guardian.email,
+                    subject: 'Fee Payment Receipt',
+                    template: 'payment-receipt',
+                    data: {
+                        studentName: student.name,
+                        amount,
+                        month: getMonthName(fee.month),
+                        year: fee.year,
+                        date: new Date().toLocaleDateString(),
+                        method
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Send receipt error:', error);
+        }
+    };
+
+    // Helper function to get month name
+    const getMonthName = (monthNumber) => {
+        const months = ['January', 'February', 'March', 'April', 'May', 'June',
+                       'July', 'August', 'September', 'October', 'November', 'December'];
+        return months[monthNumber - 1] || 'Unknown';
+    };
+
+    // @desc    Get all fees
+    // @route   GET /api/fee
+    // @access  Private
+    exports.getFees = async (req, res) => {
+        try {
+            const { page = 1, limit = 10, studentId, month, year, status } = req.query;
+            const filter = { schoolCode: req.user.schoolCode };
+            
+            if (studentId) filter.studentId = studentId;
+            if (month) filter.month = month;
+            if (year) filter.year = year;
+            if (status) filter.status = status;
+            
+            const fees = await Fee.find(filter)
+                .populate('studentId', 'name rollNumber class section')
+                .limit(limit * 1)
+                .skip((page - 1) * limit)
+                .sort({ createdAt: -1 });
+                
+            const total = await Fee.countDocuments(filter);
+            
+            res.json({
+                success: true,
+                data: {
+                    fees,
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total,
+                        pages: Math.ceil(total / limit)
+                    }
+                }
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, message: error.message });
+        }
+    };
+
+    // @desc    Collect payment
+    // @route   POST /api/fee/collect
+    // @access  Private (Principal/Accountant)
+    exports.collectPayment = async (req, res) => {
+        try {
+            const { studentId, amount, paymentMethod, transactionId, remarks } = req.body;
+            
+            if (!studentId || !amount || !paymentMethod) {
+                return res.status(400).json({ success: false, message: 'Student ID, amount, and payment method are required' });
+            }
+            
+            // Find student
+            const student = await Student.findOne({ 
+                _id: studentId, 
+                schoolCode: req.user.schoolCode 
+            });
+            
+            if (!student) {
+                return res.status(404).json({ success: false, message: 'Student not found' });
+            }
+            
+            // Create payment history record
+            const paymentHistory = await PaymentHistory.create({
+                studentId,
+                amount,
+                paymentMethod,
+                transactionId,
+                remarks,
+                collectedBy: req.user.id,
+                schoolCode: req.user.schoolCode
+            });
+            
+            // Update student's total due
+            const currentTotalDue = student.totalDue || 0;
+            const newTotalDue = Math.max(0, currentTotalDue - amount);
+            
+            await Student.findByIdAndUpdate(studentId, { 
+                totalDue: newTotalDue 
+            });
+            
+            // Send payment receipt
+            await sendPaymentReceipt(student, null, amount, paymentMethod);
+            
+            res.status(201).json({
+                success: true,
+                data: paymentHistory,
+                message: 'Payment collected successfully'
+            });
+        } catch (error) {
+            res.status(500).json({ success: false, message: error.message });
+        }
+    };

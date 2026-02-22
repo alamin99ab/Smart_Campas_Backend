@@ -9,7 +9,9 @@ const {
     getStudentFeeHistory,
     getDueList,
     exportFeeReport,
-    generateFeeSummaryPDF
+    generateFeeSummaryPDF,
+    getFees,
+    collectPayment
 } = require('../controllers/feeController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { principalOnly, accountantOnly } = require('../middleware/roleMiddleware');
@@ -19,6 +21,8 @@ router.use(protect);
 router.use(checkSchoolStatus);
 
 // Fee management
+router.get('/', getFees);
+router.post('/collect', authorize('principal', 'accountant'), collectPayment);
 router.post('/update', authorize('principal', 'accountant'), updateFee);
 router.get('/report', authorize('principal', 'accountant'), getFeeReport);
 router.get('/due-list', authorize('principal', 'accountant'), getDueList);

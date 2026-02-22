@@ -96,6 +96,11 @@ exports.registerUser = async (req, res) => {
             return res.status(400).json({ message: 'Email already registered' });
         }
 
+        if (role === 'super_admin') {
+            // Super admin doesn't need school code or school name
+            // Can register without school association
+        }
+
         if (role === 'principal') {
             if (!schoolName || !schoolCode) {
                 return res.status(400).json({ message: 'School name and code required for principal' });
