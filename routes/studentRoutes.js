@@ -1,39 +1,41 @@
+/**
+ * 🎓 STUDENT ROUTES
+ * Industry-level Student routes for Smart Campus System
+ */
+
 const express = require('express');
 const router = express.Router();
 const {
-    addStudent,
-    getStudents,
-    getStudentById,
-    updateStudent,
-    deleteStudent,
-    uploadPhoto,
-    getStudentsByClass,
-    exportStudents,
-    upload
+    getStudentDashboard,
+    getNotices,
+    getResults,
+    getAttendance,
+    getRoutine,
+    getProfile
 } = require('../controllers/studentController');
+
 const { protect, authorize } = require('../middleware/authMiddleware');
-const { principalOnly } = require('../middleware/roleMiddleware');
 
-// All routes protected
+// Middleware
 router.use(protect);
+router.use(authorize('student'));
 
-// Export (principal/admin only)
-router.get('/export', authorize('principal', 'admin'), exportStudents);
+// Dashboard
+router.get('/dashboard', getStudentDashboard);
 
-// By class (for attendance)
-router.get('/by-class', getStudentsByClass);
+// Notice Management (View Only)
+router.get('/notices', getNotices);
 
-// CRUD
-router.route('/')
-    .post(authorize('teacher', 'principal'), addStudent)
-    .get(getStudents);
+// Result Management (View Only)
+router.get('/results', getResults);
 
-router.route('/:id')
-    .get(getStudentById)
-    .put(authorize('teacher', 'principal'), updateStudent)
-    .delete(principalOnly, deleteStudent);
+// Attendance Management (View Only)
+router.get('/attendance', getAttendance);
 
-// Photo upload
-router.post('/:id/photo', authorize('teacher', 'principal'), upload, uploadPhoto);
+// Routine Management (View Only)
+router.get('/routine', getRoutine);
+
+// Profile Management
+router.get('/profile', getProfile);
 
 module.exports = router;

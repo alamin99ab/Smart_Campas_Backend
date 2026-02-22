@@ -11,29 +11,20 @@ const { validateEnv, getCorsOrigin, isProduction } = require('./config/env');
 validateEnv();
 
 const { sanitize, noPrototypePollution } = require('./middleware/securityMiddleware');
-// const requestId = require('./middleware/requestId');
+const requestId = require('./middleware/requestId');
 
 const authRoutes = require('./routes/authRoutes');
-// const adminRoutes = require('./routes/adminRoutes');
-// const attendanceRoutes = require('./routes/attendanceRoutes');
-// const admitRoutes = require('./routes/admitRoutes');
-// const feeRoutes = require('./routes/feeRoutes');
-// const noticeRoutes = require('./routes/noticeRoutes');
-// const resultRoutes = require('./routes/resultRoutes');
-// const schoolRoutes = require('./routes/schoolRoutes');
-// const studentRoutes = require('./routes/studentRoutes');
-// const dashboardRoutes = require('./routes/dashboardRoutes');
-// const healthRoutes = require('./routes/healthRoutes');
-// const publicRoutes = require('./routes/publicRoutes');
-// const notificationRoutes = require('./routes/notificationRoutes');
-// const eventRoutes = require('./routes/eventRoutes');
-// const activityRoutes = require('./routes/activityRoutes');
-// const analyticsRoutes = require('./routes/analyticsRoutes');
-// const searchRoutes = require('./routes/searchRoutes');
-// const admissionRoutes = require('./routes/admissionRoutes');
-// const routineRoutes = require('./routes/routineRoutes');
-// const teacherAssignmentRoutes = require('./routes/teacherAssignmentRoutes');
-// const teacherRoutes = require('./routes/teacherRoutes');
+const studentRoutes = require('./routes/studentRoutes');
+const teacherRoutes = require('./routes/teacherRoutes');
+const schoolRoutes = require('./routes/schoolRoutes');
+const noticeRoutes = require('./routes/noticeRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
+const resultRoutes = require('./routes/resultRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const superAdminRoutes = require('./routes/superAdminRoutes');
+const principalRoutes = require('./routes/principalRoutes');
+const publicRoutes = require('./routes/publicRoutes');
 
 const app = express();
 
@@ -57,7 +48,15 @@ const healthLimiter = rateLimit({
     message: { success: false, message: 'Too many health checks.' }
 });
 
-// app.use(requestId);
+app.use(helmet());
+app.use(rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 1000, // Much higher for testing
+    message: { success: false, message: 'Too many requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false
+}));
+app.use(requestId);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
@@ -153,26 +152,31 @@ app.get('/api/health', (req, res) => {
 
 // Enable authentication routes
 app.use('/api/auth', authRoutes);
+app.use('/api/students', studentRoutes);
+app.use('/api/teachers', teacherRoutes);
+app.use('/api/school', schoolRoutes);
+app.use('/api/notices', noticeRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/results', resultRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/super-admin', superAdminRoutes);
+app.use('/api/principal', principalRoutes);
+app.use('/api/student', studentRoutes);
+app.use('/api/teacher', teacherRoutes);
+app.use('/api/public', publicRoutes);
 
 // Comment out all routes for debugging
 // app.use('/api/admin', adminRoutes);
-// app.use('/api/attendance', attendanceRoutes);
 // app.use('/api/admit', admitRoutes);
 // app.use('/api/fee', feeRoutes);
-// app.use('/api/notices', noticeRoutes);
-// app.use('/api/results', resultRoutes);
-// app.use('/api/school', schoolRoutes);
-// app.use('/api/students', studentRoutes);
-// app.use('/api/dashboard', dashboardRoutes);
 // app.use('/api/notifications', notificationRoutes);
 // app.use('/api/events', eventRoutes);
 // app.use('/api/activity', activityRoutes);
-// app.use('/api/analytics', analyticsRoutes);
 // app.use('/api/search', searchRoutes);
 // app.use('/api/admission', admissionRoutes);
 // app.use('/api/routine', routineRoutes);
 // app.use('/api/teacher-assignments', teacherAssignmentRoutes);
-// app.use('/api/teachers', teacherRoutes);
 
 app.use((req, res) => {
     res.status(404).json({ success: false, message: 'API endpoint not found' });

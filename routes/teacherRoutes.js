@@ -1,37 +1,41 @@
+/**
+ * 👨‍🏫 TEACHER ROUTES
+ * Industry-level Teacher routes for Smart Campus System
+ */
+
 const express = require('express');
 const router = express.Router();
 const {
-    getTeachers,
-    getTeacherById,
-    createTeacher,
-    updateTeacher,
-    deleteTeacher,
-    assignSubjects,
-    getTeacherSchedule,
-    uploadPhoto
+    getTeacherDashboard,
+    takeAttendance,
+    getAttendanceRecords,
+    inputResults,
+    getResults,
+    getClassStudents,
+    createNotice
 } = require('../controllers/teacherController');
+
 const { protect, authorize } = require('../middleware/authMiddleware');
-const { principalOnly } = require('../middleware/roleMiddleware');
-const { upload } = require('../middleware/uploadMiddleware');
 
-// All routes protected
+// Middleware
 router.use(protect);
+router.use(authorize('teacher'));
 
-// CRUD operations
-router.route('/')
-    .get(getTeachers)
-    .post(authorize('principal', 'admin'), createTeacher);
+// Dashboard
+router.get('/dashboard', getTeacherDashboard);
 
-router.route('/:id')
-    .get(getTeacherById)
-    .put(authorize('principal', 'admin', 'teacher'), updateTeacher)
-    .delete(principalOnly, deleteTeacher);
+// Attendance Management
+router.post('/attendance', takeAttendance);
+router.get('/attendance', getAttendanceRecords);
 
-// Subject assignment
-router.post('/:id/subjects', authorize('principal', 'admin'), assignSubjects);
-router.get('/:id/schedule', getTeacherSchedule);
+// Result Management
+router.post('/results', inputResults);
+router.get('/results', getResults);
 
-// Photo upload
-router.post('/:id/photo', authorize('principal', 'admin', 'teacher'), upload.single('photo'), uploadPhoto);
+// Class Management
+router.get('/students/:classId', getClassStudents);
+
+// Notice Management
+router.post('/notices', createNotice);
 
 module.exports = router;

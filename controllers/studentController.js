@@ -1,464 +1,414 @@
-// controllers/studentController.js
-const Student = require('../models/Student');
+/**
+ * 🎓 STUDENT CONTROLLER
+ * Industry-level Student management for Smart Campus System
+ * Students can only view notices and check their results
+ */
+
 const User = require('../models/User');
-const AuditLog = require('../models/AuditLog');
-const Excel = require('exceljs');
-const PDFDocument = require('pdfkit');
-const cloudinary = require('../config/cloudinary');
-const multer = require('multer');
-const path = require('path');
+const Class = require('../models/Class');
+const Notice = require('../models/Notice');
+const Result = require('../models/Result');
+const Attendance = require('../models/Attendance');
+const Routine = require('../models/Routine');
 
-// Multer setup for photo upload
-const upload = multer({
-    dest: 'uploads/',
-    limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
-    fileFilter: (req, file, cb) => {
-        const allowedTypes = /jpeg|jpg|png/;
-        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
-        if (mimetype && extname) {
-            return cb(null, true);
-        } else {
-            cb(new Error('Only images are allowed (jpeg, jpg, png)'));
-        }
-    }
-});
-
-// Helper: Validate class and section
-const validateClassSection = (studentClass, section) => {
-    // You can define allowed classes and sections in config
-    const allowedClasses = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
-    const allowedSections = ['A', 'B', 'C'];
-    if (!allowedClasses.includes(studentClass)) {
-        return 'Invalid class';
-    }
-    if (section && !allowedSections.includes(section)) {
-        return 'Invalid section';
-    }
-    return null;
-};
-
-// @desc    Add new student
-// @route   POST /api/students
-// @access  Private (Teacher/Principal/Admin)
-exports.addStudent = async (req, res) => {
-    const { 
-        name, 
-        roll, 
-        studentClass, 
-        section,
-        fatherName,
-        motherName,
-        dateOfBirth,
-        gender,
-        address,
-        phone,
-        guardianName,
-        guardianPhone,
-        email,
-        emergencyContact
-    } = req.body;
-
+/**
+ * @desc    Get student dashboard
+ * @route   GET /api/student/dashboard
+ * @access  Student only
+ */
+exports.getStudentDashboard = async (req, res) => {
     try {
-        // Validation
-        if (!name || !roll || !studentClass) {
-            return res.status(400).json({ message: 'Name, roll and class are required' });
-        }
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
 
-        // Check class validity
-        const classError = validateClassSection(studentClass, section);
-        if (classError) {
-            return res.status(400).json({ message: classError });
-        }
-
-        // Check if student with same roll and class exists in this school
-        const existing = await Student.findOne({
-            schoolCode: req.user.schoolCode,
-            studentClass,
-            roll: Number(roll)
-        });
-        if (existing) {
-            return res.status(400).json({ message: 'Student with this roll already exists in this class' });
-        }
-
-        // Create student
-        const student = await Student.create({
-            name,
-            roll: Number(roll),
-            studentClass,
-            section: section || null,
-            fatherName,
-            motherName,
-            dateOfBirth,
-            gender,
-            address,
-            phone,
-            guardian: {
-                name: guardianName,
-                phone: guardianPhone,
-                email
-            },
-            emergencyContact,
-            schoolCode: req.user.schoolCode,
-            addedBy: req.user._id
-        });
-
-        // Audit log
-        await AuditLog.create({
-            user: req.user._id,
-            action: 'STUDENT_ADDED',
-            details: { studentId: student._id, name: student.name, roll: student.roll, class: student.studentClass },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
-        });
-
-        res.status(201).json({ 
-            message: 'Student added successfully', 
-            student 
-        });
-
-    } catch (error) {
-        console.error('Add student error:', error);
-        res.status(500).json({ message: 'Failed to add student' });
-    }
-};
-
-// @desc    Get all students (with filters & pagination)
-// @route   GET /api/students
-// @access  Private
-exports.getStudents = async (req, res) => {
-    try {
-        const { 
-            class: className, 
-            section, 
-            search, 
-            page = 1, 
-            limit = 20 
-        } = req.query;
-
-        let query = { schoolCode: req.user.schoolCode };
-
-        if (className) query.studentClass = className;
-        if (section) query.section = section;
-        if (search) {
-            query.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { roll: isNaN(search) ? undefined : Number(search) },
-                { fatherName: { $regex: search, $options: 'i' } }
-            ].filter(Boolean);
-        }
-
-        const skip = (page - 1) * limit;
-
-        const students = await Student.find(query)
-            .populate('addedBy', 'name')
-            .sort({ studentClass: 1, section: 1, roll: 1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
-
-        const total = await Student.countDocuments(query);
-
-        res.json({
-            students,
-            total,
-            totalPages: Math.ceil(total / limit),
-            currentPage: parseInt(page)
-        });
-
-    } catch (error) {
-        console.error('Get students error:', error);
-        res.status(500).json({ message: 'Failed to fetch students' });
-    }
-};
-
-// @desc    Get single student by ID
-// @route   GET /api/students/:id
-// @access  Private
-exports.getStudentById = async (req, res) => {
-    try {
-        const student = await Student.findById(req.params.id)
-            .populate('addedBy', 'name email')
-            .populate('updatedBy', 'name email');
+        // Get student details with class information
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section classLevel')
+            .select('name rollNumber email phone classId');
 
         if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        // Check school access
-        if (student.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        res.json(student);
-
-    } catch (error) {
-        console.error('Get student error:', error);
-        res.status(500).json({ message: 'Failed to fetch student' });
-    }
-};
-
-// @desc    Update student
-// @route   PUT /api/students/:id
-// @access  Private (Teacher/Principal/Admin)
-exports.updateStudent = async (req, res) => {
-    try {
-        const student = await Student.findById(req.params.id);
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        // Check school access
-        if (student.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        const { 
-            name, roll, studentClass, section, fatherName, motherName,
-            dateOfBirth, gender, address, phone, guardianName, guardianPhone,
-            email, emergencyContact
-        } = req.body;
-
-        // If roll/class is being changed, check for duplicates
-        if ((roll && roll !== student.roll) || (studentClass && studentClass !== student.studentClass)) {
-            const existing = await Student.findOne({
-                schoolCode: student.schoolCode,
-                studentClass: studentClass || student.studentClass,
-                roll: Number(roll || student.roll),
-                _id: { $ne: student._id }
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
             });
-            if (existing) {
-                return res.status(400).json({ message: 'Student with this roll already exists in this class' });
-            }
         }
 
-        // Update fields
-        if (name) student.name = name;
-        if (roll) student.roll = Number(roll);
-        if (studentClass) student.studentClass = studentClass;
-        if (section !== undefined) student.section = section;
-        if (fatherName) student.fatherName = fatherName;
-        if (motherName) student.motherName = motherName;
-        if (dateOfBirth) student.dateOfBirth = dateOfBirth;
-        if (gender) student.gender = gender;
-        if (address) student.address = address;
-        if (phone) student.phone = phone;
-        if (guardianName || guardianPhone || email) {
-            student.guardian = {
-                name: guardianName || student.guardian?.name,
-                phone: guardianPhone || student.guardian?.phone,
-                email: email || student.guardian?.email
-            };
-        }
-        if (emergencyContact) student.emergencyContact = emergencyContact;
-
-        student.updatedBy = req.user._id;
-        student.updatedAt = Date.now();
-
-        await student.save();
-
-        // Audit log
-        await AuditLog.create({
-            user: req.user._id,
-            action: 'STUDENT_UPDATED',
-            details: { studentId: student._id, name: student.name },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
-        });
-
-        res.json({ 
-            message: 'Student updated successfully', 
-            student 
-        });
-
-    } catch (error) {
-        console.error('Update student error:', error);
-        res.status(500).json({ message: 'Failed to update student' });
-    }
-};
-
-// @desc    Delete student (soft delete)
-// @route   DELETE /api/students/:id
-// @access  Private (Principal/Admin)
-exports.deleteStudent = async (req, res) => {
-    try {
-        if (req.user.role !== 'principal' && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied. Principal or admin only.' });
-        }
-
-        const student = await Student.findById(req.params.id);
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        if (student.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        // Soft delete: set isActive false or remove?
-        // Option 1: Hard delete (permanent)
-        // await student.deleteOne();
-
-        // Option 2: Soft delete (mark as inactive)
-        student.isActive = false;
-        await student.save();
-
-        // Audit log
-        await AuditLog.create({
-            user: req.user._id,
-            action: 'STUDENT_DELETED',
-            details: { studentId: student._id, name: student.name },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
-        });
-
-        res.json({ message: 'Student deleted successfully' });
-
-    } catch (error) {
-        console.error('Delete student error:', error);
-        res.status(500).json({ message: 'Failed to delete student' });
-    }
-};
-
-// @desc    Upload student photo
-// @route   POST /api/students/:id/photo
-// @access  Private (Teacher/Principal/Admin)
-exports.uploadPhoto = async (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ message: 'No file uploaded' });
-        }
-
-        const student = await Student.findById(req.params.id);
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        // Check school access
-        if (student.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        // Delete old photo from cloudinary if exists
-        if (student.photo?.publicId) {
-            await cloudinary.uploader.destroy(student.photo.publicId);
-        }
-
-        // Upload new photo
-        const result = await cloudinary.uploader.upload(req.file.path, {
-            folder: 'students',
-            public_id: `student_${student._id}_${Date.now()}`,
-            width: 300,
-            height: 300,
-            crop: 'limit'
-        });
-
-        student.photo = {
-            url: result.secure_url,
-            publicId: result.public_id
-        };
-        await student.save();
-
-        res.json({ 
-            message: 'Photo uploaded successfully', 
-            photo: student.photo 
-        });
-
-    } catch (error) {
-        console.error('Upload photo error:', error);
-        res.status(500).json({ message: 'Failed to upload photo' });
-    }
-};
-
-// @desc    Get students by class (for attendance etc.)
-// @route   GET /api/students/by-class
-// @access  Private
-exports.getStudentsByClass = async (req, res) => {
-    try {
-        const { class: className, section } = req.query;
-        if (!className) {
-            return res.status(400).json({ message: 'Class is required' });
-        }
-
-        const students = await Student.find({
-            schoolCode: req.user.schoolCode,
-            studentClass: className,
-            ...(section && { section }),
+        // Get recent notices
+        const notices = await Notice.find({
+            schoolCode,
+            targetAudience: { $in: ['student', 'all'] },
             isActive: true
         })
-        .select('name roll section fatherName motherName photo')
-        .sort({ roll: 1 })
-        .lean();
+        .sort({ createdAt: -1 })
+        .limit(5);
 
-        res.json(students);
+        // Get recent results
+        const results = await Result.find({
+            schoolCode,
+            studentId,
+            isActive: true
+        })
+        .populate('subjectId', 'subjectName subjectCode')
+        .populate('examType')
+        .sort({ examDate: -1 })
+        .limit(5);
 
-    } catch (error) {
-        console.error('Get students by class error:', error);
-        res.status(500).json({ message: 'Failed to fetch students' });
-    }
-};
-
-// @desc    Export students to Excel
-// @route   GET /api/students/export
-// @access  Private (Principal/Admin)
-exports.exportStudents = async (req, res) => {
-    try {
-        const { class: className, section } = req.query;
-
-        let query = { schoolCode: req.user.schoolCode, isActive: true };
-        if (className) query.studentClass = className;
-        if (section) query.section = section;
-
-        const students = await Student.find(query)
-            .sort({ studentClass: 1, section: 1, roll: 1 })
-            .lean();
-
-        const workbook = new Excel.Workbook();
-        const worksheet = workbook.addWorksheet('Students');
-
-        worksheet.columns = [
-            { header: 'Name', key: 'name', width: 25 },
-            { header: 'Roll', key: 'roll', width: 10 },
-            { header: 'Class', key: 'studentClass', width: 10 },
-            { header: 'Section', key: 'section', width: 10 },
-            { header: "Father's Name", key: 'fatherName', width: 20 },
-            { header: "Mother's Name", key: 'motherName', width: 20 },
-            { header: 'Date of Birth', key: 'dateOfBirth', width: 15 },
-            { header: 'Gender', key: 'gender', width: 10 },
-            { header: 'Phone', key: 'phone', width: 15 },
-            { header: 'Guardian Name', key: 'guardianName', width: 20 },
-            { header: 'Guardian Phone', key: 'guardianPhone', width: 15 },
-            { header: 'Email', key: 'email', width: 25 }
-        ];
-
-        students.forEach(s => {
-            worksheet.addRow({
-                name: s.name,
-                roll: s.roll,
-                studentClass: s.studentClass,
-                section: s.section || '',
-                fatherName: s.fatherName || '',
-                motherName: s.motherName || '',
-                dateOfBirth: s.dateOfBirth ? new Date(s.dateOfBirth).toLocaleDateString() : '',
-                gender: s.gender || '',
-                phone: s.phone || '',
-                guardianName: s.guardian?.name || '',
-                guardianPhone: s.guardian?.phone || '',
-                email: s.guardian?.email || ''
-            });
+        // Get attendance summary (last 30 days)
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const attendanceRecords = await Attendance.find({
+            schoolCode,
+            'attendance.studentId': studentId,
+            date: { $gte: thirtyDaysAgo }
         });
 
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=students_${className || 'all'}.xlsx`);
+        const attendanceSummary = {
+            total: attendanceRecords.length,
+            present: attendanceRecords.filter(record => 
+                record.attendance.some(att => 
+                    att.studentId.toString() === studentId.toString() && 
+                    att.status === 'Present'
+                )
+            ).length,
+            absent: attendanceRecords.filter(record => 
+                record.attendance.some(att => 
+                    att.studentId.toString() === studentId.toString() && 
+                    att.status === 'Absent'
+                )
+            ).length,
+            late: attendanceRecords.filter(record => 
+                record.attendance.some(att => 
+                    att.studentId.toString() === studentId.toString() && 
+                    att.status === 'Late'
+                )
+            ).length
+        };
 
-        await workbook.xlsx.write(res);
-        res.end();
+        // Get today's routine
+        const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+        const todayRoutine = await Routine.findOne({
+            schoolCode,
+            classId: student.classId._id,
+            'schedule.day': today,
+            isActive: true
+        })
+        .populate('schedule.periods.subjectId', 'subjectName')
+        .populate('schedule.periods.teacherId', 'name');
+
+        res.status(200).json({
+            success: true,
+            data: {
+                student: {
+                    name: student.name,
+                    rollNumber: student.rollNumber,
+                    class: student.classId
+                },
+                notices,
+                results,
+                attendance: {
+                    summary: attendanceSummary,
+                    attendancePercentage: attendanceSummary.total > 0 
+                        ? Math.round((attendanceSummary.present / attendanceSummary.total) * 100)
+                        : 0
+                },
+                todayRoutine: todayRoutine ? todayRoutine.schedule.find(s => s.day === today) : null
+            }
+        });
 
     } catch (error) {
-        console.error('Export students error:', error);
-        res.status(500).json({ message: 'Failed to export students' });
+        console.error('Error getting student dashboard:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving dashboard data',
+            error: error.message
+        });
     }
 };
 
-// Export multer middleware
-exports.upload = upload.single('photo');
+/**
+ * @desc    Get all notices for student
+ * @route   GET /api/student/notices
+ * @access  Student only
+ */
+exports.getNotices = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, priority } = req.query;
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const query = {
+            schoolCode,
+            targetAudience: { $in: ['student', 'all'] },
+            isActive: true
+        };
+
+        if (priority) {
+            query.priority = priority;
+        }
+
+        const notices = await Notice.find(query)
+            .sort({ createdAt: -1, priority: -1 })
+            .skip((page - 1) * limit)
+            .limit(parseInt(limit));
+
+        const total = await Notice.countDocuments(query);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                notices,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / limit)
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting notices:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving notices',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student's results
+ * @route   GET /api/student/results
+ * @access  Student only
+ */
+exports.getResults = async (req, res) => {
+    try {
+        const { examType, subjectId, academicYear } = req.query;
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const query = {
+            schoolCode,
+            studentId,
+            isActive: true
+        };
+
+        if (examType) query.examType = examType;
+        if (subjectId) query.subjectId = subjectId;
+        if (academicYear) query.academicYear = academicYear;
+
+        const results = await Result.find(query)
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('teacherId', 'name')
+            .sort({ examDate: -1 });
+
+        // Calculate overall performance
+        const totalMarks = results.reduce((sum, result) => sum + result.marksObtained, 0);
+        const maxMarks = results.reduce((sum, result) => sum + result.totalMarks, 0);
+        const overallPercentage = maxMarks > 0 ? Math.round((totalMarks / maxMarks) * 100) : 0;
+
+        // Grade distribution
+        const gradeDistribution = results.reduce((acc, result) => {
+            acc[result.grade] = (acc[result.grade] || 0) + 1;
+            return acc;
+        }, {});
+
+        res.status(200).json({
+            success: true,
+            data: {
+                results,
+                summary: {
+                    totalExams: results.length,
+                    overallPercentage,
+                    totalMarksObtained: totalMarks,
+                    totalMaxMarks: maxMarks,
+                    gradeDistribution
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting results:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving results',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student's attendance
+ * @route   GET /api/student/attendance
+ * @access  Student only
+ */
+exports.getAttendance = async (req, res) => {
+    try {
+        const { startDate, endDate, month, year } = req.query;
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const query = {
+            schoolCode,
+            'attendance.studentId': studentId
+        };
+
+        // Date filtering
+        if (startDate && endDate) {
+            query.date = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        } else if (month && year) {
+            const startOfMonth = new Date(year, month - 1, 1);
+            const endOfMonth = new Date(year, month, 0);
+            query.date = {
+                $gte: startOfMonth,
+                $lte: endOfMonth
+            };
+        }
+
+        const attendanceRecords = await Attendance.find(query)
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName subjectCode')
+            .sort({ date: -1 });
+
+        // Process attendance data for the student
+        const studentAttendance = attendanceRecords.map(record => {
+            const studentRecord = record.attendance.find(
+                att => att.studentId.toString() === studentId.toString()
+            );
+            
+            return {
+                date: record.date,
+                class: record.classId,
+                subject: record.subjectId,
+                status: studentRecord ? studentRecord.status : 'Not Recorded',
+                remarks: studentRecord ? studentRecord.remarks : ''
+            };
+        });
+
+        // Calculate attendance summary
+        const summary = {
+            total: studentAttendance.length,
+            present: studentAttendance.filter(att => att.status === 'Present').length,
+            absent: studentAttendance.filter(att => att.status === 'Absent').length,
+            late: studentAttendance.filter(att => att.status === 'Late').length,
+            excused: studentAttendance.filter(att => att.status === 'Excused').length,
+            percentage: studentAttendance.length > 0 
+                ? Math.round((studentAttendance.filter(att => att.status === 'Present').length / studentAttendance.length) * 100)
+                : 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: {
+                attendance: studentAttendance,
+                summary
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting attendance:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving attendance',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student's class routine
+ * @route   GET /api/student/routine
+ * @access  Student only
+ */
+exports.getRoutine = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        // Get student's class
+        const student = await User.findById(studentId).populate('classId');
+        if (!student || !student.classId) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student class not found'
+            });
+        }
+
+        // Get routine for student's class
+        const routine = await Routine.findOne({
+            schoolCode,
+            classId: student.classId._id,
+            isActive: true
+        })
+        .populate('classId', 'className section')
+        .populate('schedule.periods.subjectId', 'subjectName')
+        .populate('schedule.periods.teacherId', 'name');
+
+        if (!routine) {
+            return res.status(404).json({
+                success: false,
+                message: 'Routine not found for your class'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                class: routine.classId,
+                schedule: routine.schedule,
+                breaks: routine.breaks,
+                academicYear: routine.academicYear,
+                semester: routine.semester
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting routine:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving routine',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student profile
+ * @route   GET /api/student/profile
+ * @access  Student only
+ */
+exports.getProfile = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section classLevel')
+            .select('-password')
+            .select('-__v');
+
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: student
+        });
+
+    } catch (error) {
+        console.error('Error getting profile:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving profile',
+            error: error.message
+        });
+    }
+};

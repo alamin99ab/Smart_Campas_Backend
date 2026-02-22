@@ -1,331 +1,427 @@
-const Teacher = require('../models/Teacher');
-const User = require('../models/User');
-const multer = require('multer');
+/**
+ * 👨‍🏫 TEACHER CONTROLLER
+ * Industry-level Teacher management for Smart Campus System
+ */
 
-// @desc    Get all teachers
-// @route   GET /api/teachers
-// @access  Private
-exports.getTeachers = async (req, res) => {
+const User = require('../models/User');
+const Class = require('../models/Class');
+const Subject = require('../models/Subject');
+const Attendance = require('../models/Attendance');
+const Result = require('../models/Result');
+const Notice = require('../models/Notice');
+const AuditLog = require('../models/AuditLog');
+
+/**
+ * @desc    Get teacher's assigned classes and subjects
+ * @route   GET /api/teacher/dashboard
+ * @access  Teacher only
+ */
+exports.getTeacherDashboard = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, class: className, subject } = req.query;
-        const filter = { schoolCode: req.user.schoolCode };
-        
-        if (search) {
-            filter.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } },
-                { subjects: { $in: [new RegExp(search, 'i')] } }
-            ];
-        }
-        
-        if (subject) {
-            filter.subjects = { $in: [subject] };
-        }
-        
-        const teachers = await Teacher.find(filter)
-            .populate('userId', 'name email')
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .sort({ createdAt: -1 });
-            
-        const total = await Teacher.countDocuments(filter);
-        
-        res.json({
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        // Get subjects assigned to this teacher
+        const assignedSubjects = await Subject.find({
+            schoolCode,
+            'teachers.teacherId': teacherId,
+            'teachers.isActive': true
+        }).populate('teachers.teacherId', 'name email');
+
+        // Get classes where teacher is assigned
+        const assignedClasses = await Class.find({
+            schoolCode,
+            'subjects.teacherId': teacherId
+        }).populate('classTeacher', 'name email')
+          .populate('subjects.subjectId', 'subjectName subjectCode')
+          .populate('subjects.teacherId', 'name email');
+
+        // Get today's schedule
+        const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+        const Routine = require('../models/Routine');
+        const todaySchedule = await Routine.find({
+            schoolCode,
+            'schedule.day': today,
+            'schedule.periods.teacherId': teacherId
+        }).populate('classId', 'className section')
+          .populate('schedule.periods.subjectId', 'subjectName')
+          .populate('schedule.periods.teacherId', 'name');
+
+        res.status(200).json({
             success: true,
             data: {
-                teachers,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total,
-                    pages: Math.ceil(total / limit)
+                assignedSubjects,
+                assignedClasses,
+                todaySchedule,
+                summary: {
+                    totalSubjects: assignedSubjects.length,
+                    totalClasses: assignedClasses.length,
+                    todayPeriods: todaySchedule.reduce((acc, routine) => {
+                        const daySchedule = routine.schedule.find(s => s.day === today);
+                        return acc + (daySchedule ? daySchedule.periods.filter(p => 
+                            p.teacherId.toString() === teacherId.toString() && !p.isBreak
+                        ).length : 0);
+                    }, 0)
                 }
             }
         });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error getting teacher dashboard:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving dashboard data',
+            error: error.message
+        });
     }
 };
 
-// @desc    Get teacher by ID
-// @route   GET /api/teachers/:id
-// @access  Private
-exports.getTeacherById = async (req, res) => {
+/**
+ * @desc    Take attendance for a class
+ * @route   POST /api/teacher/attendance
+ * @access  Teacher only
+ */
+exports.takeAttendance = async (req, res) => {
     try {
-        const teacher = await Teacher.findById(req.params.id)
-            .populate('userId', 'name email phone');
-            
-        if (!teacher) {
-            return res.status(404).json({ success: false, message: 'Teacher not found' });
+        const { classId, subjectId, date, attendanceData } = req.body;
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        // Verify teacher is assigned to this class and subject
+        const classDoc = await Class.findOne({
+            _id: classId,
+            schoolCode,
+            'subjects.teacherId': teacherId,
+            'subjects.subjectId': subjectId
+        });
+
+        if (!classDoc) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to take attendance for this class/subject'
+            });
         }
-        
-        // Check if user has access to this teacher's data
-        if (teacher.schoolCode !== req.user.schoolCode && req.user.role !== 'super_admin') {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        
-        res.json({ success: true, data: teacher });
+
+        // Create attendance record
+        const attendance = new Attendance({
+            schoolCode,
+            classId,
+            subjectId,
+            teacherId,
+            date: new Date(date),
+            attendance: attendanceData.map(record => ({
+                studentId: record.studentId,
+                status: record.status, // Present, Absent, Late, Excused
+                remarks: record.remarks || ''
+            }))
+        });
+
+        await attendance.save();
+
+        // Log audit
+        await AuditLog.create({
+            userId: teacherId,
+            action: 'TAKE_ATTENDANCE',
+            details: `Attendance taken for class ${classDoc.className}-${classDoc.section}`,
+            schoolCode
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Attendance recorded successfully',
+            data: attendance
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error taking attendance:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error recording attendance',
+            error: error.message
+        });
     }
 };
 
-// @desc    Create teacher
-// @route   POST /api/teachers
-// @access  Private (Principal, Admin)
-exports.createTeacher = async (req, res) => {
+/**
+ * @desc    Get attendance records
+ * @route   GET /api/teacher/attendance
+ * @access  Teacher only
+ */
+exports.getAttendanceRecords = async (req, res) => {
     try {
-        const {
-            name,
-            email,
-            password,
-            phone,
-            qualification,
-            experience,
-            subjects,
-            address,
-            dateOfBirth,
-            gender,
-            emergencyContact
-        } = req.body;
-        
-        // Check if email already exists
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(400).json({ success: false, message: 'Email already registered' });
+        const { classId, subjectId, startDate, endDate } = req.query;
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const query = { schoolCode, teacherId };
+        if (classId) query.classId = classId;
+        if (subjectId) query.subjectId = subjectId;
+        if (startDate && endDate) {
+            query.date = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
         }
-        
-        // Create user account
-        const user = await User.create({
-            name,
-            email,
-            password,
-            role: 'teacher',
-            schoolCode: req.user.schoolCode,
-            phone,
-            isApproved: true,
-            emailVerified: true
+
+        const attendanceRecords = await Attendance.find(query)
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('attendance.studentId', 'name rollNumber email')
+            .sort({ date: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: attendanceRecords
         });
-        
-        // Create teacher profile
-        const teacher = await Teacher.create({
-            userId: user._id,
-            schoolCode: req.user.schoolCode,
-            qualification,
-            experience,
-            subjects: subjects || [],
-            address,
-            dateOfBirth,
-            gender,
-            emergencyContact
-        });
-        
-        const populatedTeacher = await Teacher.findById(teacher._id)
-            .populate('userId', 'name email phone');
-        
-        res.status(201).json({ 
-            success: true, 
-            data: populatedTeacher,
-            message: 'Teacher created successfully'
-        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error getting attendance records:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving attendance records',
+            error: error.message
+        });
     }
 };
 
-// @desc    Update teacher
-// @route   PUT /api/teachers/:id
-// @access  Private
-exports.updateTeacher = async (req, res) => {
+/**
+ * @desc    Input student results
+ * @route   POST /api/teacher/results
+ * @access  Teacher only
+ */
+exports.inputResults = async (req, res) => {
     try {
-        const teacher = await Teacher.findById(req.params.id);
-        
-        if (!teacher) {
-            return res.status(404).json({ success: false, message: 'Teacher not found' });
-        }
-        
-        // Check permissions
-        if (req.user.role !== 'super_admin' && 
-            (req.user.role !== 'principal' || teacher.schoolCode !== req.user.schoolCode) &&
-            (req.user.role !== 'teacher' || teacher.userId.toString() !== req.user.id)) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        
-        const {
-            qualification,
-            experience,
-            subjects,
-            address,
-            dateOfBirth,
-            gender,
-            emergencyContact,
-            name,
-            phone
-        } = req.body;
-        
-        // Update teacher profile
-        if (qualification) teacher.qualification = qualification;
-        if (experience) teacher.experience = experience;
-        if (subjects) teacher.subjects = subjects;
-        if (address) teacher.address = address;
-        if (dateOfBirth) teacher.dateOfBirth = dateOfBirth;
-        if (gender) teacher.gender = gender;
-        if (emergencyContact) teacher.emergencyContact = emergencyContact;
-        
-        await teacher.save();
-        
-        // Update user info if provided
-        if (name || phone) {
-            const userUpdate = {};
-            if (name) userUpdate.name = name;
-            if (phone) userUpdate.phone = phone;
-            
-            await User.findByIdAndUpdate(teacher.userId, userUpdate);
-        }
-        
-        const updatedTeacher = await Teacher.findById(teacher._id)
-            .populate('userId', 'name email phone');
-        
-        res.json({ 
-            success: true, 
-            data: updatedTeacher,
-            message: 'Teacher updated successfully'
+        const { classId, subjectId, examType, examDate, results } = req.body;
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        // Verify teacher is assigned to this class and subject
+        const classDoc = await Class.findOne({
+            _id: classId,
+            schoolCode,
+            'subjects.teacherId': teacherId,
+            'subjects.subjectId': subjectId
         });
+
+        if (!classDoc) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to input results for this class/subject'
+            });
+        }
+
+        // Get subject details for validation
+        const subject = await Subject.findById(subjectId);
+        if (!subject) {
+            return res.status(404).json({
+                success: false,
+                message: 'Subject not found'
+            });
+        }
+
+        // Create result records
+        const resultPromises = results.map(async (resultData) => {
+            const result = new Result({
+                schoolCode,
+                classId,
+                subjectId,
+                studentId: resultData.studentId,
+                teacherId,
+                examType, // Midterm, Final, Quiz, Assignment
+                examDate: new Date(examDate),
+                marksObtained: resultData.marksObtained,
+                totalMarks: resultData.totalMarks || subject.totalMarks,
+                grade: calculateGrade(resultData.marksObtained, subject.totalMarks, subject.passingMarks),
+                remarks: resultData.remarks || '',
+                academicYear: new Date().getFullYear().toString()
+            });
+
+            return result.save();
+        });
+
+        const savedResults = await Promise.all(resultPromises);
+
+        // Log audit
+        await AuditLog.create({
+            userId: teacherId,
+            action: 'INPUT_RESULTS',
+            details: `Results input for ${examType} - ${subject.subjectName}`,
+            schoolCode
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Results saved successfully',
+            data: savedResults
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error inputting results:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error saving results',
+            error: error.message
+        });
     }
 };
 
-// @desc    Delete teacher
-// @route   DELETE /api/teachers/:id
-// @access  Private (Principal only)
-exports.deleteTeacher = async (req, res) => {
+/**
+ * @desc    Get results for teacher's classes
+ * @route   GET /api/teacher/results
+ * @access  Teacher only
+ */
+exports.getResults = async (req, res) => {
     try {
-        const teacher = await Teacher.findById(req.params.id);
-        
-        if (!teacher) {
-            return res.status(404).json({ success: false, message: 'Teacher not found' });
-        }
-        
-        // Check permissions
-        if (req.user.role !== 'super_admin' && 
-            (req.user.role !== 'principal' || teacher.schoolCode !== req.user.schoolCode)) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        
-        // Delete teacher profile
-        await Teacher.findByIdAndDelete(teacher._id);
-        
-        // Delete user account
-        await User.findByIdAndDelete(teacher.userId);
-        
-        res.json({ 
-            success: true, 
-            message: 'Teacher deleted successfully'
+        const { classId, subjectId, examType, studentId } = req.query;
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const query = { schoolCode, teacherId };
+        if (classId) query.classId = classId;
+        if (subjectId) query.subjectId = subjectId;
+        if (examType) query.examType = examType;
+        if (studentId) query.studentId = studentId;
+
+        const results = await Result.find(query)
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('studentId', 'name rollNumber email')
+            .sort({ examDate: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: results
         });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error getting results:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving results',
+            error: error.message
+        });
     }
 };
 
-// @desc    Assign subjects to teacher
-// @route   POST /api/teachers/:id/subjects
-// @access  Private (Principal, Admin)
-exports.assignSubjects = async (req, res) => {
+/**
+ * @desc    Get students in teacher's class
+ * @route   GET /api/teacher/students/:classId
+ * @access  Teacher only
+ */
+exports.getClassStudents = async (req, res) => {
     try {
-        const { subjects } = req.body;
-        
-        const teacher = await Teacher.findById(req.params.id);
-        
-        if (!teacher) {
-            return res.status(404).json({ success: false, message: 'Teacher not found' });
-        }
-        
-        // Check permissions
-        if (req.user.role !== 'super_admin' && 
-            (req.user.role !== 'principal' || teacher.schoolCode !== req.user.schoolCode)) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        
-        teacher.subjects = subjects;
-        await teacher.save();
-        
-        const updatedTeacher = await Teacher.findById(teacher._id)
-            .populate('userId', 'name email');
-        
-        res.json({ 
-            success: true, 
-            data: updatedTeacher,
-            message: 'Subjects assigned successfully'
+        const { classId } = req.params;
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        // Verify teacher is assigned to this class
+        const classDoc = await Class.findOne({
+            _id: classId,
+            schoolCode,
+            'subjects.teacherId': teacherId
         });
+
+        if (!classDoc) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to view students of this class'
+            });
+        }
+
+        // Get students in this class
+        const students = await User.find({
+            schoolCode,
+            role: 'student',
+            classId: classId,
+            isActive: true
+        }).select('name rollNumber email phone parentInfo')
+          .sort({ rollNumber: 1 });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                class: {
+                    className: classDoc.className,
+                    section: classDoc.section,
+                    classLevel: classDoc.classLevel
+                },
+                students
+            }
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error getting class students:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving students',
+            error: error.message
+        });
     }
 };
 
-// @desc    Get teacher schedule
-// @route   GET /api/teachers/:id/schedule
-// @access  Private
-exports.getTeacherSchedule = async (req, res) => {
+/**
+ * @desc    Create notice (for teachers)
+ * @route   POST /api/teacher/notices
+ * @access  Teacher only
+ */
+exports.createNotice = async (req, res) => {
     try {
-        const teacher = await Teacher.findById(req.params.id);
-        
-        if (!teacher) {
-            return res.status(404).json({ success: false, message: 'Teacher not found' });
-        }
-        
-        // Check permissions
-        if (req.user.role !== 'super_admin' && 
-            (req.user.role !== 'principal' || teacher.schoolCode !== req.user.schoolCode) &&
-            (req.user.role !== 'teacher' || teacher.userId.toString() !== req.user.id)) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        
-        // Get teacher's schedule from routine
-        const Routine = require('../models/Routine');
-        const schedule = await Routine.find({
-            schoolCode: teacher.schoolCode,
-            'periods.teacher': teacher.userId.toString()
-        }).select('day periods');
-        
-        res.json({ success: true, data: schedule });
+        const { title, content, targetAudience, priority, attachments } = req.body;
+        const teacherId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const notice = new Notice({
+            schoolCode,
+            title,
+            content,
+            targetAudience: targetAudience || ['student'], // student, parent, teacher
+            priority: priority || 'Normal', // Normal, Important, Urgent
+            attachments: attachments || [],
+            createdBy: teacherId,
+            authorName: req.user.name,
+            authorRole: 'teacher'
+        });
+
+        await notice.save();
+
+        // Log audit
+        await AuditLog.create({
+            userId: teacherId,
+            action: 'CREATE_NOTICE',
+            details: `Notice created: ${title}`,
+            schoolCode
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Notice created successfully',
+            data: notice
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error creating notice:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error creating notice',
+            error: error.message
+        });
     }
 };
 
-// @desc    Upload teacher photo
-// @route   POST /api/teachers/:id/photo
-// @access  Private
-exports.uploadPhoto = async (req, res) => {
-    try {
-        const teacher = await Teacher.findById(req.params.id);
-        
-        if (!teacher) {
-            return res.status(404).json({ success: false, message: 'Teacher not found' });
-        }
-        
-        // Check permissions
-        if (req.user.role !== 'super_admin' && 
-            (req.user.role !== 'principal' || teacher.schoolCode !== req.user.schoolCode) &&
-            (req.user.role !== 'teacher' || teacher.userId.toString() !== req.user.id)) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
-        }
-        
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: 'No file uploaded' });
-        }
-        
-        // Update teacher profile with photo URL
-        teacher.profileImage = req.file.path;
-        await teacher.save();
-        
-        res.json({ 
-            success: true, 
-            data: { profileImage: teacher.profileImage },
-            message: 'Photo uploaded successfully'
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
+// Helper function to calculate grade
+function calculateGrade(marksObtained, totalMarks, passingMarks) {
+    const percentage = (marksObtained / totalMarks) * 100;
+    
+    if (percentage >= 90) return 'A+';
+    if (percentage >= 85) return 'A';
+    if (percentage >= 80) return 'A-';
+    if (percentage >= 75) return 'B+';
+    if (percentage >= 70) return 'B';
+    if (percentage >= 65) return 'B-';
+    if (percentage >= 60) return 'C+';
+    if (percentage >= 55) return 'C';
+    if (percentage >= 50) return 'C-';
+    if (percentage >= 45) return 'D';
+    if (percentage >= passingMarks) return 'P'; // Pass
+    return 'F'; // Fail
+}
