@@ -320,19 +320,22 @@ exports.loginUser = async (req, res) => {
         }
 
         res.json({
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            schoolCode: user.schoolCode,
-            schoolName: user.schoolName,
-            isApproved: user.isApproved,
-            emailVerified: user.emailVerified,
-            twoFactorEnabled: user.twoFactorEnabled,
-            permissions: user.permissions,
-            deviceId,
-            token: process.env.USE_COOKIE === 'true' ? undefined : token,
-            refreshToken: process.env.USE_COOKIE === 'true' ? undefined : refreshToken
+            success: true,
+            data: {
+                _id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                schoolCode: user.schoolCode,
+                schoolName: user.schoolName,
+                isApproved: user.isApproved,
+                emailVerified: user.emailVerified,
+                twoFactorEnabled: user.twoFactorEnabled,
+                permissions: user.permissions,
+                deviceId,
+                token: process.env.USE_COOKIE === 'true' ? undefined : token,
+                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : refreshToken
+            }
         });
 
     } catch (error) {
@@ -464,10 +467,13 @@ exports.getUserProfile = async (req, res) => {
         await createAuditLog(user._id, 'PROFILE_VIEW', {}, req);
 
         res.json({
-            ...user.toObject(),
-            activeSessions,
-            devices,
-            ...(school && { school })
+            success: true,
+            data: {
+                ...user.toObject(),
+                activeSessions,
+                devices,
+                ...(school && { school })
+            }
         });
 
     } catch (error) {

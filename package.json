@@ -1,16 +1,22 @@
 {
-  "name": "backend",
+  "name": "smart-campus-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "Smart Campus Management System Backend API",
   "main": "index.js",
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
   "scripts": {
     "start": "NODE_ENV=production node index.js",
-    "start:render": "chmod +x start.sh && ./start.sh",
+    "dev": "NODE_ENV=development nodemon index.js",
+    "build": "echo 'No build step required for Node.js'",
+    "test": "echo 'No tests specified yet'",
     "health": "node -e \"require('http').get('http://localhost:5000/api/health', (r) => { let d=''; r.on('data',c=>d+=c); r.on('end',()=>{ console.log(d); process.exit(r.statusCode===200?0:1)}); }).on('error',()=>process.exit(1));\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["smart-campus", "education", "management", "api", "nodejs", "express", "mongodb"],
+  "author": "Smart Campus Team",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "bcryptjs": "^3.0.3",

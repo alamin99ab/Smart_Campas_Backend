@@ -24,6 +24,9 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const principalRoutes = require('./routes/principalRoutes');
+const apiRoutes = require('./routes/apiRoutes');
+// const enhancedStudentRoutes = require('./routes/enhancedStudentRoutes');
+// const enhancedTeacherRoutes = require('./routes/enhancedTeacherRoutes');
 const publicRoutes = require('./routes/publicRoutes');
 
 const app = express();
@@ -163,7 +166,10 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/principal', principalRoutes);
 app.use('/api/student', studentRoutes);
+// app.use('/api/student', enhancedStudentRoutes);
 app.use('/api/teacher', teacherRoutes);
+// app.use('/api/teacher', enhancedTeacherRoutes);
+app.use('/api', apiRoutes);
 app.use('/api/public', publicRoutes);
 
 // Comment out all routes for debugging

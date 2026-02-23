@@ -140,7 +140,7 @@ exports.getAllSchools = async (req, res) => {
         }
 
         const schools = await School.find(query)
-            .populate('principalId', 'name email phone')
+            .populate('principal', 'name email phone')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit));

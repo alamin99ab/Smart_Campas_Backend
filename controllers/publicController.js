@@ -269,7 +269,7 @@ exports.getSchoolInfo = async (req, res) => {
 
         const School = require('../models/School');
         const school = await School.findOne({ schoolCode, isActive: true })
-            .populate('principalId', 'name email phone')
+            .populate('principal', 'name email phone')
             .select('-__v')
             .lean();
 
@@ -294,7 +294,7 @@ exports.getSchoolInfo = async (req, res) => {
                     address: school.address,
                     phone: school.phone,
                     email: school.email,
-                    principal: school.principalId
+                    principal: school.principal
                 },
                 classes,
                 summary: {
