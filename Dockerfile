@@ -11,7 +11,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies only for production
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install --only=production && npm cache clean --force
 
 # Copy source code
 COPY . .
@@ -71,7 +71,7 @@ RUN echo "node hard core 1" >> /etc/sysctl.conf && \
 
 # Start the application with dumb-init
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "next-level-server.js"]
+CMD ["node", "server.js"]
 
 # Labels for metadata
 LABEL maintainer="Smart Campus Development Team" \
