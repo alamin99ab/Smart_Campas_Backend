@@ -10,6 +10,11 @@ const logger = require('./utils/logger');
 const { validateEnv, getCorsOrigin, isProduction } = require('./config/env');
 validateEnv();
 
+// Enhanced middleware
+const { standardizedResponse } = require('./middleware/enhanced/standardizedResponse');
+const { errorHandler } = require('./middleware/enhanced/errorHandler');
+const { validations, handleValidationErrors } = require('./middleware/enhanced/validation');
+const { rateLimiters, securityHeaders, sanitizeInput, corsOptions } = require('./middleware/enhanced/security');
 const { sanitize, noPrototypePollution } = require('./middleware/securityMiddleware');
 const requestId = require('./middleware/requestId');
 
@@ -25,55 +30,39 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const superAdminRoutes = require('./routes/superAdminRoutes');
 const principalRoutes = require('./routes/principalRoutes');
 const apiRoutes = require('./routes/apiRoutes');
-// const enhancedStudentRoutes = require('./routes/enhancedStudentRoutes');
-// const enhancedTeacherRoutes = require('./routes/enhancedTeacherRoutes');
 const publicRoutes = require('./routes/publicRoutes');
+
+// API Documentation
+const { specs, swaggerUi } = require('./docs/api-documentation');
 
 const app = express();
 
+// Enhanced security headers
+app.use(securityHeaders);
+
+// CORS configuration
+app.use(cors(corsOptions));
+
+// Request parsing and sanitization
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
-
-const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 150,
-    message: { success: false, message: 'Too many requests, please try again later.' },
-    standardHeaders: true,
-    legacyHeaders: false
-});
-app.use('/api', apiLimiter);
-
-const healthLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 30,
-    message: { success: false, message: 'Too many health checks.' }
-});
-
-app.use(helmet());
-app.use(rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 1000, // Much higher for testing
-    message: { success: false, message: 'Too many requests, please try again later.' },
-    standardHeaders: true,
-    legacyHeaders: false
-}));
-app.use(requestId);
+app.use(sanitizeInput);
+app.use(noPrototypePollution());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
-// app.use(xss());
-app.use(sanitize);
-app.use(noPrototypePollution);
 
-const corsOrigin = getCorsOrigin();
-app.use(cors({
-    origin: Array.isArray(corsOrigin) ? corsOrigin : [corsOrigin],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Id', 'X-Request-Id']
-}));
+// Request ID and logging
+app.use(requestId);
+
+// Rate limiting
+app.use('/api/auth', rateLimiters.auth);
+app.use(rateLimiters.general);
+
+// Standardized response format
+app.use(standardizedResponse);
 
 if (isProduction) {
     app.set('trust proxy', 1);
@@ -184,31 +173,16 @@ app.use('/api/public', publicRoutes);
 // app.use('/api/routine', routineRoutes);
 // app.use('/api/teacher-assignments', teacherAssignmentRoutes);
 
+// API Documentation route
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
+
+// 404 handler (must be before error handler)
 app.use((req, res) => {
     res.status(404).json({ success: false, message: 'API endpoint not found' });
 });
 
-app.use((err, req, res, next) => {
-    logger.error('Server error:', {
-        message: err.message,
-        stack: err.stack,
-        url: req.url,
-        method: req.method,
-        ip: req.ip,
-        requestId: req.id
-    });
-    
-    const status = err.status || err.statusCode || 500;
-    const message = status === 500 && isProduction
-        ? 'Internal server error'
-        : (err.message || 'Internal server error');
-    
-    res.status(status).json({
-        success: false,
-        message,
-        ...(isProduction ? {} : { stack: err.stack })
-    });
-});
+// Enhanced error handling (must be last middleware)
+app.use(errorHandler);
 
 // Start server
 const PORT = process.env.PORT || 5000;

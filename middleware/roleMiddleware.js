@@ -20,14 +20,14 @@ exports.principalOnly = (req, res, next) => {
 };
 
 exports.adminOnly = (req, res, next) => {
-    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'superadmin')) {
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'super_admin')) {
         return res.status(403).json({ success: false, message: 'Access denied. Admin only.' });
     }
     next();
 };
 
 exports.superAdminOnly = (req, res, next) => {
-    if (!req.user || req.user.role !== 'superadmin') {
+    if (!req.user || req.user.role !== 'super_admin') {
         return res.status(403).json({ success: false, message: 'Access denied. Super admin only.' });
     }
     next();
@@ -50,7 +50,7 @@ exports.sameSchool = (req, res, next) => {
     }
     
     // For superadmin, allow cross-school access
-    if (req.user.role === 'superadmin' || req.user.role === 'admin') {
+    if (req.user.role === 'super_admin' || req.user.role === 'admin') {
         return next();
     }
     
