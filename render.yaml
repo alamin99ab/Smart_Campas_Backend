@@ -3,17 +3,28 @@
 services:
   - type: web
     name: smart-campus-api
-    runtime: node
-    buildCommand: npm install
-    startCommand: npm start
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PORT
+        value: 5000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://smart-campus-api.onrender.com,https://your-frontend-domain.com
+      - key: BASE_URL
+        value: https://smart-campus-api.onrender.com
       - key: MONGO_URI
         sync: false
-      - key: JWT_SECRET
+      - key: REDIS_URL
         sync: false
-      - key: JWT_REFRESH_SECRET
-        sync: false
-      - key: FRONTEND_URL
-        sync: false
+    disk:
+      name: uploads
+      mountPath: /app/uploads
+      sizeGB: 1

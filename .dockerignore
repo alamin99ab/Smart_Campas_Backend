@@ -17,3 +17,9 @@ coverage
 .nyc_output
 uploads
 temp
+.git/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
