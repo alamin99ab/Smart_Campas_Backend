@@ -45,10 +45,6 @@ EXPOSE 5000
 ENV NODE_ENV=production
 ENV PORT=5000
 
-# Security settings
-RUN echo "node hard core 1" >> /etc/sysctl.conf && \
-    echo "net.ipv4.ip_forward = 0" >> /etc/sysctl.conf
-
 # Start application with dumb-init
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]
