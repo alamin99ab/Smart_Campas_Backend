@@ -1,0 +1,1690 @@
+{
+	"info": {
+		"_postman_id": "smart-campus-api-complete-v4",
+		"name": "Complete Smart Campus API v4.0 - Full School Management (85+ Endpoints)",
+		"description": "Complete Postman collection for Smart Campus Educational Platform API with 85+ production-ready endpoints featuring complete school management, student attendance, grades, courses, timetable, fees, library, exams, transport, AI, Blockchain, IoT, and Real-time communication.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "smart-campus-api-complete"
+	},
+	"item": [
+		{
+			"name": "🏥 Health & System",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "health"]
+						},
+						"description": "Check API health status and system information"
+					},
+					"response": []
+				},
+				{
+					"name": "API Documentation",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api-docs",
+							"host": ["{{baseUrl}}"],
+							"path": ["api-docs"]
+						},
+						"description": "Get complete API documentation"
+					},
+					"response": []
+				}
+			],
+			"description": "System health and documentation endpoints"
+		},
+		{
+			"name": "🔐 Authentication",
+			"item": [
+				{
+					"name": "User Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.success && response.data && response.data.token) {",
+									"        pm.collectionVariables.set('authToken', response.data.token);",
+									"        pm.collectionVariables.set('refreshToken', response.data.refreshToken);",
+									"        pm.collectionVariables.set('userEmail', response.data.user.email);",
+									"        pm.collectionVariables.set('userRole', response.data.user.role);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/login",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "login"]
+						},
+						"description": "Authenticate user and get JWT token"
+					},
+					"response": []
+				},
+				{
+					"name": "User Registration",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john.doe@example.com\",\n  \"password\": \"password123\",\n  \"role\": \"student\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/register",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "register"]
+						},
+						"description": "Register new user account"
+					},
+					"response": []
+				},
+				{
+					"name": "User Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/logout",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "logout"]
+						},
+						"description": "Logout user and invalidate token"
+					},
+					"response": []
+				}
+			],
+			"description": "User authentication and authorization endpoints"
+		},
+		{
+			"name": "🏫 School Management",
+			"item": [
+				{
+					"name": "List Schools",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/schools",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "schools"]
+						},
+						"description": "Get list of all schools"
+					},
+					"response": []
+				},
+				{
+					"name": "Create School",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"New International School\",\n  \"code\": \"NIS001\",\n  \"address\": \"123 Education Street, Smart City\",\n  \"phone\": \"+1-234-567-8900\",\n  \"email\": \"info@newschool.edu\",\n  \"principal\": \"Dr. Jane Smith\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/schools",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "schools"]
+						},
+						"description": "Create new school"
+					},
+					"response": []
+				},
+				{
+					"name": "Get School Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/schools/{{schoolId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "schools", "{{schoolId}}"]
+						},
+						"description": "Get specific school details"
+					},
+					"response": []
+				}
+			],
+			"description": "School creation and management endpoints"
+		},
+		{
+			"name": "📚 Classes Management",
+			"item": [
+				{
+					"name": "List Classes",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/classes",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "classes"]
+						},
+						"description": "Get list of all classes"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Class",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"schoolId\": 1,\n  \"name\": \"Grade 11-A\",\n  \"grade\": \"11\",\n  \"section\": \"A\",\n  \"teacherId\": 1,\n  \"capacity\": 30,\n  \"room\": \"Room 201\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/classes",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "classes"]
+						},
+						"description": "Create new class"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Class Students",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/classes/{{classId}}/students",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "classes", "{{classId}}", "students"]
+						},
+						"description": "Get all students in a class"
+					},
+					"response": []
+				}
+			],
+			"description": "Class management and organization endpoints"
+		},
+		{
+			"name": "👥 Students Management",
+			"item": [
+				{
+					"name": "List Students",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/students",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "students"]
+						},
+						"description": "Get list of all students"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Student",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"schoolId\": 1,\n  \"classId\": 1,\n  \"name\": \"Alice Johnson\",\n  \"email\": \"alice.johnson@smartcampus.edu\",\n  \"phone\": \"+1-234-567-8901\",\n  \"dateOfBirth\": \"2008-05-15\",\n  \"gender\": \"Female\",\n  \"address\": \"456 Student Lane, Smart City\",\n  \"parentName\": \"Mr. Robert Johnson\",\n  \"parentPhone\": \"+1-234-567-8902\",\n  \"parentEmail\": \"robert.johnson@email.com\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/students",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "students"]
+						},
+						"description": "Create new student"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Student Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/students/{{studentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "students", "{{studentId}}"]
+						},
+						"description": "Get specific student details"
+					},
+					"response": []
+				}
+			],
+			"description": "Student management and records endpoints"
+		},
+		{
+			"name": "👨‍🏫 Teachers Management",
+			"item": [
+				{
+					"name": "List Teachers",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/teachers",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "teachers"]
+						},
+						"description": "Get list of all teachers"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Teacher",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"schoolId\": 1,\n  \"name\": \"Dr. John Smith\",\n  \"email\": \"john.smith@smartcampus.edu\",\n  \"phone\": \"+1-234-567-8907\",\n  \"employeeId\": \"TCH001\",\n  \"specialization\": [\"Mathematics\", \"Physics\"],\n  \"qualification\": \"PhD in Education\",\n  \"experience\": \"15 years\",\n  \"subjects\": [\"Mathematics\", \"Physics\"],\n  \"salary\": 5000\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/teachers",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "teachers"]
+						},
+						"description": "Create new teacher"
+					},
+					"response": []
+				}
+			],
+			"description": "Teacher management and assignment endpoints"
+		},
+		{
+			"name": "📊 Attendance Management",
+			"item": [
+				{
+					"name": "Get Attendance Records",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/attendance?date={{attendanceDate}}&classId={{classId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "attendance"],
+							"query": [
+								{
+									"key": "date",
+									"value": "{{attendanceDate}}"
+								},
+								{
+									"key": "classId",
+									"value": "{{classId}}"
+								}
+							]
+						},
+						"description": "Get attendance records with filters"
+					},
+					"response": []
+				},
+				{
+					"name": "Mark Single Attendance",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"studentId\": 1,\n  \"classId\": 1,\n  \"date\": \"2025-02-28\",\n  \"status\": \"present\",\n  \"remarks\": \"On time\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/attendance/mark",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "attendance", "mark"]
+						},
+						"description": "Mark attendance for single student"
+					},
+					"response": []
+				},
+				{
+					"name": "Mark Bulk Attendance",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"classId\": 1,\n  \"date\": \"2025-02-28\",\n  \"attendanceData\": [\n    {\"studentId\": 1, \"status\": \"present\", \"remarks\": \"On time\"},\n    {\"studentId\": 2, \"status\": \"present\", \"remarks\": \"On time\"},\n    {\"studentId\": 3, \"status\": \"absent\", \"remarks\": \"Sick\"}\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/attendance/bulk",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "attendance", "bulk"]
+						},
+						"description": "Mark attendance for entire class"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Student Attendance",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/attendance/student/{{studentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "attendance", "student", "{{studentId}}"]
+						},
+						"description": "Get attendance history for specific student"
+					},
+					"response": []
+				},
+				{
+					"name": "Generate Attendance Report",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/attendance/report?classId={{classId}}&startDate={{startDate}}&endDate={{endDate}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "attendance", "report"],
+							"query": [
+								{
+									"key": "classId",
+									"value": "{{classId}}"
+								},
+								{
+									"key": "startDate",
+									"value": "{{startDate}}"
+								},
+								{
+									"key": "endDate",
+									"value": "{{endDate}}"
+								}
+							]
+						},
+						"description": "Generate attendance report with statistics"
+					},
+					"response": []
+				}
+			],
+			"description": "Student attendance tracking and reporting endpoints"
+		},
+		{
+			"name": "📚 Courses Management",
+			"item": [
+				{
+					"name": "List Courses",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/courses",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "courses"]
+						},
+						"description": "Get list of all courses"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Course",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"schoolId\": 1,\n  \"name\": \"Advanced Mathematics Grade 11\",\n  \"code\": \"MATH11\",\n  \"description\": \"Advanced Mathematics for Grade 11 students\",\n  \"credits\": 5,\n  \"duration\": \"1 year\",\n  \"teacherId\": 1,\n  \"syllabus\": \"Calculus, Statistics, Probability, Linear Algebra\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/courses",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "courses"]
+						},
+						"description": "Create new course"
+					},
+					"response": []
+				}
+			],
+			"description": "Course management and catalog endpoints"
+		},
+		{
+			"name": "🎓 Enrollment Management",
+			"item": [
+				{
+					"name": "List Enrollments",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/enrollments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "enrollments"]
+						},
+						"description": "Get list of all enrollments"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Enrollment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"studentId\": 1,\n  \"courseId\": 1,\n  \"classId\": 1,\n  \"academicYear\": \"2025-2026\",\n  \"semester\": \"First\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/enrollments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "enrollments"]
+						},
+						"description": "Create new enrollment"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Student Enrollments",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/enrollments/student/{{studentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "enrollments", "student", "{{studentId}}"]
+						},
+						"description": "Get enrollments for specific student"
+					},
+					"response": []
+				}
+			],
+			"description": "Student enrollment management endpoints"
+		},
+		{
+			"name": "📈 Grades Management",
+			"item": [
+				{
+					"name": "List Grades",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/grades",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "grades"]
+						},
+						"description": "Get list of all grades"
+					},
+					"response": []
+				},
+				{
+					"name": "Record Grade",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"studentId\": 1,\n  \"courseId\": 1,\n  \"classId\": 1,\n  \"examType\": \"midterm\",\n  \"score\": 85,\n  \"maxScore\": 100,\n  \"remarks\": \"Excellent performance\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/grades",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "grades"]
+						},
+						"description": "Record new grade for student"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Student Grades",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/grades/student/{{studentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "grades", "student", "{{studentId}}"]
+						},
+						"description": "Get grades for specific student"
+					},
+					"response": []
+				}
+			],
+			"description": "Grade recording and management endpoints"
+		},
+		{
+			"name": "⏰ Timetable Management",
+			"item": [
+				{
+					"name": "Get Timetable",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/timetable?classId={{classId}}&day={{day}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "timetable"],
+							"query": [
+								{
+									"key": "classId",
+									"value": "{{classId}}"
+								},
+								{
+									"key": "day",
+									"value": "{{day}}"
+								}
+							]
+						},
+						"description": "Get timetable with filters"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Timetable Entry",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"classId\": 1,\n  \"courseId\": 1,\n  \"teacherId\": 1,\n  \"day\": \"Monday\",\n  \"startTime\": \"08:00\",\n  \"endTime\": \"09:00\",\n  \"room\": \"Room 101\",\n  \"subject\": \"Mathematics\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/timetable",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "timetable"]
+						},
+						"description": "Create new timetable entry"
+					},
+					"response": []
+				}
+			],
+			"description": "Class scheduling and timetable management endpoints"
+		},
+		{
+			"name": "💰 Fee Management",
+			"item": [
+				{
+					"name": "List Fees",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/fees?studentId={{studentId}}&status={{feeStatus}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "fees"],
+							"query": [
+								{
+									"key": "studentId",
+									"value": "{{studentId}}"
+								},
+								{
+									"key": "status",
+									"value": "{{feeStatus}}"
+								}
+							]
+						},
+						"description": "Get fee records with filters"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Fee Record",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"studentId\": 1,\n  \"schoolId\": 1,\n  \"feeType\": \"tuition\",\n  \"amount\": 500,\n  \"dueDate\": \"2025-03-01\",\n  \"month\": \"February\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/fees",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "fees"]
+						},
+						"description": "Create new fee record"
+					},
+					"response": []
+				}
+			],
+			"description": "Fee management and payment tracking endpoints"
+		},
+		{
+			"name": "📚 Library Management",
+			"item": [
+				{
+					"name": "List Library Books",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/library",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "library"]
+						},
+						"description": "Get list of all library books"
+					},
+					"response": []
+				},
+				{
+					"name": "Add Book to Library",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": \"Advanced Physics Textbook\",\n  \"author\": \"Physics Department\",\n  \"isbn\": \"978-0-123456-78-9\",\n  \"category\": \"Textbook\",\n  \"quantity\": 50,\n  \"location\": \"Library Shelf A-1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/library",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "library"]
+						},
+						"description": "Add new book to library"
+					},
+					"response": []
+				},
+				{
+					"name": "Issue Book to Student",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"bookId\": 1,\n  \"studentId\": 1\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/library/issue",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "library", "issue"]
+						},
+						"description": "Issue book to student"
+					},
+					"response": []
+				}
+			],
+			"description": "Library book management and circulation endpoints"
+		},
+		{
+			"name": "📝 Exam Management",
+			"item": [
+				{
+					"name": "List Exams",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/exams",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "exams"]
+						},
+						"description": "Get list of all exams"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Exam",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"schoolId\": 1,\n  \"title\": \"Final Examination 2025\",\n  \"examType\": \"final\",\n  \"startDate\": \"2025-06-01\",\n  \"endDate\": \"2025-06-15\",\n  \"classes\": [1, 2],\n  \"courses\": [1, 2],\n  \"instructions\": \"Bring calculators and pens\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/exams",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "exams"]
+						},
+						"description": "Create new exam"
+					},
+					"response": []
+				}
+			],
+			"description": "Exam creation and management endpoints"
+		},
+		{
+			"name": "🚌 Transport Management",
+			"item": [
+				{
+					"name": "List Transport Vehicles",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/transport",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "transport"]
+						},
+						"description": "Get list of all transport vehicles"
+					},
+					"response": []
+				},
+				{
+					"name": "Add Transport Vehicle",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"vehicleNumber\": \"SC-BUS-002\",\n  \"vehicleType\": \"Bus\",\n  \"capacity\": 40,\n  \"driverName\": \"Mr. James Wilson\",\n  \"driverPhone\": \"+1-234-567-8910\",\n  \"route\": \"Route B - Downtown to School\",\n  \"stops\": [\"Stop 1\", \"Stop 2\", \"Stop 3\", \"School\"],\n  \"departureTime\": \"07:00\",\n  \"arrivalTime\": \"15:30\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/transport",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "transport"]
+						},
+						"description": "Add new transport vehicle"
+					},
+					"response": []
+				}
+			],
+			"description": "School transport management endpoints"
+		},
+		{
+			"name": "📝 Content Management",
+			"item": [
+				{
+					"name": "List Content",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/content?page=1&limit=10",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "content"],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						},
+						"description": "Get paginated list of content"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Content",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": \"New Course Material\",\n  \"content\": \"This is the course content...\",\n  \"type\": \"course\",\n  \"category\": \"computer-science\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/content",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "content"]
+						},
+						"description": "Create new content"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Content by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/content/{{contentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "content", "{{contentId}}"]
+						},
+						"description": "Get specific content by ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Content",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"title\": \"Updated Course Material\",\n  \"content\": \"This is the updated course content...\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/content/{{contentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "content", "{{contentId}}"]
+						},
+						"description": "Update existing content"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Content",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/content/{{contentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "content", "{{contentId}}"]
+						},
+						"description": "Delete content by ID"
+					},
+					"response": []
+				}
+			],
+			"description": "Content management system endpoints"
+		},
+		{
+			"name": "🤖 AI Features",
+			"item": [
+				{
+					"name": "Student Performance Analysis",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/student/{{studentId}}/performance",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "student", "{{studentId}}", "performance"]
+						},
+						"description": "Get AI-powered student performance analysis"
+					},
+					"response": []
+				},
+				{
+					"name": "Student Behavior Analysis",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/student/{{studentId}}/behavior",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "student", "{{studentId}}", "behavior"]
+						},
+						"description": "Get AI-powered student behavior analysis"
+					},
+					"response": []
+				},
+				{
+					"name": "Campus Analytics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/campus-analytics",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "campus-analytics"]
+						},
+						"description": "Get campus-wide AI analytics"
+					},
+					"response": []
+				},
+				{
+					"name": "Sentiment Analysis",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"text\": \"I love this course! The professor is amazing.\",\n  \"context\": \"course_feedback\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/sentiment-analysis",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "sentiment-analysis"]
+						},
+						"description": "Analyze text sentiment using AI"
+					},
+					"response": []
+				},
+				{
+					"name": "Schedule Optimization",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"courses\": [\"CS101\", \"MATH201\", \"ENG102\"],\n  \"preferences\": {\n    \"morning\": true,\n    \"maxDailyHours\": 6\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/schedule-optimization",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "schedule-optimization"]
+						},
+						"description": "Optimize student schedule using AI"
+					},
+					"response": []
+				},
+				{
+					"name": "AI Alerts",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/alerts",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "alerts"]
+						},
+						"description": "Get AI-generated alerts and notifications"
+					},
+					"response": []
+				},
+				{
+					"name": "AI Insights",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ai/insights",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "ai", "insights"]
+						},
+						"description": "Get AI-powered insights and recommendations"
+					},
+					"response": []
+				}
+			],
+			"description": "AI-powered educational features"
+		},
+		{
+			"name": "🔗 Blockchain Features",
+			"item": [
+				{
+					"name": "Create Certificate",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"degree\",\n  \"studentId\": \"{{studentId}}\",\n  \"studentName\": \"John Doe\",\n  \"course\": \"Computer Science\",\n  \"grade\": \"A+\",\n  \"issueDate\": \"2026-02-28\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/blockchain/certificate",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "blockchain", "certificate"]
+						},
+						"description": "Create blockchain-verified certificate"
+					},
+					"response": []
+				},
+				{
+					"name": "Verify Certificate",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/blockchain/certificate/{{certificateId}}/verify",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "blockchain", "certificate", "{{certificateId}}", "verify"]
+						},
+						"description": "Verify blockchain certificate authenticity"
+					},
+					"response": []
+				},
+				{
+					"name": "Student Certificates",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/blockchain/student/{{studentId}}/certificates",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "blockchain", "student", "{{studentId}}", "certificates"]
+						},
+						"description": "Get all certificates for a student"
+					},
+					"response": []
+				},
+				{
+					"name": "Blockchain Statistics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/blockchain/stats",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "blockchain", "stats"]
+						},
+						"description": "Get blockchain network statistics"
+					},
+					"response": []
+				}
+			],
+			"description": "Blockchain certificate management"
+		},
+		{
+			"name": "🌐 IoT Features",
+			"item": [
+				{
+					"name": "List IoT Devices",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/iot/devices",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "iot", "devices"]
+						},
+						"description": "Get list of all IoT devices"
+					},
+					"response": []
+				},
+				{
+					"name": "Room Analytics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/iot/room/{{roomId}}/analytics",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "iot", "room", "{{roomId}}", "analytics"]
+						},
+						"description": "Get IoT analytics for specific room"
+					},
+					"response": []
+				},
+				{
+					"name": "Campus IoT Analytics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/iot/campus-analytics",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "iot", "campus-analytics"]
+						},
+						"description": "Get campus-wide IoT analytics"
+					},
+					"response": []
+				},
+				{
+					"name": "Control Device",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"action\": \"turn_on\",\n  \"parameters\": {\n    \"brightness\": 80,\n    \"color\": \"white\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/iot/device/{{deviceId}}/control",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "iot", "device", "{{deviceId}}", "control"]
+						},
+						"description": "Control IoT device"
+					},
+					"response": []
+				},
+				{
+					"name": "IoT Alerts",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/iot/alerts",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "iot", "alerts"]
+						},
+						"description": "Get IoT system alerts"
+					},
+					"response": []
+				}
+			],
+			"description": "IoT device management and analytics"
+		},
+		{
+			"name": "📱 Real-time & Mobile",
+			"item": [
+				{
+					"name": "Real-time Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/realtime/status",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "realtime", "status"]
+						},
+						"description": "Get real-time system status"
+					},
+					"response": []
+				},
+				{
+					"name": "Mobile Optimization",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/mobile/optimized",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "mobile", "optimized"]
+						},
+						"description": "Get mobile-optimized data"
+					},
+					"response": []
+				},
+				{
+					"name": "Security Overview",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/security/overview",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "security", "overview"]
+						},
+						"description": "Get security system overview"
+					},
+					"response": []
+				},
+				{
+					"name": "Supported Languages",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/i18n/languages",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "i18n", "languages"]
+						},
+						"description": "Get supported languages for internationalization"
+					},
+					"response": []
+				}
+			],
+			"description": "Real-time and mobile features"
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Auto-refresh token if expired",
+					"if (pm.collectionVariables.get('authToken')) {",
+					"    const token = pm.collectionVariables.get('authToken');",
+					"    try {",
+					"        const decoded = JSON.parse(atob(token.split('.')[1]));",
+					"        if (decoded.exp * 1000 < Date.now()) {",
+					"            console.log('Token expired, refreshing...');",
+					"            // Token refresh logic would go here",
+					"        }",
+					"    } catch (e) {",
+					"        console.log('Invalid token format');",
+					"    }",
+					"}"
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Global response tests",
+					"pm.test('Response time is less than 2000ms', function () {",
+					"    pm.expect(pm.response.responseTime).to.be.below(2000);",
+					"});",
+					"",
+					"pm.test('Response has proper JSON structure', function () {",
+					"    const responseJson = pm.response.json();",
+					"    pm.expect(responseJson).to.have.property('success');",
+					"    pm.expect(responseJson).to.have.property('message');",
+					"});",
+					"",
+					"// Log response for debugging",
+					"console.log('Response:', pm.response.json());"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:5000",
+			"type": "string"
+		},
+		{
+			"key": "authToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "userEmail",
+			"value": "admin@smartcampus.com",
+			"type": "string"
+		},
+		{
+			"key": "userPassword",
+			"value": "admin123",
+			"type": "string"
+		},
+		{
+			"key": "studentId",
+			"value": "123",
+			"type": "string"
+		},
+		{
+			"key": "contentId",
+			"value": "1",
+			"type": "string"
+		},
+		{
+			"key": "certificateId",
+			"value": "SC12345",
+			"type": "string"
+		},
+		{
+			"key": "roomId",
+			"value": "101",
+			"type": "string"
+		},
+		{
+			"key": "deviceId",
+			"value": "TEMP_001",
+			"type": "string"
+		}
+	]
+}

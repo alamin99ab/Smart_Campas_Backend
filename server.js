@@ -203,20 +203,499 @@ const authorize = (...roles) => {
 
 app.use(validateInput);
 
-// Database
+// Database - Complete School Management System
 const db = {
+    // Users Management
     users: [
         {
             id: 1,
             name: 'Super Admin',
             email: 'admin@smartcampus.com',
-            password: '$2a$10$rOzJqQjQjQjQjQjQjQjQOzJqQjQjQjQjQjQjQjQjQjQjQjQjQjQjQjQjQjQ',
+            password: '$2a$10$rOzJqQjQjQjQjQjQjQjQOzJqQjQjQjQjQjQjQjQjQjQjQjQjQjQjQjQjQ',
             role: 'super_admin',
             permissions: ['*'],
             isActive: true,
             createdAt: new Date().toISOString()
         }
     ],
+    
+    // School Management
+    schools: [
+        {
+            id: 1,
+            name: 'Smart Campus International School',
+            code: 'SCIS001',
+            address: '123 Education Street, Smart City',
+            phone: '+1-234-567-8900',
+            email: 'info@smartcampus.edu',
+            principal: 'Dr. John Smith',
+            established: '2020-01-15',
+            academicYear: '2025-2026',
+            settings: {
+                attendanceRequired: true,
+                feeStructure: 'monthly',
+                gradingSystem: 'GPA',
+                schoolType: 'K-12'
+            },
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Classes Management
+    classes: [
+        {
+            id: 1,
+            schoolId: 1,
+            name: 'Grade 10-A',
+            grade: '10',
+            section: 'A',
+            teacherId: 1,
+            capacity: 30,
+            currentStudents: 25,
+            room: 'Room 101',
+            subjects: ['Mathematics', 'Science', 'English', 'History', 'Computer Science'],
+            schedule: {
+                startTime: '08:00',
+                endTime: '14:30',
+                breakTime: '12:00-12:30'
+            },
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            schoolId: 1,
+            name: 'Grade 9-B',
+            grade: '9',
+            section: 'B',
+            teacherId: 1,
+            capacity: 30,
+            currentStudents: 28,
+            room: 'Room 102',
+            subjects: ['Mathematics', 'Science', 'English', 'History', 'Computer Science'],
+            schedule: {
+                startTime: '08:00',
+                endTime: '14:30',
+                breakTime: '12:00-12:30'
+            },
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Students Management
+    students: [
+        {
+            id: 1,
+            schoolId: 1,
+            classId: 1,
+            name: 'Alice Johnson',
+            email: 'alice.johnson@smartcampus.edu',
+            phone: '+1-234-567-8901',
+            dateOfBirth: '2008-05-15',
+            gender: 'Female',
+            address: '456 Student Lane, Smart City',
+            parentName: 'Mr. Robert Johnson',
+            parentPhone: '+1-234-567-8902',
+            parentEmail: 'robert.johnson@email.com',
+            admissionNumber: 'SCIS2025001',
+            rollNumber: '10-A-001',
+            enrollmentDate: '2025-01-01',
+            status: 'active',
+            emergencyContact: {
+                name: 'Mrs. Sarah Johnson',
+                relation: 'Mother',
+                phone: '+1-234-567-8903'
+            },
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            schoolId: 1,
+            classId: 1,
+            name: 'Bob Williams',
+            email: 'bob.williams@smartcampus.edu',
+            phone: '+1-234-567-8904',
+            dateOfBirth: '2008-08-20',
+            gender: 'Male',
+            address: '789 Student Road, Smart City',
+            parentName: 'Mr. Michael Williams',
+            parentPhone: '+1-234-567-8905',
+            parentEmail: 'michael.williams@email.com',
+            admissionNumber: 'SCIS2025002',
+            rollNumber: '10-A-002',
+            enrollmentDate: '2025-01-01',
+            status: 'active',
+            emergencyContact: {
+                name: 'Mrs. Jennifer Williams',
+                relation: 'Mother',
+                phone: '+1-234-567-8906'
+            },
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Teachers Management
+    teachers: [
+        {
+            id: 1,
+            schoolId: 1,
+            name: 'Dr. John Smith',
+            email: 'john.smith@smartcampus.edu',
+            phone: '+1-234-567-8907',
+            employeeId: 'TCH001',
+            specialization: ['Mathematics', 'Physics'],
+            qualification: 'PhD in Education',
+            experience: '15 years',
+            subjects: ['Mathematics', 'Physics'],
+            classes: [1, 2],
+            salary: 5000,
+            joinDate: '2020-01-15',
+            status: 'active',
+            address: '321 Teacher Avenue, Smart City',
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Attendance Management
+    attendance: [
+        {
+            id: 1,
+            studentId: 1,
+            classId: 1,
+            date: new Date().toISOString().split('T')[0],
+            status: 'present',
+            markedBy: 1,
+            markedAt: new Date().toISOString(),
+            remarks: 'On time'
+        },
+        {
+            id: 2,
+            studentId: 2,
+            classId: 1,
+            date: new Date().toISOString().split('T')[0],
+            status: 'present',
+            markedBy: 1,
+            markedAt: new Date().toISOString(),
+            remarks: 'On time'
+        }
+    ],
+    
+    // Courses Management
+    courses: [
+        {
+            id: 1,
+            schoolId: 1,
+            name: 'Mathematics Grade 10',
+            code: 'MATH10',
+            description: 'Advanced Mathematics for Grade 10 students',
+            credits: 5,
+            duration: '1 year',
+            prerequisites: ['Mathematics Grade 9'],
+            teacherId: 1,
+            classes: [1],
+            syllabus: 'Algebra, Geometry, Trigonometry, Statistics',
+            materials: ['Textbook', 'Calculator', 'Notebook'],
+            assessment: {
+                midterm: 30,
+                final: 40,
+                assignments: 20,
+                attendance: 10
+            },
+            status: 'active',
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            schoolId: 1,
+            name: 'Science Grade 10',
+            code: 'SCI10',
+            description: 'Integrated Science for Grade 10 students',
+            credits: 5,
+            duration: '1 year',
+            prerequisites: ['Science Grade 9'],
+            teacherId: 1,
+            classes: [1],
+            syllabus: 'Physics, Chemistry, Biology',
+            materials: ['Textbook', 'Lab Equipment', 'Notebook'],
+            assessment: {
+                midterm: 30,
+                final: 40,
+                lab: 20,
+                attendance: 10
+            },
+            status: 'active',
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Enrollments Management
+    enrollments: [
+        {
+            id: 1,
+            studentId: 1,
+            courseId: 1,
+            classId: 1,
+            academicYear: '2025-2026',
+            semester: 'First',
+            status: 'active',
+            enrolledAt: new Date().toISOString(),
+            grade: null,
+            attendance: 95,
+            performance: 'good'
+        },
+        {
+            id: 2,
+            studentId: 1,
+            courseId: 2,
+            classId: 1,
+            academicYear: '2025-2026',
+            semester: 'First',
+            status: 'active',
+            enrolledAt: new Date().toISOString(),
+            grade: null,
+            attendance: 98,
+            performance: 'excellent'
+        },
+        {
+            id: 3,
+            studentId: 2,
+            courseId: 1,
+            classId: 1,
+            academicYear: '2025-2026',
+            semester: 'First',
+            status: 'active',
+            enrolledAt: new Date().toISOString(),
+            grade: null,
+            attendance: 92,
+            performance: 'good'
+        }
+    ],
+    
+    // Grades Management
+    grades: [
+        {
+            id: 1,
+            studentId: 1,
+            courseId: 1,
+            classId: 1,
+            examType: 'midterm',
+            score: 85,
+            maxScore: 100,
+            grade: 'A',
+            gpa: 4.0,
+            percentage: 85,
+            remarks: 'Excellent performance',
+            gradedBy: 1,
+            gradedAt: new Date().toISOString(),
+            academicYear: '2025-2026',
+            semester: 'First'
+        },
+        {
+            id: 2,
+            studentId: 1,
+            courseId: 2,
+            classId: 1,
+            examType: 'midterm',
+            score: 92,
+            maxScore: 100,
+            grade: 'A+',
+            gpa: 4.0,
+            percentage: 92,
+            remarks: 'Outstanding performance',
+            gradedBy: 1,
+            gradedAt: new Date().toISOString(),
+            academicYear: '2025-2026',
+            semester: 'First'
+        }
+    ],
+    
+    // Timetable Management
+    timetable: [
+        {
+            id: 1,
+            classId: 1,
+            courseId: 1,
+            teacherId: 1,
+            day: 'Monday',
+            startTime: '08:00',
+            endTime: '09:00',
+            room: 'Room 101',
+            subject: 'Mathematics',
+            status: 'active',
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            classId: 1,
+            courseId: 2,
+            teacherId: 1,
+            day: 'Monday',
+            startTime: '09:00',
+            endTime: '10:00',
+            room: 'Room 101',
+            subject: 'Science',
+            status: 'active',
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 3,
+            classId: 1,
+            courseId: 1,
+            teacherId: 1,
+            day: 'Tuesday',
+            startTime: '08:00',
+            endTime: '09:00',
+            room: 'Room 101',
+            subject: 'Mathematics',
+            status: 'active',
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Fee Management
+    fees: [
+        {
+            id: 1,
+            studentId: 1,
+            schoolId: 1,
+            feeType: 'tuition',
+            amount: 500,
+            dueDate: '2025-02-01',
+            paidDate: '2025-01-28',
+            status: 'paid',
+            paymentMethod: 'online',
+            transactionId: 'TXN123456',
+            academicYear: '2025-2026',
+            month: 'January',
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            studentId: 1,
+            schoolId: 1,
+            feeType: 'tuition',
+            amount: 500,
+            dueDate: '2025-03-01',
+            paidDate: null,
+            status: 'pending',
+            paymentMethod: null,
+            transactionId: null,
+            academicYear: '2025-2026',
+            month: 'February',
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Library Management
+    library: [
+        {
+            id: 1,
+            title: 'Mathematics Textbook Grade 10',
+            author: 'Math Department',
+            isbn: '978-0-123456-78-9',
+            category: 'Textbook',
+            quantity: 50,
+            available: 45,
+            location: 'Library Shelf A-1',
+            addedDate: new Date().toISOString(),
+            status: 'available'
+        },
+        {
+            id: 2,
+            title: 'Science Lab Manual',
+            author: 'Science Department',
+            isbn: '978-0-987654-32-1',
+            category: 'Lab Manual',
+            quantity: 30,
+            available: 28,
+            location: 'Library Shelf B-2',
+            addedDate: new Date().toISOString(),
+            status: 'available'
+        }
+    ],
+    
+    // Library Transactions
+    libraryTransactions: [
+        {
+            id: 1,
+            bookId: 1,
+            studentId: 1,
+            issueDate: new Date().toISOString(),
+            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+            returnDate: null,
+            status: 'issued',
+            fine: 0,
+            issuedBy: 1
+        }
+    ],
+    
+    // Transport Management
+    transport: [
+        {
+            id: 1,
+            vehicleNumber: 'SC-BUS-001',
+            vehicleType: 'Bus',
+            capacity: 40,
+            driverName: 'Mr. James Wilson',
+            driverPhone: '+1-234-567-8910',
+            route: 'Route A - Downtown to School',
+            stops: ['Stop 1', 'Stop 2', 'Stop 3', 'School'],
+            departureTime: '07:00',
+            arrivalTime: '15:30',
+            status: 'active',
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Transport Allocations
+    transportAllocations: [
+        {
+            id: 1,
+            studentId: 1,
+            vehicleId: 1,
+            stop: 'Stop 1',
+            academicYear: '2025-2026',
+            status: 'active',
+            allocatedAt: new Date().toISOString()
+        }
+    ],
+    
+    // Exams Management
+    exams: [
+        {
+            id: 1,
+            schoolId: 1,
+            title: 'Midterm Examination 2025',
+            examType: 'midterm',
+            startDate: '2025-02-15',
+            endDate: '2025-02-25',
+            status: 'upcoming',
+            classes: [1, 2],
+            courses: [1, 2],
+            instructions: 'Bring calculators and pens',
+            createdBy: 1,
+            createdAt: new Date().toISOString()
+        }
+    ],
+    
+    // Exam Results
+    examResults: [
+        {
+            id: 1,
+            examId: 1,
+            studentId: 1,
+            courseId: 1,
+            score: 85,
+            maxScore: 100,
+            grade: 'A',
+            gpa: 4.0,
+            percentage: 85,
+            remarks: 'Good performance',
+            publishedAt: new Date().toISOString(),
+            publishedBy: 1
+        }
+    ],
+    
+    // Content Management (existing)
     content: [
         {
             id: 1,
@@ -231,6 +710,8 @@ const db = {
             updatedAt: new Date().toISOString()
         }
     ],
+    
+    // Media Management (existing)
     media: [
         {
             id: 1,
@@ -243,12 +724,18 @@ const db = {
             uploadedAt: new Date().toISOString()
         }
     ],
+    
+    // Roles Management (existing)
     roles: [
         { id: 1, name: 'Super Admin', permissions: ['*'] },
         { id: 2, name: 'Admin', permissions: ['users.read', 'content.write', 'analytics.read'] },
         { id: 3, name: 'Editor', permissions: ['content.write', 'media.write'] },
-        { id: 4, name: 'Viewer', permissions: ['content.read'] }
+        { id: 4, name: 'Teacher', permissions: ['students.read', 'grades.write', 'attendance.write'] },
+        { id: 5, name: 'Student', permissions: ['profile.read', 'grades.read', 'attendance.read'] },
+        { id: 6, name: 'Parent', permissions: ['children.read', 'grades.read', 'attendance.read'] }
     ],
+    
+    // Permissions Management (existing)
     permissions: [
         { id: 1, name: 'users.read', description: 'Read user information' },
         { id: 2, name: 'users.write', description: 'Write user information' },
@@ -1259,6 +1746,943 @@ app.get('/api/i18n/languages', (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to retrieve supported languages',
+            error: error.message
+        });
+    }
+});
+
+// COMPLETE SCHOOL MANAGEMENT SYSTEM ENDPOINTS
+
+// SCHOOL MANAGEMENT ENDPOINTS
+app.get('/api/schools', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Schools retrieved successfully',
+            data: db.schools
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve schools',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/schools', (req, res) => {
+    try {
+        const { name, code, address, phone, email, principal } = req.body;
+        const newSchool = {
+            id: db.schools.length + 1,
+            name,
+            code,
+            address,
+            phone,
+            email,
+            principal,
+            established: new Date().toISOString().split('T')[0],
+            academicYear: '2025-2026',
+            settings: {
+                attendanceRequired: true,
+                feeStructure: 'monthly',
+                gradingSystem: 'GPA',
+                schoolType: 'K-12'
+            },
+            createdAt: new Date().toISOString()
+        };
+        db.schools.push(newSchool);
+        res.status(201).json({
+            success: true,
+            message: 'School created successfully',
+            data: newSchool
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create school',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/schools/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const school = db.schools.find(s => s.id == id);
+        if (!school) {
+            return res.status(404).json({
+                success: false,
+                message: 'School not found'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'School retrieved successfully',
+            data: school
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve school',
+            error: error.message
+        });
+    }
+});
+
+// CLASSES MANAGEMENT ENDPOINTS
+app.get('/api/classes', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Classes retrieved successfully',
+            data: db.classes
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve classes',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/classes', (req, res) => {
+    try {
+        const { schoolId, name, grade, section, teacherId, capacity, room } = req.body;
+        const newClass = {
+            id: db.classes.length + 1,
+            schoolId,
+            name,
+            grade,
+            section,
+            teacherId,
+            capacity,
+            currentStudents: 0,
+            room,
+            subjects: ['Mathematics', 'Science', 'English', 'History'],
+            schedule: {
+                startTime: '08:00',
+                endTime: '14:30',
+                breakTime: '12:00-12:30'
+            },
+            createdAt: new Date().toISOString()
+        };
+        db.classes.push(newClass);
+        res.status(201).json({
+            success: true,
+            message: 'Class created successfully',
+            data: newClass
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create class',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/classes/:id/students', (req, res) => {
+    try {
+        const { id } = req.params;
+        const students = db.students.filter(s => s.classId == id);
+        res.json({
+            success: true,
+            message: 'Class students retrieved successfully',
+            data: students
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve class students',
+            error: error.message
+        });
+    }
+});
+
+// STUDENTS MANAGEMENT ENDPOINTS
+app.get('/api/students', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Students retrieved successfully',
+            data: db.students
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve students',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/students', (req, res) => {
+    try {
+        const { schoolId, classId, name, email, phone, dateOfBirth, gender, address, parentName, parentPhone, parentEmail } = req.body;
+        const newStudent = {
+            id: db.students.length + 1,
+            schoolId,
+            classId,
+            name,
+            email,
+            phone,
+            dateOfBirth,
+            gender,
+            address,
+            parentName,
+            parentPhone,
+            parentEmail,
+            admissionNumber: `SCIS2025${String(db.students.length + 1).padStart(3, '0')}`,
+            rollNumber: `${classId}-${String(db.students.length + 1).padStart(3, '0')}`,
+            enrollmentDate: new Date().toISOString().split('T')[0],
+            status: 'active',
+            emergencyContact: {
+                name: parentName,
+                relation: 'Parent',
+                phone: parentPhone
+            },
+            createdAt: new Date().toISOString()
+        };
+        db.students.push(newStudent);
+        res.status(201).json({
+            success: true,
+            message: 'Student created successfully',
+            data: newStudent
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create student',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/students/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const student = db.students.find(s => s.id == id);
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+        res.json({
+            success: true,
+            message: 'Student retrieved successfully',
+            data: student
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve student',
+            error: error.message
+        });
+    }
+});
+
+// TEACHERS MANAGEMENT ENDPOINTS
+app.get('/api/teachers', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Teachers retrieved successfully',
+            data: db.teachers
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve teachers',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/teachers', (req, res) => {
+    try {
+        const { schoolId, name, email, phone, employeeId, specialization, qualification, experience, subjects, salary } = req.body;
+        const newTeacher = {
+            id: db.teachers.length + 1,
+            schoolId,
+            name,
+            email,
+            phone,
+            employeeId,
+            specialization,
+            qualification,
+            experience,
+            subjects,
+            classes: [],
+            salary,
+            joinDate: new Date().toISOString().split('T')[0],
+            status: 'active',
+            address: '',
+            createdAt: new Date().toISOString()
+        };
+        db.teachers.push(newTeacher);
+        res.status(201).json({
+            success: true,
+            message: 'Teacher created successfully',
+            data: newTeacher
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create teacher',
+            error: error.message
+        });
+    }
+});
+
+// ATTENDANCE MANAGEMENT ENDPOINTS
+app.get('/api/attendance', (req, res) => {
+    try {
+        const { date, classId } = req.query;
+        let attendance = db.attendance;
+        
+        if (date) {
+            attendance = attendance.filter(a => a.date === date);
+        }
+        if (classId) {
+            attendance = attendance.filter(a => a.classId == classId);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Attendance retrieved successfully',
+            data: attendance
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve attendance',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/attendance/mark', (req, res) => {
+    try {
+        const { studentId, classId, date, status, remarks } = req.body;
+        const newAttendance = {
+            id: db.attendance.length + 1,
+            studentId,
+            classId,
+            date: date || new Date().toISOString().split('T')[0],
+            status,
+            markedBy: 1,
+            markedAt: new Date().toISOString(),
+            remarks: remarks || ''
+        };
+        db.attendance.push(newAttendance);
+        res.status(201).json({
+            success: true,
+            message: 'Attendance marked successfully',
+            data: newAttendance
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to mark attendance',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/attendance/bulk', (req, res) => {
+    try {
+        const { classId, date, attendanceData } = req.body;
+        const newAttendanceRecords = attendanceData.map(record => ({
+            id: db.attendance.length + 1,
+            studentId: record.studentId,
+            classId,
+            date: date || new Date().toISOString().split('T')[0],
+            status: record.status,
+            markedBy: 1,
+            markedAt: new Date().toISOString(),
+            remarks: record.remarks || ''
+        }));
+        
+        db.attendance.push(...newAttendanceRecords);
+        res.status(201).json({
+            success: true,
+            message: 'Bulk attendance marked successfully',
+            data: newAttendanceRecords
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to mark bulk attendance',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/attendance/student/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const studentAttendance = db.attendance.filter(a => a.studentId == id);
+        res.json({
+            success: true,
+            message: 'Student attendance retrieved successfully',
+            data: studentAttendance
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve student attendance',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/attendance/report', (req, res) => {
+    try {
+        const { classId, startDate, endDate } = req.query;
+        let attendance = db.attendance;
+        
+        if (classId) {
+            attendance = attendance.filter(a => a.classId == classId);
+        }
+        if (startDate) {
+            attendance = attendance.filter(a => a.date >= startDate);
+        }
+        if (endDate) {
+            attendance = attendance.filter(a => a.date <= endDate);
+        }
+        
+        // Calculate attendance statistics
+        const totalStudents = db.students.filter(s => !classId || s.classId == classId).length;
+        const presentCount = attendance.filter(a => a.status === 'present').length;
+        const absentCount = attendance.filter(a => a.status === 'absent').length;
+        const attendanceRate = totalStudents > 0 ? (presentCount / (presentCount + absentCount)) * 100 : 0;
+        
+        res.json({
+            success: true,
+            message: 'Attendance report generated successfully',
+            data: {
+                totalStudents,
+                presentCount,
+                absentCount,
+                attendanceRate: attendanceRate.toFixed(2),
+                attendanceRecords: attendance
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate attendance report',
+            error: error.message
+        });
+    }
+});
+
+// COURSES MANAGEMENT ENDPOINTS
+app.get('/api/courses', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Courses retrieved successfully',
+            data: db.courses
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve courses',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/courses', (req, res) => {
+    try {
+        const { schoolId, name, code, description, credits, duration, teacherId, syllabus } = req.body;
+        const newCourse = {
+            id: db.courses.length + 1,
+            schoolId,
+            name,
+            code,
+            description,
+            credits,
+            duration,
+            prerequisites: [],
+            teacherId,
+            classes: [],
+            syllabus,
+            materials: ['Textbook', 'Notebook'],
+            assessment: {
+                midterm: 30,
+                final: 40,
+                assignments: 20,
+                attendance: 10
+            },
+            status: 'active',
+            createdAt: new Date().toISOString()
+        };
+        db.courses.push(newCourse);
+        res.status(201).json({
+            success: true,
+            message: 'Course created successfully',
+            data: newCourse
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create course',
+            error: error.message
+        });
+    }
+});
+
+// ENROLLMENTS MANAGEMENT ENDPOINTS
+app.get('/api/enrollments', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Enrollments retrieved successfully',
+            data: db.enrollments
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve enrollments',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/enrollments', (req, res) => {
+    try {
+        const { studentId, courseId, classId, academicYear, semester } = req.body;
+        const newEnrollment = {
+            id: db.enrollments.length + 1,
+            studentId,
+            courseId,
+            classId,
+            academicYear: academicYear || '2025-2026',
+            semester: semester || 'First',
+            status: 'active',
+            enrolledAt: new Date().toISOString(),
+            grade: null,
+            attendance: 0,
+            performance: 'good'
+        };
+        db.enrollments.push(newEnrollment);
+        res.status(201).json({
+            success: true,
+            message: 'Enrollment created successfully',
+            data: newEnrollment
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create enrollment',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/enrollments/student/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const studentEnrollments = db.enrollments.filter(e => e.studentId == id);
+        res.json({
+            success: true,
+            message: 'Student enrollments retrieved successfully',
+            data: studentEnrollments
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve student enrollments',
+            error: error.message
+        });
+    }
+});
+
+// GRADES MANAGEMENT ENDPOINTS
+app.get('/api/grades', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Grades retrieved successfully',
+            data: db.grades
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve grades',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/grades', (req, res) => {
+    try {
+        const { studentId, courseId, classId, examType, score, maxScore, remarks } = req.body;
+        const percentage = (score / maxScore) * 100;
+        let grade = 'F';
+        let gpa = 0.0;
+        
+        if (percentage >= 90) { grade = 'A+'; gpa = 4.0; }
+        else if (percentage >= 85) { grade = 'A'; gpa = 4.0; }
+        else if (percentage >= 80) { grade = 'B+'; gpa = 3.5; }
+        else if (percentage >= 75) { grade = 'B'; gpa = 3.0; }
+        else if (percentage >= 70) { grade = 'C+'; gpa = 2.5; }
+        else if (percentage >= 65) { grade = 'C'; gpa = 2.0; }
+        else if (percentage >= 60) { grade = 'D'; gpa = 1.0; }
+        
+        const newGrade = {
+            id: db.grades.length + 1,
+            studentId,
+            courseId,
+            classId,
+            examType,
+            score,
+            maxScore,
+            grade,
+            gpa,
+            percentage,
+            remarks: remarks || '',
+            gradedBy: 1,
+            gradedAt: new Date().toISOString(),
+            academicYear: '2025-2026',
+            semester: 'First'
+        };
+        db.grades.push(newGrade);
+        res.status(201).json({
+            success: true,
+            message: 'Grade recorded successfully',
+            data: newGrade
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to record grade',
+            error: error.message
+        });
+    }
+});
+
+app.get('/api/grades/student/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const studentGrades = db.grades.filter(g => g.studentId == id);
+        res.json({
+            success: true,
+            message: 'Student grades retrieved successfully',
+            data: studentGrades
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve student grades',
+            error: error.message
+        });
+    }
+});
+
+// TIMETABLE MANAGEMENT ENDPOINTS
+app.get('/api/timetable', (req, res) => {
+    try {
+        const { classId, day } = req.query;
+        let timetable = db.timetable;
+        
+        if (classId) {
+            timetable = timetable.filter(t => t.classId == classId);
+        }
+        if (day) {
+            timetable = timetable.filter(t => t.day === day);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Timetable retrieved successfully',
+            data: timetable
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve timetable',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/timetable', (req, res) => {
+    try {
+        const { classId, courseId, teacherId, day, startTime, endTime, room, subject } = req.body;
+        const newSchedule = {
+            id: db.timetable.length + 1,
+            classId,
+            courseId,
+            teacherId,
+            day,
+            startTime,
+            endTime,
+            room,
+            subject,
+            status: 'active',
+            createdAt: new Date().toISOString()
+        };
+        db.timetable.push(newSchedule);
+        res.status(201).json({
+            success: true,
+            message: 'Timetable created successfully',
+            data: newSchedule
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create timetable',
+            error: error.message
+        });
+    }
+});
+
+// FEE MANAGEMENT ENDPOINTS
+app.get('/api/fees', (req, res) => {
+    try {
+        const { studentId, status } = req.query;
+        let fees = db.fees;
+        
+        if (studentId) {
+            fees = fees.filter(f => f.studentId == studentId);
+        }
+        if (status) {
+            fees = fees.filter(f => f.status === status);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Fees retrieved successfully',
+            data: fees
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve fees',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/fees', (req, res) => {
+    try {
+        const { studentId, schoolId, feeType, amount, dueDate, month } = req.body;
+        const newFee = {
+            id: db.fees.length + 1,
+            studentId,
+            schoolId,
+            feeType,
+            amount,
+            dueDate,
+            paidDate: null,
+            status: 'pending',
+            paymentMethod: null,
+            transactionId: null,
+            academicYear: '2025-2026',
+            month: month || 'January',
+            createdAt: new Date().toISOString()
+        };
+        db.fees.push(newFee);
+        res.status(201).json({
+            success: true,
+            message: 'Fee record created successfully',
+            data: newFee
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create fee record',
+            error: error.message
+        });
+    }
+});
+
+// LIBRARY MANAGEMENT ENDPOINTS
+app.get('/api/library', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Library books retrieved successfully',
+            data: db.library
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve library books',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/library', (req, res) => {
+    try {
+        const { title, author, isbn, category, quantity, location } = req.body;
+        const newBook = {
+            id: db.library.length + 1,
+            title,
+            author,
+            isbn,
+            category,
+            quantity,
+            available: quantity,
+            location,
+            addedDate: new Date().toISOString(),
+            status: 'available'
+        };
+        db.library.push(newBook);
+        res.status(201).json({
+            success: true,
+            message: 'Book added to library successfully',
+            data: newBook
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to add book to library',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/library/issue', (req, res) => {
+    try {
+        const { bookId, studentId } = req.body;
+        const book = db.library.find(b => b.id == bookId);
+        if (!book || book.available <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Book not available'
+            });
+        }
+        
+        const newTransaction = {
+            id: db.libraryTransactions.length + 1,
+            bookId,
+            studentId,
+            issueDate: new Date().toISOString(),
+            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+            returnDate: null,
+            status: 'issued',
+            fine: 0,
+            issuedBy: 1
+        };
+        
+        book.available -= 1;
+        db.libraryTransactions.push(newTransaction);
+        
+        res.status(201).json({
+            success: true,
+            message: 'Book issued successfully',
+            data: newTransaction
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to issue book',
+            error: error.message
+        });
+    }
+});
+
+// EXAM MANAGEMENT ENDPOINTS
+app.get('/api/exams', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Exams retrieved successfully',
+            data: db.exams
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve exams',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/exams', (req, res) => {
+    try {
+        const { schoolId, title, examType, startDate, endDate, classes, courses, instructions } = req.body;
+        const newExam = {
+            id: db.exams.length + 1,
+            schoolId,
+            title,
+            examType,
+            startDate,
+            endDate,
+            status: 'upcoming',
+            classes,
+            courses,
+            instructions: instructions || '',
+            createdBy: 1,
+            createdAt: new Date().toISOString()
+        };
+        db.exams.push(newExam);
+        res.status(201).json({
+            success: true,
+            message: 'Exam created successfully',
+            data: newExam
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create exam',
+            error: error.message
+        });
+    }
+});
+
+// TRANSPORT MANAGEMENT ENDPOINTS
+app.get('/api/transport', (req, res) => {
+    try {
+        res.json({
+            success: true,
+            message: 'Transport vehicles retrieved successfully',
+            data: db.transport
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to retrieve transport vehicles',
+            error: error.message
+        });
+    }
+});
+
+app.post('/api/transport', (req, res) => {
+    try {
+        const { vehicleNumber, vehicleType, capacity, driverName, driverPhone, route, stops, departureTime, arrivalTime } = req.body;
+        const newVehicle = {
+            id: db.transport.length + 1,
+            vehicleNumber,
+            vehicleType,
+            capacity,
+            driverName,
+            driverPhone,
+            route,
+            stops,
+            departureTime,
+            arrivalTime,
+            status: 'active',
+            createdAt: new Date().toISOString()
+        };
+        db.transport.push(newVehicle);
+        res.status(201).json({
+            success: true,
+            message: 'Transport vehicle added successfully',
+            data: newVehicle
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to add transport vehicle',
             error: error.message
         });
     }
