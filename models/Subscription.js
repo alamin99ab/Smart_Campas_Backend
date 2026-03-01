@@ -159,7 +159,7 @@ subscriptionSchema.pre('save', function() {
 });
 
 // Indexes for better performance
-subscriptionSchema.index({ schoolId: 1 });
+// Note: schoolId already has unique index from field definition
 subscriptionSchema.index({ status: 1 });
 subscriptionSchema.index({ plan: 1 });
 subscriptionSchema.index({ endDate: 1 });
