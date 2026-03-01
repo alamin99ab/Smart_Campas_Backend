@@ -247,10 +247,6 @@ const startServer = async () => {
                     serverSelectionTimeoutMS: 10000,
                     socketTimeoutMS: 45000,
                     connectTimeoutMS: 10000,
-                    bufferCommands: false,
-                    bufferMaxEntries: 0,
-                    useNewUrlParser: true,
-                    useUnifiedTopology: true,
                 });
                 console.log('✅ Connected to MongoDB - Full Features Enabled');
                 console.log(`📍 Database: ${mongoose.connection.name}`);

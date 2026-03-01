@@ -34,10 +34,6 @@ services:
       - key: REDIS_URL
         sync: false
       
-      # MongoDB Configuration Fix
-      - key: MONGO_OPTIONS
-        value: retryWrites=true&w=majority
-      
       # Email Service (Optional - Configure in dashboard)
       - key: EMAIL_HOST
         sync: false
