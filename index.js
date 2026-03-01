@@ -9,6 +9,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
+const { ensureSuperAdminExists } = require('./scripts/startup-super-admin');
 require('dotenv').config();
 
 const app = express();
@@ -250,6 +251,9 @@ const startServer = async () => {
                 });
                 console.log('✅ Connected to MongoDB - Full Features Enabled');
                 console.log(`📍 Database: ${mongoose.connection.name}`);
+                
+                // Create super admin if none exists
+                await ensureSuperAdminExists();
             } catch (dbError) {
                 console.log('⚠️  MongoDB connection failed, continuing without database:', dbError.message);
                 console.log('📝 Some features may be limited without database');
