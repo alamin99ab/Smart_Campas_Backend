@@ -9,11 +9,63 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
-const { ensureSuperAdminExists } = require('./scripts/startup-super-admin');
+const bcrypt = require('bcryptjs');
+const User = require('./models/User');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001; // Render uses PORT env var
+
+// Super admin creation function
+async function ensureSuperAdminExists() {
+    try {
+        const SUPER_ADMIN_CREDENTIALS = {
+            name: 'Super Admin',
+            email: 'superadmin@smartcampus.com',
+            password: 'SuperAdmin123!',
+            role: 'super_admin',
+            isApproved: true,
+            emailVerified: true,
+            isActive: true
+        };
+
+        // Check if super admin already exists
+        console.log('🔍 Checking for super admin...');
+        const existingSuperAdmin = await User.findOne({ role: 'super_admin' });
+
+        if (existingSuperAdmin) {
+            console.log('✅ Super admin already exists');
+            // Update password to ensure access
+            const salt = await bcrypt.genSalt(12);
+            const hashedPassword = await bcrypt.hash(SUPER_ADMIN_CREDENTIALS.password, salt);
+            
+            await User.updateOne(
+                { _id: existingSuperAdmin._id },
+                { 
+                    password: hashedPassword,
+                    passwordChangedAt: new Date(),
+                    isActive: true,
+                    isApproved: true,
+                    emailVerified: true
+                }
+            );
+            console.log('✅ Super admin password updated!');
+        } else {
+            console.log('👤 Creating super admin...');
+            const superAdmin = new User(SUPER_ADMIN_CREDENTIALS);
+            await superAdmin.save();
+            console.log('✅ Super admin created successfully!');
+        }
+        
+        console.log('📋 Super Admin Credentials:');
+        console.log('📧 Email: superadmin@smartcampus.com');
+        console.log('🔑 Password: SuperAdmin123!');
+        console.log('🎭 Role: super_admin');
+        
+    } catch (error) {
+        console.error('❌ Error creating super admin:', error.message);
+    }
+}
 
 // Basic middleware
 app.use(helmet({
