@@ -13,6 +13,11 @@ const {
     getFees,
     collectPayment
 } = require('../controllers/feeController');
+const {
+    createFeeStructure,
+    getFeeStructures,
+    updateFeeStructure
+} = require('../controllers/feeStructureController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { principalOnly, accountantOnly } = require('../middleware/roleMiddleware');
 const { checkSchoolStatus } = require('../middleware/schoolMiddleware');
@@ -22,6 +27,9 @@ router.use(checkSchoolStatus);
 
 // Fee management
 router.get('/', getFees);
+router.post('/structure', authorize('principal', 'admin'), createFeeStructure);
+router.get('/structure', authorize('principal', 'admin', 'accountant'), getFeeStructures);
+router.put('/structure/:id', authorize('principal', 'admin'), updateFeeStructure);
 router.post('/collect', authorize('principal', 'accountant'), collectPayment);
 router.post('/update', authorize('principal', 'accountant'), updateFee);
 router.get('/report', authorize('principal', 'accountant'), getFeeReport);

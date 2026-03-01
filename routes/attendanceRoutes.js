@@ -5,6 +5,7 @@ const {
     getAttendanceReport,
     getTodayAttendance,
     getMonthlyReport,
+    getAttendanceAlerts,
     exportAttendance,
     deleteAttendance
 } = require('../controllers/attendanceController');
@@ -20,6 +21,7 @@ router.post('/take', authorize('teacher', 'principal', 'accountant'), takeAttend
 router.get('/report', getAttendanceReport);
 router.get('/today', getTodayAttendance);
 router.get('/monthly', getMonthlyReport);
+router.get('/alerts', authorize('principal', 'teacher', 'admin'), getAttendanceAlerts);
 router.get('/export', authorize('principal', 'accountant'), exportAttendance);
 router.delete('/:id', authorize('principal'), deleteAttendance);
 

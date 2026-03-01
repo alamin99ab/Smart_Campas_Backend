@@ -15,13 +15,27 @@ const {
     assignTeacher,
     getSchoolAnalytics
 } = require('../controllers/principalController');
+const {
+    addStudent,
+    bulkImportStudents,
+    promoteStudents,
+    transferStudent
+} = require('../controllers/principalStudentController');
 
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validateClass, validateSubject, checkValidation } = require('../middleware/validationMiddleware');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // Middleware
 router.use(protect);
 router.use(authorize('principal'));
+
+// Student Management (Principal)
+router.post('/students', addStudent);
+router.post('/students/bulk-import', upload.single('file'), bulkImportStudents);
+router.post('/students/promote', promoteStudents);
+router.post('/students/transfer', transferStudent);
 
 // Class Management Routes
 router.post('/classes', validateClass, checkValidation, createClass);

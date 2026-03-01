@@ -20,7 +20,7 @@ exports.checkSchoolStatus = async (req, res, next) => {
         }
 
         // Check subscription
-        if (school.subscription.status !== 'active' && req.user?.role !== 'superadmin') {
+        if (school.subscription.status !== 'active' && req.user?.role !== 'super_admin') {
             return res.status(403).json({ message: 'School subscription is not active' });
         }
 

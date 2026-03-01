@@ -13,8 +13,10 @@ function validateEnv() {
     const missing = required.filter(key => !process.env[key] || !String(process.env[key]).trim());
     if (missing.length > 0) {
         console.warn('Warning: Missing recommended env vars:', missing.join(', '));
-        // Don't exit in production, just warn
+        // Don't exit in development, just warn
         if (!isProduction) {
+            console.warn('⚠️  Running in development mode without some recommended configurations');
+        } else {
             process.exit(1);
         }
     }

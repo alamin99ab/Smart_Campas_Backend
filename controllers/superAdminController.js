@@ -5,6 +5,7 @@
 
 const School = require('../models/School');
 const User = require('../models/User');
+const Subscription = require('../models/Subscription');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const Routine = require('../models/Routine');
@@ -771,33 +772,34 @@ exports.getSystemAnalytics = async (req, res) => {
             role: 'student', 
             isActive: true 
         });
+        const activeUsers = await User.countDocuments({ isActive: true });
+
+        // Total revenue (from School.amountPaid – SaaS billing)
+        const revenueResult = await School.aggregate([
+            { $group: { _id: null, totalRevenue: { $sum: { $ifNull: ['$amountPaid', 0] } } } }
+        ]);
+        const totalRevenue = revenueResult[0]?.totalRevenue ?? 0;
+
+        // Storage usage placeholder (MB) – can be replaced with real file-storage stats
+        const storageUsageMB = 0;
 
         // Get recent activity
         const recentActivity = await AuditLog.find()
-            .populate('userId', 'name role')
+            .populate('user', 'name role')
             .sort({ createdAt: -1 })
             .limit(10);
 
-        // Get school distribution by type
+        // Get school distribution by subscription plan
         const schoolsByType = await School.aggregate([
-            { $group: { _id: '$subscriptionType', count: { $sum: 1 } } }
+            { $group: { _id: '$subscription.plan', count: { $sum: 1 } } }
         ]);
 
         // Get student growth (last 6 months)
+        const sixMonthsAgo = new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000);
         const studentGrowth = await User.aggregate([
-            {
-                $match: {
-                    role: 'student',
-                    createdAt: { $gte: new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000) }
-                }
-            },
-            {
-                $group: {
-                    _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
-                    count: { $sum: 1 }
-                },
-                sort: { _id: 1 }
-            }
+            { $match: { role: 'student', createdAt: { $gte: sixMonthsAgo } } },
+            { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } }, count: { $sum: 1 } } },
+            { $sort: { _id: 1 } }
         ]);
 
         res.status(200).json({
@@ -806,10 +808,13 @@ exports.getSystemAnalytics = async (req, res) => {
                 overview: {
                     totalSchools,
                     activeSchools,
+                    activeUsers,
                     totalPrincipals,
                     totalTeachers,
                     totalStudents,
-                    activeStudents
+                    activeStudents,
+                    totalRevenue,
+                    storageUsageMB
                 },
                 recentActivity,
                 schoolsByType,

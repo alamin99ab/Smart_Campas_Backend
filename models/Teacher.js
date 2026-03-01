@@ -48,6 +48,9 @@ const teacherSchema = new mongoose.Schema({
             default: 'USD'
         }
     },
+    maxPeriodsPerWeek: { type: Number, default: 30 },
+    isClassTeacher: { type: Boolean, default: false },
+    classTeacherOf: { class: String, section: String },
     isActive: {
         type: Boolean,
         default: true

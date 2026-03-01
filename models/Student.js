@@ -23,6 +23,12 @@ const studentSchema = new mongoose.Schema({
         publicId: { type: String }
     },
     studentId: { type: String, unique: true, sparse: true },
+    totalDue: { type: Number, default: 0 },
+    forceAdmit: { type: Boolean, default: false },
+    forceAdmitReason: String,
+    forceAdmitExpiry: Date,
+    forceAdmitGrantedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    forceAdmitGrantedAt: Date,
     schoolCode: { type: String, required: true, index: true },
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

@@ -24,12 +24,12 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S smartcampus -u 1001 -G nodejs
 
 # Create necessary directories and set ownership
-RUN mkdir -p /app/logs /app/uploads /app/temp /app/certs /app/blockchain && \
+RUN mkdir -p /app/logs /app/uploads /app/temp /app/certs && \
     chown -R smartcampus:nodejs /app
 
 # Set permissions
 RUN chmod -R 755 /app && \
-    chmod -R 777 /app/logs /app/uploads /app/temp /app/certs /app/blockchain
+    chmod -R 777 /app/logs /app/uploads /app/temp /app/certs
 
 # Switch to non-root user
 USER smartcampus
@@ -47,12 +47,11 @@ ENV PORT=5000
 
 # Start application with dumb-init
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "server.js"]
+CMD ["node", "index.js"]
 
 # Labels for metadata
 LABEL maintainer="Smart Campus Development Team" \
-      version="4.0.0" \
-      description="Smart Campus Backend with AI, Blockchain, IoT, and Real-time features" \
+      version="5.0.0" \
+      description="Smart Campus Backend API" \
       org.smartcampus.name="smart-campus-backend" \
-      org.smartcampus.version="4.0.0" \
-      features="ai,blockchain,iot,realtime,mobile,security,multilang,microservices"
+      org.smartcampus.version="5.0.0"

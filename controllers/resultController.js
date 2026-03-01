@@ -151,6 +151,9 @@ exports.updateResult = async (req, res) => {
         if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
             return res.status(403).json({ message: 'Access denied' });
         }
+        if (result.isLocked) {
+            return res.status(403).json({ message: 'Result is locked. Principal must unlock to edit.' });
+        }
 
         // Update fields
         if (subjects) {
@@ -352,6 +355,60 @@ exports.deleteResult = async (req, res) => {
     } catch (error) {
         console.error('Delete result error:', error);
         res.status(500).json({ message: 'Failed to delete result' });
+    }
+};
+
+// @desc    Lock result (Principal only – no further edits)
+// @route   PUT /api/results/:id/lock
+// @access  Private (Principal)
+exports.lockResult = async (req, res) => {
+    try {
+        if (req.user.role !== 'principal' && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Access denied. Principal only.' });
+        }
+        const result = await Result.findOne({ _id: req.params.id, schoolCode: req.user.schoolCode });
+        if (!result) return res.status(404).json({ message: 'Result not found' });
+        result.isLocked = true;
+        result.lockedBy = req.user._id;
+        result.lockedAt = new Date();
+        await result.save();
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'RESULT_LOCKED',
+            details: { resultId: result._id, examName: result.examName },
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+        res.json({ success: true, message: 'Result locked. No further edits allowed.', data: result });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to lock result' });
+    }
+};
+
+// @desc    Unlock result (Principal only)
+// @route   PUT /api/results/:id/unlock
+// @access  Private (Principal)
+exports.unlockResult = async (req, res) => {
+    try {
+        if (req.user.role !== 'principal' && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Access denied. Principal only.' });
+        }
+        const result = await Result.findOne({ _id: req.params.id, schoolCode: req.user.schoolCode });
+        if (!result) return res.status(404).json({ message: 'Result not found' });
+        result.isLocked = false;
+        result.lockedBy = undefined;
+        result.lockedAt = undefined;
+        await result.save();
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'RESULT_UNLOCKED',
+            details: { resultId: result._id, examName: result.examName },
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+        res.json({ success: true, message: 'Result unlocked.', data: result });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to unlock result' });
     }
 };
 

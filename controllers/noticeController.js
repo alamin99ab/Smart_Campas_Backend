@@ -2,63 +2,151 @@
 const Notice = require('../models/Notice');
 const School = require('../models/School');
 const User = require('../models/User');
-const AuditLog = require('../models/AuditLog');
-const { sendPushNotification } = require('../utils/notificationService');
-const { sendEmail } = require('../utils/emailService');
-const { createNotification } = require('../utils/createNotification');
 
-// @desc    Create a new notice
-// @route   POST /api/notices
-// @access  Private (Principal/Teacher/Admin)
+// Helper function to send notifications
+const sendNoticeNotifications = async (notice, schoolId) => {
+    try {
+        await Notice.createNotificationsForNotice(notice);
+    } catch (error) {
+        console.error('Error sending notice notifications:', error);
+    }
+};
+
+/**
+ * @desc    Create a new notice
+ * @route   POST /api/notices
+ * @access  Private (Principal/Teacher/Super Admin)
+ */
 exports.createNotice = async (req, res) => {
     try {
-        const { title, content, category, targetRoles, targetClasses, attachments, priority, expiryDate } = req.body;
+        const {
+            title,
+            description,
+            noticeType,
+            targetType,
+            targetRoles,
+            targetClasses,
+            targetSections,
+            targetTeachers,
+            targetSubjects,
+            priority,
+            publishDate,
+            expiryDate,
+            attachments,
+            communicationSettings,
+            contentFormat,
+            richContent,
+            requireAcknowledgment,
+            acknowledgmentDeadline,
+            allowComments,
+            isPinned,
+            pinOrder
+        } = req.body;
 
         // Validation
-        if (!title || !content || !category) {
-            return res.status(400).json({ message: 'Title, content and category are required' });
+        if (!title || !description || !noticeType) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title, description and notice type are required'
+            });
         }
 
-        // Check if school exists
-        const school = await School.findOne({ schoolCode: req.user.schoolCode });
-        if (!school) {
-            return res.status(404).json({ message: 'School not found' });
+        let schoolId = null;
+        let isGlobal = false;
+
+        // Check if user is Super Admin creating global notice
+        if (req.user.role === 'super_admin') {
+            isGlobal = req.body.isGlobal || false;
+            if (!isGlobal) {
+                schoolId = req.body.schoolId;
+                if (!schoolId) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'School ID is required for non-global notices'
+                    });
+                }
+            }
+        } else {
+            // For other roles, use tenant schoolId
+            schoolId = req.tenant.schoolId;
         }
+
+        // Validate target configuration
+        if (targetType === 'class' && (!targetClasses || targetClasses.length === 0)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Target classes are required for class-specific notices'
+            });
+        }
+
+        if (targetType === 'teacher' && (!targetTeachers || targetTeachers.length === 0)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Target teachers are required for teacher-specific notices'
+            });
+        }
+
+        // Set status based on publish date
+        const status = publishDate && new Date(publishDate) > new Date() ? 'scheduled' : 'active';
 
         // Create notice
-        const notice = await Notice.create({
+        const notice = new Notice({
+            schoolId,
+            isGlobal,
             title,
-            content,
-            category,
-            priority: priority || 'normal',
-            schoolCode: req.user.schoolCode,
-            addedBy: req.user._id,
+            description,
+            noticeType,
+            targetType: targetType || 'all',
             targetRoles: targetRoles || ['teacher', 'student', 'parent'],
             targetClasses: targetClasses || [],
+            targetSections: targetSections || [],
+            targetTeachers: targetTeachers || [],
+            targetSubjects: targetSubjects || [],
+            priority: priority || 'medium',
+            publishDate: publishDate ? new Date(publishDate) : new Date(),
+            expiryDate: expiryDate ? new Date(expiryDate) : null,
             attachments: attachments || [],
-            expiryDate: expiryDate || null,
-            isActive: true
+            communicationSettings: communicationSettings || {},
+            contentFormat: contentFormat || 'plain',
+            richContent,
+            requireAcknowledgment: requireAcknowledgment || false,
+            acknowledgmentDeadline: acknowledgmentDeadline ? new Date(acknowledgmentDeadline) : null,
+            allowComments: allowComments || false,
+            isPinned: isPinned || false,
+            pinOrder: pinOrder || 0,
+            status,
+            createdBy: req.user.id
         });
 
-        // Send notifications based on target
-        await sendNoticeNotifications(notice, req.user.schoolCode);
+        await notice.save();
+
+        // Send notifications if active
+        if (status === 'active') {
+            await sendNoticeNotifications(notice, schoolId);
+        }
 
         // Audit log
         await AuditLog.create({
-            user: req.user._id,
-            action: 'NOTICE_CREATED',
-            details: { 
-                noticeId: notice._id,
-                title: notice.title,
-                category: notice.category
+            action: 'create_notice',
+            resource: 'notice',
+            resourceId: notice._id,
+            userId: req.user.id,
+            userRole: req.user.role,
+            schoolId,
+            details: {
+                title,
+                noticeType,
+                targetType,
+                isGlobal
             },
             ip: req.ip,
-            userAgent: req.headers['user-agent']
+            userAgent: req.get('User-Agent')
         });
 
         res.status(201).json({
+            success: true,
             message: 'Notice created successfully',
-            notice
+            data: notice
         });
 
     } catch (error) {
@@ -396,8 +484,8 @@ exports.archiveExpiredNotices = async (req, res) => {
     }
 };
 
-// Helper function to send notifications
-const sendNoticeNotifications = async (notice, schoolCode) => {
+// Helper function to send notifications (updated version)
+const sendNoticeNotificationsUpdated = async (notice, schoolCode) => {
     try {
         const targetUsers = await User.find({
             schoolCode,

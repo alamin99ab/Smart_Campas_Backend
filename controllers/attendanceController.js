@@ -472,6 +472,82 @@ exports.exportAttendance = async (req, res) => {
     }
 };
 
+// @desc    Get attendance alerts – students below threshold (default 75%)
+// @route   GET /api/attendance/alerts
+// @access  Private (Principal/Teacher)
+exports.getAttendanceAlerts = async (req, res) => {
+    try {
+        const { month, year, studentClass, section, threshold = 75 } = req.query;
+        const schoolCode = req.user.schoolCode;
+        const m = month ? parseInt(month, 10) : new Date().getMonth() + 1;
+        const y = year ? parseInt(year, 10) : new Date().getFullYear();
+        const th = Math.min(100, Math.max(0, parseInt(threshold, 10) || 75));
+
+        const start = new Date(y, m - 1, 1);
+        const end = new Date(y, m, 0);
+
+        const attendance = await Attendance.find({
+            schoolCode,
+            date: { $gte: start, $lte: end },
+            ...(studentClass && { studentClass }),
+            ...(section && { section })
+        }).lean();
+
+        const studentStats = {};
+        attendance.forEach(day => {
+            (day.records || []).forEach(record => {
+                const studentId = record.studentId?.toString?.();
+                if (!studentId) return;
+                if (!studentStats[studentId]) {
+                    studentStats[studentId] = { present: 0, late: 0, absent: 0, total: 0 };
+                }
+                studentStats[studentId].total++;
+                if (record.status === 'Present' || record.status === 'Late') studentStats[studentId].present++;
+                else if (record.status === 'Absent') studentStats[studentId].absent++;
+            });
+        });
+
+        const belowThreshold = [];
+        for (const [studentId, stat] of Object.entries(studentStats)) {
+            const pct = stat.total > 0 ? ((stat.present / stat.total) * 100) : 0;
+            if (pct < th) {
+                belowThreshold.push({
+                    studentId,
+                    present: stat.present,
+                    total: stat.total,
+                    attendancePercentage: Number(pct.toFixed(2)),
+                    threshold: th
+                });
+            }
+        }
+
+        const studentIds = belowThreshold.map(s => s.studentId);
+        const students = await Student.find({ _id: { $in: studentIds }, schoolCode })
+            .select('name roll studentClass section guardian')
+            .lean();
+        const studentMap = Object.fromEntries(students.map(s => [s._id.toString(), s]));
+
+        const alerts = belowThreshold.map(a => ({
+            ...a,
+            student: studentMap[a.studentId] || { _id: a.studentId }
+        }));
+
+        res.json({
+            success: true,
+            data: {
+                month: m,
+                year: y,
+                threshold: th,
+                totalBelowThreshold: alerts.length,
+                alerts
+            }
+        });
+    } catch (error) {
+        console.error('Get attendance alerts error:', error);
+        res.status(500).json({ message: 'Failed to fetch attendance alerts' });
+    }
+};
+
 // @desc    Delete Attendance
 // @route   DELETE /api/attendance/:id
 // @access  Private (Principal only)

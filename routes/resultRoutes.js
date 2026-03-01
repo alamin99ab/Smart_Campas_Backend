@@ -7,6 +7,8 @@ const {
     getResults,
     getResultById,
     deleteResult,
+    lockResult,
+    unlockResult,
     downloadResultPDF,
     exportResultsToExcel
 } = require('../controllers/resultController');
@@ -31,6 +33,8 @@ router.route('/:id')
     .get(getResultById)
     .put(authorize('teacher', 'principal'), updateResult)
     .delete(principalOnly, deleteResult);
+router.put('/:id/lock', principalOnly, lockResult);
+router.put('/:id/unlock', principalOnly, unlockResult);
 
 // PDF download (public or private - can be accessed via shared link)
 router.get('/:id/pdf', downloadResultPDF);

@@ -1,592 +1,405 @@
 /**
- * 🤖 AI-POWERED SMART CAMPUS SERVICES
- * Advanced AI features for next-level campus management
+ * 🤖 AI SERVICE - SMART CAMPUS INTELLIGENCE
+ * Industry-level AI features for educational management
  */
+
+const axios = require('axios');
+const logger = require('../utils/logger');
 
 class AIService {
     constructor() {
-        this.models = {
-            performance: new PerformanceAnalyzer(),
-            behavior: new BehaviorAnalyzer(),
-            attendance: new AttendancePredictor(),
-            recommendation: new RecommendationEngine(),
-            sentiment: new SentimentAnalyzer(),
-            schedule: new ScheduleOptimizer()
-        };
+        this.openaiApiKey = process.env.OPENAI_API_KEY;
+        this.huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY;
+        this.baseURL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
     }
 
     /**
-     * 📊 Student Performance Analysis
+     * 📚 AI-Powered Academic Performance Analysis
      */
-    async analyzeStudentPerformance(studentId, timeframe = 'semester') {
+    async analyzeStudentPerformance(studentData, academicHistory) {
         try {
-            const analysis = await this.models.performance.analyze(studentId, timeframe);
+            const prompt = `
+            Analyze student performance data and provide insights:
             
-            return {
-                success: true,
-                data: {
-                    studentId,
-                    timeframe,
-                    performance: {
-                        overall: analysis.overallScore,
-                        trend: analysis.trend,
-                        subjects: analysis.subjectBreakdown,
-                        predictions: analysis.predictions,
-                        recommendations: analysis.recommendations
-                    },
-                    insights: {
-                        strengths: analysis.strengths,
-                        weaknesses: analysis.weaknesses,
-                        improvementAreas: analysis.improvementAreas,
-                        riskFactors: analysis.riskFactors
-                    },
-                    aiConfidence: analysis.confidence,
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            Student Data: ${JSON.stringify(studentData)}
+            Academic History: ${JSON.stringify(academicHistory)}
+            
+            Provide:
+            1. Performance trends
+            2. Strengths and weaknesses
+            3. Recommended improvements
+            4. Risk factors for academic failure
+            5. Personalized study suggestions
+            
+            Format as JSON with keys: trends, strengths, weaknesses, recommendations, riskFactors, studySuggestions
+            `;
+
+            const analysis = await this.callAI(prompt, 'performance_analysis');
+            return JSON.parse(analysis);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to analyze student performance'
-            };
+            logger.error('AI Performance Analysis Error:', error);
+            throw new Error('Failed to analyze student performance');
         }
     }
 
     /**
-     * 🧠 Student Behavior Analysis
+     * 🎯 Smart Attendance Prediction
      */
-    async analyzeStudentBehavior(studentId, days = 30) {
+    async predictAttendancePatterns(attendanceData, studentInfo) {
         try {
-            const behavior = await this.models.behavior.analyze(studentId, days);
+            const prompt = `
+            Analyze attendance patterns and predict future behavior:
             
-            return {
-                success: true,
-                data: {
-                    studentId,
-                    analysisPeriod: `${days} days`,
-                    behavior: {
-                        engagement: behavior.engagementScore,
-                        participation: behavior.participationLevel,
-                        socialInteraction: behavior.socialScore,
-                        discipline: behavior.disciplineScore,
-                        consistency: behavior.consistencyScore
-                    },
-                    patterns: {
-                        learningStyle: behavior.learningStyle,
-                        peakPerformanceTimes: behavior.peakTimes,
-                        collaborationPreference: behavior.collaborationStyle,
-                        motivationLevel: behavior.motivationScore
-                    },
-                    alerts: behavior.alerts,
-                    recommendations: behavior.recommendations,
-                    aiConfidence: behavior.confidence,
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            Attendance Data: ${JSON.stringify(attendanceData)}
+            Student Info: ${JSON.stringify(studentInfo)}
+            
+            Provide:
+            1. Attendance probability for next 30 days
+            2. Risk factors for absenteeism
+            3. Recommended interventions
+            4. Pattern analysis (days, subjects, time-based)
+            
+            Format as JSON with keys: probability, riskFactors, interventions, patterns
+            `;
+
+            const prediction = await this.callAI(prompt, 'attendance_prediction');
+            return JSON.parse(prediction);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to analyze student behavior'
-            };
+            logger.error('AI Attendance Prediction Error:', error);
+            throw new Error('Failed to predict attendance patterns');
         }
     }
 
     /**
-     * 📈 Attendance Prediction
+     * 🧠 Intelligent Question Generation for Exams
      */
-    async predictAttendance(studentId, futureDays = 30) {
+    async generateExamQuestions(subject, topic, difficulty, count = 10) {
         try {
-            const prediction = await this.models.attendance.predict(studentId, futureDays);
+            const prompt = `
+            Generate ${count} exam questions for ${subject} - ${topic} at ${difficulty} level.
             
-            return {
-                success: true,
-                data: {
-                    studentId,
-                    predictionPeriod: `${futureDays} days`,
-                    predictions: {
-                        overallAttendance: prediction.overallPercentage,
-                        bySubject: prediction.subjectBreakdown,
-                        riskDays: prediction.riskDays,
-                        patterns: prediction.patterns
-                    },
-                    factors: {
-                        historical: prediction.historicalFactors,
-                        seasonal: prediction.seasonalFactors,
-                        external: prediction.externalFactors
-                    },
-                    interventions: prediction.recommendedInterventions,
-                    aiConfidence: prediction.confidence,
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            For each question provide:
+            1. Question text
+            2. Question type (MCQ, Short Answer, Essay)
+            3. Options (for MCQ)
+            4. Correct answer
+            5. Marks allocation
+            6. Difficulty level
+            7. Learning objective
+            
+            Format as JSON array with question objects
+            `;
+
+            const questions = await this.callAI(prompt, 'question_generation');
+            return JSON.parse(questions);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to predict attendance'
-            };
+            logger.error('AI Question Generation Error:', error);
+            throw new Error('Failed to generate exam questions');
         }
     }
 
     /**
-     * 🎯 Personalized Recommendations
+     * 📊 AI-Powered Grading Assistant
      */
-    async getPersonalizedRecommendations(studentId, type = 'academic') {
+    async assistGrading(submission, rubric, subject) {
         try {
-            const recommendations = await this.models.recommendation.generate(studentId, type);
+            const prompt = `
+            Grade the following submission using the provided rubric:
             
-            return {
-                success: true,
-                data: {
-                    studentId,
-                    recommendationType: type,
-                    recommendations: {
-                        academic: recommendations.academic,
-                        extracurricular: recommendations.extracurricular,
-                        career: recommendations.career,
-                        personal: recommendations.personal
-                    },
-                    priority: recommendations.priority,
-                    actionItems: recommendations.actionItems,
-                    resources: recommendations.resources,
-                    aiConfidence: recommendations.confidence,
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            Submission: ${submission}
+            Rubric: ${JSON.stringify(rubric)}
+            Subject: ${subject}
+            
+            Provide:
+            1. Score for each rubric criterion
+            2. Total score
+            3. Detailed feedback
+            4. Strengths identified
+            5. Areas for improvement
+            6. Suggested grade
+            
+            Format as JSON with keys: rubricScores, totalScore, feedback, strengths, improvements, suggestedGrade
+            `;
+
+            const grading = await this.callAI(prompt, 'grading_assistant');
+            return JSON.parse(grading);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to generate recommendations'
-            };
+            logger.error('AI Grading Assistant Error:', error);
+            throw new Error('Failed to assist with grading');
         }
     }
 
     /**
-     * 💭 Sentiment Analysis
+     * 🎓 Personalized Learning Path Recommendations
      */
-    async analyzeSentiment(text, context = 'general') {
+    async generateLearningPath(studentProfile, learningGoals, currentProgress) {
         try {
-            const sentiment = await this.models.sentiment.analyze(text, context);
+            const prompt = `
+            Create a personalized learning path based on student data:
             
-            return {
-                success: true,
-                data: {
-                    text,
-                    context,
-                    sentiment: {
-                        overall: sentiment.overall,
-                        emotions: sentiment.emotions,
-                        confidence: sentiment.confidence,
-                        aspects: sentiment.aspectBased
-                    },
-                    insights: {
-                        tone: sentiment.tone,
-                        urgency: sentiment.urgency,
-                        sentiment: sentiment.sentimentLabel
-                    },
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            Student Profile: ${JSON.stringify(studentProfile)}
+            Learning Goals: ${JSON.stringify(learningGoals)}
+            Current Progress: ${JSON.stringify(currentProgress)}
+            
+            Provide:
+            1. Recommended learning sequence
+            2. Resource suggestions
+            3. Study schedule
+            4. Milestone checkpoints
+            5. Adaptation strategies
+            6. Progress tracking metrics
+            
+            Format as JSON with keys: sequence, resources, schedule, milestones, adaptations, metrics
+            `;
+
+            const learningPath = await this.callAI(prompt, 'learning_path');
+            return JSON.parse(learningPath);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to analyze sentiment'
-            };
+            logger.error('AI Learning Path Error:', error);
+            throw new Error('Failed to generate learning path');
         }
     }
 
     /**
-     * ⏰ Smart Schedule Optimization
+     * 💡 Smart Content Recommendation
      */
-    async optimizeSchedule(constraints, preferences) {
+    async recommendContent(studentLevel, subject, learningStyle, currentTopics) {
         try {
-            const schedule = await this.models.schedule.optimize(constraints, preferences);
+            const prompt = `
+            Recommend educational content for personalized learning:
             
-            return {
-                success: true,
-                data: {
-                    schedule: schedule.optimizedSchedule,
-                    metrics: {
-                        efficiency: schedule.efficiencyScore,
-                        balance: schedule.workLifeBalance,
-                        satisfaction: schedule.satisfactionScore
-                    },
-                    alternatives: schedule.alternatives,
-                    reasoning: schedule.optimizationReasoning,
-                    aiConfidence: schedule.confidence,
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            Student Level: ${studentLevel}
+            Subject: ${subject}
+            Learning Style: ${learningStyle}
+            Current Topics: ${JSON.stringify(currentTopics)}
+            
+            Provide:
+            1. Recommended videos/tutorials
+            2. Reading materials
+            3. Interactive exercises
+            4. Practice problems
+            5. Assessment suggestions
+            6. Difficulty progression
+            
+            Format as JSON with keys: videos, readings, exercises, problems, assessments, progression
+            `;
+
+            const recommendations = await this.callAI(prompt, 'content_recommendation');
+            return JSON.parse(recommendations);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to optimize schedule'
-            };
+            logger.error('AI Content Recommendation Error:', error);
+            throw new Error('Failed to recommend content');
         }
     }
 
     /**
-     * 🏫 Campus-wide Analytics
+     * 🔍 Plagiarism Detection
      */
-    async getCampusAnalytics(timeframe = 'month') {
+    async detectPlagiarism(submissionText, studentId) {
         try {
-            const analytics = await Promise.all([
-                this.models.performance.getCampusOverview(timeframe),
-                this.models.behavior.getCampusTrends(timeframe),
-                this.models.attendance.getCampusPatterns(timeframe),
-                this.models.sentiment.getCampusMood(timeframe)
-            ]);
+            // This would integrate with a plagiarism detection service
+            // For now, we'll use AI for basic similarity detection
             
-            return {
-                success: true,
-                data: {
-                    timeframe,
-                    overview: {
-                        performance: analytics[0],
-                        behavior: analytics[1],
-                        attendance: analytics[2],
-                        sentiment: analytics[3]
-                    },
-                    insights: {
-                        trends: this.extractTrends(analytics),
-                        alerts: this.extractAlerts(analytics),
-                        opportunities: this.extractOpportunities(analytics)
-                    },
-                    recommendations: this.generateCampusRecommendations(analytics),
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            const prompt = `
+            Analyze the following text for potential plagiarism indicators:
+            
+            Text: ${submissionText}
+            
+            Provide:
+            1. Plagiarism probability score (0-100)
+            2. Suspicious phrases
+            3. Writing style analysis
+            4. Originality assessment
+            5. Recommendations for review
+            
+            Format as JSON with keys: score, suspiciousPhrases, styleAnalysis, originality, recommendations
+            `;
+
+            const analysis = await this.callAI(prompt, 'plagiarism_detection');
+            return JSON.parse(analysis);
         } catch (error) {
-            return {
-                success: false,
-                error: error.message,
-                message: 'Failed to generate campus analytics'
-            };
+            logger.error('AI Plagiarism Detection Error:', error);
+            throw new Error('Failed to detect plagiarism');
         }
     }
 
-    // Helper methods
-    extractTrends(analytics) {
-        // AI-powered trend extraction logic
-        return {
-            academic: 'improving',
-            engagement: 'stable',
-            attendance: 'declining',
-            sentiment: 'positive'
-        };
+    /**
+     * 📈 Predictive Analytics for Student Success
+     */
+    async predictStudentSuccess(studentData, historicalData) {
+        try {
+            const prompt = `
+            Predict student success probability based on comprehensive data:
+            
+            Student Data: ${JSON.stringify(studentData)}
+            Historical Data: ${JSON.stringify(historicalData)}
+            
+            Provide:
+            1. Success probability (0-100%)
+            2. Key success factors
+            3. Risk indicators
+            4. Intervention recommendations
+            5. Timeline predictions
+            6. Confidence level
+            
+            Format as JSON with keys: probability, successFactors, riskIndicators, interventions, timeline, confidence
+            `;
+
+            const prediction = await this.callAI(prompt, 'success_prediction');
+            return JSON.parse(prediction);
+        } catch (error) {
+            logger.error('AI Success Prediction Error:', error);
+            throw new Error('Failed to predict student success');
+        }
     }
 
-    extractAlerts(analytics) {
-        // AI-powered alert detection
-        return [
-            {
-                type: 'attendance',
-                severity: 'medium',
-                message: 'Attendance declining in Mathematics',
-                affected: 45
+    /**
+     * 🤖 AI Chatbot for Student Support
+     */
+    async processStudentQuery(query, studentContext, schoolContext) {
+        try {
+            const prompt = `
+            You are an AI assistant for a smart campus system. Help the student with their query.
+            
+            Student Query: ${query}
+            Student Context: ${JSON.stringify(studentContext)}
+            School Context: ${JSON.stringify(schoolContext)}
+            
+            Provide:
+            1. Helpful response
+            2. Action suggestions
+            3. Resource recommendations
+            4. Follow-up questions if needed
+            
+            Format as JSON with keys: response, actions, resources, followUp
+            `;
+
+            const response = await this.callAI(prompt, 'student_support');
+            return JSON.parse(response);
+        } catch (error) {
+            logger.error('AI Student Support Error:', error);
+            throw new Error('Failed to process student query');
+        }
+    }
+
+    /**
+     * 📋 Automated Report Generation
+     */
+    async generateReport(reportType, data, schoolInfo) {
+        try {
+            const prompt = `
+            Generate a comprehensive ${reportType} report:
+            
+            Data: ${JSON.stringify(data)}
+            School Information: ${JSON.stringify(schoolInfo)}
+            
+            Provide:
+            1. Executive summary
+            2. Key findings
+            3. Detailed analysis
+            4. Recommendations
+            5. Visualizations suggestions
+            6. Action items
+            
+            Format as JSON with keys: summary, findings, analysis, recommendations, visualizations, actions
+            `;
+
+            const report = await this.callAI(prompt, 'report_generation');
+            return JSON.parse(report);
+        } catch (error) {
+            logger.error('AI Report Generation Error:', error);
+            throw new Error('Failed to generate report');
+        }
+    }
+
+    /**
+     * 🔗 Core AI Service Call
+     */
+    async callAI(prompt, serviceType) {
+        try {
+            // Try OpenAI first if API key is available
+            if (this.openaiApiKey) {
+                return await this.callOpenAI(prompt);
             }
-        ];
-    }
-
-    extractOpportunities(analytics) {
-        // AI-powered opportunity identification
-        return [
-            {
-                area: 'STEM programs',
-                potential: 'high',
-                recommendation: 'Expand coding clubs'
+            
+            // Fallback to Hugging Face
+            if (this.huggingfaceApiKey) {
+                return await this.callHuggingFace(prompt);
             }
-        ];
+            
+            // Fallback to local AI service
+            return await this.callLocalAI(prompt, serviceType);
+        } catch (error) {
+            logger.error('AI Service Call Failed:', error);
+            throw error;
+        }
     }
 
-    generateCampusRecommendations(analytics) {
-        // AI-powered campus-wide recommendations
-        return [
-            {
-                category: 'academic',
-                priority: 'high',
-                action: 'Implement peer tutoring program',
-                expectedImpact: '15% improvement'
-            }
-        ];
-    }
-}
-
-/**
- * 📊 Performance Analyzer AI Model
- */
-class PerformanceAnalyzer {
-    async analyze(studentId, timeframe) {
-        // Simulated AI analysis - in production, this would use ML models
-        return {
-            overallScore: 85.2,
-            trend: 'improving',
-            subjectBreakdown: {
-                Mathematics: 88,
-                Science: 82,
-                English: 90,
-                History: 78
-            },
-            predictions: {
-                nextExam: 87,
-                finalGrade: 86
-            },
-            recommendations: [
-                'Focus on History - 2 hours/week',
-                'Advanced Mathematics problems',
-                'Science project participation'
-            ],
-            strengths: ['Mathematics', 'English'],
-            weaknesses: ['History'],
-            improvementAreas: ['Study consistency', 'Time management'],
-            riskFactors: ['History grades', 'Exam anxiety'],
-            confidence: 0.92
-        };
-    }
-
-    async getCampusOverview(timeframe) {
-        return {
-            averagePerformance: 78.5,
-            improvementRate: 12.3,
-            topSubjects: ['Mathematics', 'Science'],
-            challengingSubjects: ['History', 'Geography']
-        };
-    }
-}
-
-/**
- * 🧠 Behavior Analyzer AI Model
- */
-class BehaviorAnalyzer {
-    async analyze(studentId, days) {
-        return {
-            engagementScore: 82,
-            participationLevel: 'high',
-            socialScore: 75,
-            disciplineScore: 90,
-            consistencyScore: 78,
-            learningStyle: 'visual',
-            peakTimes: ['morning', 'afternoon'],
-            collaborationStyle: 'team-oriented',
-            motivationScore: 85,
-            alerts: [
+    async callOpenAI(prompt) {
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-3.5-turbo',
+            messages: [
                 {
-                    type: 'engagement',
-                    message: 'Decreased participation in last week',
-                    severity: 'low'
-                }
-            ],
-            recommendations: [
-                'Group projects for better engagement',
-                'Visual learning materials',
-                'Morning study sessions'
-            ],
-            confidence: 0.88
-        };
-    }
-
-    async getCampusTrends(timeframe) {
-        return {
-            overallEngagement: 76,
-            participationTrend: 'stable',
-            socialInteraction: 'increasing',
-            disciplineIssues: 'decreasing'
-        };
-    }
-}
-
-/**
- * 📈 Attendance Predictor AI Model
- */
-class AttendancePredictor {
-    async predict(studentId, futureDays) {
-        return {
-            overallPercentage: 92,
-            subjectBreakdown: {
-                Mathematics: 95,
-                Science: 90,
-                English: 93,
-                History: 88
-            },
-            riskDays: [
-                '2024-03-15',
-                '2024-03-22'
-            ],
-            patterns: {
-                weeklyPattern: 'monday-decrease',
-                seasonalPattern: 'spring-improvement',
-                subjectPattern: 'math-high'
-            },
-            historicalFactors: {
-                pastAttendance: 0.9,
-                consistency: 0.85,
-                punctuality: 0.92
-            },
-            seasonalFactors: {
-                weather: 0.05,
-                events: 0.1,
-                holidays: 0.15
-            },
-            externalFactors: {
-                health: 0.08,
-                transportation: 0.03,
-                family: 0.05
-            },
-            recommendedInterventions: [
-                'Friday motivation programs',
-                'Weather contingency plans'
-            ],
-            confidence: 0.86
-        };
-    }
-
-    async getCampusPatterns(timeframe) {
-        return {
-            overallAttendance: 89.2,
-            weeklyPattern: 'monday-low',
-            seasonalTrend: 'winter-decrease',
-            subjectVariation: 'pe-high'
-        };
-    }
-}
-
-/**
- * 🎯 Recommendation Engine AI Model
- */
-class RecommendationEngine {
-    async generate(studentId, type) {
-        return {
-            academic: [
-                {
-                    title: 'Advanced Mathematics Course',
-                    reason: 'Strong aptitude detected',
-                    confidence: 0.91
+                    role: 'system',
+                    content: 'You are an AI assistant for educational institutions. Provide accurate, helpful, and structured responses.'
                 },
                 {
-                    title: 'Science Fair Participation',
-                    reason: 'Analytical skills',
-                    confidence: 0.87
+                    role: 'user',
+                    content: prompt
                 }
             ],
-            extracurricular: [
-                {
-                    title: 'Debate Club',
-                    reason: 'Communication skills',
-                    confidence: 0.83
-                },
-                {
-                    title: 'Coding Club',
-                    reason: 'Problem-solving ability',
-                    confidence: 0.89
-                }
-            ],
-            career: [
-                {
-                    title: 'Engineering',
-                    reason: 'Math and Science strength',
-                    confidence: 0.85
-                },
-                {
-                    title: 'Data Science',
-                    reason: 'Analytical thinking',
-                    confidence: 0.82
-                }
-            ],
-            personal: [
-                {
-                    title: 'Time Management Workshop',
-                    reason: 'Improvement needed',
-                    confidence: 0.79
-                }
-            ],
-            priority: 'academic',
-            actionItems: [
-                'Enroll in advanced math course',
-                'Join science fair team',
-                'Practice time management'
-            ],
-            resources: [
-                'Khan Academy Advanced Math',
-                'Science Fair Guidelines',
-                'Time Management Apps'
-            ],
-            confidence: 0.87
+            max_tokens: 2000,
+            temperature: 0.7
+        }, {
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data.choices[0].message.content;
+    }
+
+    async callHuggingFace(prompt) {
+        const response = await axios.post('https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium', {
+            inputs: prompt
+        }, {
+            headers: {
+                'Authorization': `Bearer ${this.huggingfaceApiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        return response.data.generated_text;
+    }
+
+    async callLocalAI(prompt, serviceType) {
+        // This would call a locally hosted AI service
+        // For now, return a mock response
+        logger.warn('Using mock AI response - configure OpenAI or Hugging Face API keys');
+        
+        const mockResponses = {
+            performance_analysis: JSON.stringify({
+                trends: ['Improving in Mathematics', 'Stable in Science'],
+                strengths: ['Problem solving', 'Critical thinking'],
+                weaknesses: ['Time management', 'Written communication'],
+                recommendations: ['Focus on writing practice', 'Use time management tools'],
+                riskFactors: ['Occasional late submissions'],
+                studySuggestions: ['Daily practice sessions', 'Peer study groups']
+            }),
+            attendance_prediction: JSON.stringify({
+                probability: 92,
+                riskFactors: ['None significant'],
+                interventions: ['Continue current pattern'],
+                patterns: ['Consistent morning attendance']
+            })
         };
+
+        return mockResponses[serviceType] || JSON.stringify({
+            message: 'AI service not configured. Please set up OpenAI or Hugging Face API keys.',
+            status: 'mock_response'
+        });
     }
 }
 
-/**
- * 💭 Sentiment Analyzer AI Model
- */
-class SentimentAnalyzer {
-    async analyze(text, context) {
-        return {
-            overall: 'positive',
-            emotions: {
-                joy: 0.6,
-                anticipation: 0.3,
-                trust: 0.1
-            },
-            confidence: 0.92,
-            aspectBased: {
-                academics: 'positive',
-                teachers: 'positive',
-                peers: 'neutral',
-                facilities: 'positive'
-            },
-            tone: 'enthusiastic',
-            urgency: 'low',
-            sentimentLabel: 'happy'
-        };
-    }
-
-    async getCampusMood(timeframe) {
-        return {
-            overallSentiment: 'positive',
-            moodTrend: 'improving',
-            keyEmotions: ['excited', 'motivated', 'confident'],
-            satisfactionScore: 8.2
-        };
-    }
-}
-
-/**
- * ⏰ Schedule Optimizer AI Model
- */
-class ScheduleOptimizer {
-    async optimize(constraints, preferences) {
-        return {
-            optimizedSchedule: {
-                monday: [
-                    { time: '9:00-10:30', subject: 'Mathematics', room: 'A101' },
-                    { time: '11:00-12:30', subject: 'Science', room: 'B205' },
-                    { time: '2:00-3:30', subject: 'English', room: 'C102' }
-                ],
-                // ... other days
-            },
-            efficiencyScore: 0.89,
-            workLifeBalance: 0.85,
-            satisfactionScore: 0.87,
-            alternatives: [
-                {
-                    name: 'STEM-focused',
-                    score: 0.86,
-                    description: 'More STEM subjects in morning'
-                }
-            ],
-            optimizationReasoning: [
-                'Peak performance times utilized',
-                'Subject difficulty balanced',
-                'Teacher availability optimized'
-            ],
-            confidence: 0.91
-        };
-    }
-}
-
-module.exports = AIService;
+module.exports = new AIService();

@@ -60,6 +60,9 @@ const resultSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'User' 
     },
+    isLocked: { type: Boolean, default: false },
+    lockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    lockedAt: { type: Date },
     updatedBy: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'User' 

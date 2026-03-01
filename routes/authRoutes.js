@@ -58,6 +58,6 @@ router.get('/pending-teachers', authorize('principal'), getPendingTeachers);
 router.put('/approve-teacher/:id', authorize('principal'), approveTeacher);
 
 // Audit logs (Admin/Principal only)
-router.get('/audit-logs', authorize('admin', 'principal', 'superadmin'), getAuditLogs);
+router.get('/audit-logs', authorize('admin', 'principal', 'super_admin'), getAuditLogs);
 
 module.exports = router;
