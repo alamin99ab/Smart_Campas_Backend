@@ -1,9 +1,15 @@
+/**
+ * 📧 EMAIL SERVICE - PRODUCTION READY
+ * Simple email service for production deployment
+ */
+
 const nodemailer = require('nodemailer');
 
+// Create transporter if email configuration is available
 let transporter = null;
 
 if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-    transporter = nodemailer.createTransport({
+    transporter = nodemailer.createTransporter({
         host: process.env.EMAIL_HOST,
         port: process.env.EMAIL_PORT || 587,
         secure: process.env.EMAIL_SECURE === 'true',
@@ -14,26 +20,33 @@ if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) 
     });
 }
 
-function buildHtmlFromData(data) {
-    if (!data || typeof data !== 'object') return '';
-    return Object.entries(data).map(([k, v]) => `<p><strong>${k}:</strong> ${v}</p>`).join('');
-}
-
-exports.sendEmail = async ({ to, subject, template, data, html: htmlInput }) => {
-    const html = htmlInput || (template && data ? buildHtmlFromData(data) : '');
-    if (!transporter) {
-        return { success: false, simulated: true };
-    }
+/**
+ * Send email
+ */
+const sendEmail = async (options) => {
     try {
-        const info = await transporter.sendMail({
-            from: `"Smart Campus" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
-            to,
-            subject,
-            html: html || subject
-        });
-        return { success: true, messageId: info.messageId };
+        if (!transporter) {
+            console.log('📧 Email service not configured - skipping email send');
+            return { success: false, message: 'Email service not configured' };
+        }
+
+        const mailOptions = {
+            from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+            to: options.to,
+            subject: options.subject,
+            html: options.html || options.text,
+            text: options.text
+        };
+
+        const result = await transporter.sendMail(mailOptions);
+        console.log('📧 Email sent successfully:', result.messageId);
+        return { success: true, messageId: result.messageId };
     } catch (error) {
-        console.error('Failed to send email:', error.message);
+        console.error('📧 Email send error:', error);
         return { success: false, error: error.message };
     }
+};
+
+module.exports = {
+    sendEmail
 };

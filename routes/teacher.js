@@ -14,13 +14,11 @@ const {
     getTeacherAttendanceReport
 } = require('../controllers/advancedAttendanceController');
 const {
+    applyLeave,
+    getLeaveApplications,
     respondToSubstituteAssignment,
     getMySubstituteAssignments
-} = require('../controllers/substituteController');
-const {
-    applyLeave,
-    getLeaveApplications
-} = require('../controllers/substituteController');
+} = require('../controllers/leaveController');
 const resultController = require('../controllers/resultController');
 
 // Import middleware
@@ -36,7 +34,7 @@ router.use(addSchoolScope);
  */
 
 // 👨‍🏫 Step 8: Teacher Login (handled in auth routes)
-router.post('/login', require('../controllers/authController').login);
+router.post('/login', require('../controllers/authController').loginUser);
 
 // All other routes require teacher authentication
 router.use(protect);

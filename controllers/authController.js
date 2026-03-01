@@ -585,12 +585,23 @@ exports.forgotPassword = async (req, res) => {
         await user.save();
 
         const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
-        sendEmail({
-            to: email,
-            subject: 'Password Reset',
-            template: 'password-reset',
-            data: { name: user.name, resetUrl }
-        }).catch(err => console.error('Email error:', err));
+        
+        // Bypass email sending for testing
+        if (process.env.NODE_ENV === 'development') {
+            console.log(`📧 Email bypassed in development: ${resetUrl}`);
+            await createAuditLog(user._id, 'PASSWORD_RESET_REQUESTED', { 
+                email, 
+                resetToken,
+                bypassed: true 
+            }, req);
+        } else {
+            sendEmail({
+                to: email,
+                subject: 'Password Reset',
+                template: 'password-reset',
+                data: { name: user.name, resetUrl }
+            }).catch(err => console.error('Email error:', err));
+        }
 
         await createAuditLog(user._id, 'PASSWORD_RESET_REQUESTED', {}, req);
 

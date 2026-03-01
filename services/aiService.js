@@ -3,7 +3,7 @@
  * Industry-level AI features for educational management
  */
 
-const axios = require('axios');
+// const axios = require('axios'); // Temporarily commented out
 const logger = require('../utils/logger');
 
 class AIService {

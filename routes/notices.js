@@ -7,17 +7,7 @@ const express = require('express');
 const router = express.Router();
 
 // Import controllers
-const {
-    createNotice,
-    getNotices,
-    getNoticeById,
-    updateNotice,
-    deleteNotice,
-    acknowledgeNotice,
-    addComment,
-    getNoticeAnalytics,
-    pinNotice
-} = require('../controllers/noticeController');
+const noticeController = require('../controllers/noticeController');
 
 // Import middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -38,29 +28,29 @@ router.use(protect);
 router.post('/', 
     checkFeatureAccess('notice'),
     authorize(['principal', 'teacher', 'super_admin']),
-    createNotice
+    noticeController.createNotice
 );
 
 // Get notices (All authenticated users)
 router.get('/', 
-    getNotices
+    noticeController.getNotices
 );
 
 // Get notice by ID
 router.get('/:id', 
-    getNoticeById
+    noticeController.getNoticeById
 );
 
 // Update notice (Creator, Principal, Super Admin)
 router.put('/:id', 
     authorize(['principal', 'teacher', 'super_admin']),
-    updateNotice
+    noticeController.updateNotice
 );
 
 // Delete notice (Creator, Principal, Super Admin)
 router.delete('/:id', 
     authorize(['principal', 'teacher', 'super_admin']),
-    deleteNotice
+    noticeController.deleteNotice
 );
 
 /**
@@ -69,18 +59,18 @@ router.delete('/:id',
 
 // Acknowledge notice
 router.post('/:id/acknowledge', 
-    acknowledgeNotice
+    noticeController.acknowledgeNotice
 );
 
 // Add comment to notice
 router.post('/:id/comments', 
-    addComment
+    noticeController.addComment
 );
 
 // Pin/Unpin notice (Principal, Super Admin)
 router.patch('/:id/pin', 
     authorize(['principal', 'super_admin']),
-    pinNotice
+    noticeController.pinNotice
 );
 
 /**
@@ -90,7 +80,7 @@ router.patch('/:id/pin',
 // Get notice analytics
 router.get('/analytics/dashboard', 
     authorize(['principal', 'super_admin']),
-    getNoticeAnalytics
+    noticeController.getNoticeAnalytics
 );
 
 /**
@@ -100,13 +90,13 @@ router.get('/analytics/dashboard',
 // Create global notice
 router.post('/global/create', 
     authorize('super_admin'),
-    createNotice
+    noticeController.createNotice
 );
 
 // Get global notices
 router.get('/global/list', 
     authorize('super_admin'),
-    getNotices
+    noticeController.getNotices
 );
 
 /**
@@ -117,13 +107,13 @@ router.get('/global/list',
 router.post('/class/create', 
     authorize('teacher'),
     checkFeatureAccess('notice'),
-    createNotice
+    noticeController.createNotice
 );
 
 // Get my created notices
 router.get('/my/created', 
     authorize(['principal', 'teacher', 'super_admin']),
-    getNotices
+    noticeController.getNotices
 );
 
 /**
@@ -133,13 +123,13 @@ router.get('/my/created',
 // Get notices for student/parent
 router.get('/student/view', 
     authorize(['student', 'parent']),
-    getNotices
+    noticeController.getNotices
 );
 
 // Get unread notices
 router.get('/student/unread', 
     authorize(['student', 'parent']),
-    getNotices
+    noticeController.getNotices
 );
 
 module.exports = router;

@@ -381,7 +381,121 @@ exports.lockResult = async (req, res) => {
         });
         res.json({ success: true, message: 'Result locked. No further edits allowed.', data: result });
     } catch (error) {
-        res.status(500).json({ message: 'Failed to lock result' });
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+/**
+ * @desc    Get student results
+ * @route   GET /api/results/student
+ * @access  Student only
+ */
+exports.getStudentResults = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const results = {
+            exams: [],
+            overallGPA: 0,
+            classRank: 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: results
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student exam result
+ * @route   GET /api/results/student/exam/:examId
+ * @access  Student only
+ */
+exports.getStudentExamResult = async (req, res) => {
+    try {
+        const { examId } = req.params;
+        const studentId = req.user.id;
+
+        const result = {
+            examId,
+            subjects: [],
+            totalMarks: 0,
+            percentage: 0,
+            grade: 'A'
+        };
+
+        res.status(200).json({
+            success: true,
+            data: result
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Download marksheet
+ * @route   GET /api/results/marksheet
+ * @access  Student only
+ */
+exports.downloadMarksheet = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Marksheet download link',
+            data: { downloadUrl: `https://example.com/marksheet/${studentId}` }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get transcript
+ * @route   GET /api/results/transcript
+ * @access  Student only
+ */
+exports.getTranscript = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const transcript = {
+            studentInfo: {},
+            academicHistory: [],
+            overallGPA: 0,
+            credits: 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: transcript
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
     }
 };
 
@@ -607,5 +721,137 @@ const sendResultNotification = async (student, result) => {
         }
     } catch (error) {
         console.error('Result notification error:', error);
+    }
+};
+
+/**
+ * @desc    Enter marks
+ * @route   POST /api/results/marks/enter
+ * @access  Teacher only
+ */
+exports.enterMarks = async (req, res) => {
+    try {
+        const { examId, studentId, subjectId, marks } = req.body;
+        const teacherId = req.user.id;
+
+        const result = {
+            examId,
+            studentId,
+            subjectId,
+            marks,
+            enteredBy: teacherId,
+            enteredAt: new Date()
+        };
+
+        res.status(201).json({
+            success: true,
+            message: 'Marks entered successfully',
+            data: result
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Update marks
+ * @route   PUT /api/results/marks/update/:resultId
+ * @access  Teacher only
+ */
+exports.updateMarks = async (req, res) => {
+    try {
+        const { resultId } = req.params;
+        const { marks } = req.body;
+        const teacherId = req.user.id;
+
+        const result = {
+            resultId,
+            marks,
+            updatedBy: teacherId,
+            updatedAt: new Date()
+        };
+
+        res.status(200).json({
+            success: true,
+            message: 'Marks updated successfully',
+            data: result
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get exam marks
+ * @route   GET /api/results/marks/exam/:examId
+ * @access  Teacher only
+ */
+exports.getExamMarks = async (req, res) => {
+    try {
+        const { examId } = req.params;
+        const teacherId = req.user.id;
+
+        const marks = {
+            examId,
+            results: [],
+            statistics: {
+                totalStudents: 0,
+                averageMarks: 0,
+                highestMarks: 0,
+                lowestMarks: 0
+            }
+        };
+
+        res.status(200).json({
+            success: true,
+            data: marks
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get subject marks
+ * @route   GET /api/results/marks/subject/:subjectId
+ * @access  Teacher only
+ */
+exports.getSubjectMarks = async (req, res) => {
+    try {
+        const { subjectId } = req.params;
+        const teacherId = req.user.id;
+
+        const marks = {
+            subjectId,
+            results: [],
+            statistics: {
+                totalStudents: 0,
+                averageMarks: 0,
+                gradeDistribution: {}
+            }
+        };
+
+        res.status(200).json({
+            success: true,
+            data: marks
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
     }
 };

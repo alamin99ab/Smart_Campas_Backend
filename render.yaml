@@ -1,30 +1,121 @@
-# Render Blueprint - deploy from dashboard or: render deploy
+# 🚀 SMART CAMPUS SaaS - RENDER DEPLOYMENT CONFIGURATION
+# Production-ready deployment configuration for Render.com
 # Docs: https://render.com/docs/blueprint-spec
+
 services:
   - type: web
     name: smart-campus-api
     runtime: docker
-    plan: free
+    plan: starter
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      # Core Environment
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 5000
+        value: 3001
+      
+      # Security
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      
+      # Frontend Configuration
+      - key: FRONTEND_URL
+        value: https://smart-campus-api.onrender.com
       - key: ALLOWED_ORIGINS
         value: https://smart-campus-api.onrender.com,https://your-frontend-domain.com
-      - key: BASE_URL
-        value: https://smart-campus-api.onrender.com
+      
+      # Database (Configure in Render dashboard)
       - key: MONGO_URI
         sync: false
       - key: REDIS_URL
         sync: false
+      
+      # Email Service (Optional - Configure in dashboard)
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: 587
+      - key: EMAIL_SECURE
+        value: false
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+      - key: EMAIL_FROM
+        value: noreply@smartcampus.com
+      
+      # AI Services (Optional - Configure in dashboard)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: HUGGINGFACE_API_KEY
+        sync: false
+      - key: AI_SERVICE_URL
+        value: http://localhost:8000
+      
+      # File Storage (Optional - Configure in dashboard)
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      
+      # SMS Service (Optional - Configure in dashboard)
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      
+      # Security & Performance
+      - key: BCRYPT_ROUNDS
+        value: 12
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 900000
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: 100
+      - key: CACHE_TTL
+        value: 3600
+      - key: MAX_CONNECTIONS
+        value: 100
+      - key: CONNECTION_TIMEOUT
+        value: 30000
+      
+      # Business Configuration
+      - key: DEFAULT_SUBSCRIPTION_PLAN
+        value: trial
+      - key: MAX_SCHOOLS_PER_PLAN
+        value: 100
+      - key: FREE_TRIAL_DAYS
+        value: 30
+      
+      # Feature Flags
+      - key: REQUIRE_EMAIL_VERIFICATION
+        value: false
+      - key: SEND_ABSENT_SMS
+        value: false
+      - key: SEND_PAYMENT_RECEIPT
+        value: true
+      - key: ENABLE_AI_FEATURES
+        value: true
+      - key: ENABLE_REAL_TIME_NOTIFICATIONS
+        value: true
+      
+      # Monitoring
+      - key: ENABLE_METRICS
+        value: true
+      - key: LOG_LEVEL
+        value: info
+      - key: HEALTH_CHECK_INTERVAL
+        value: 30000
+    
+    # Persistent storage for uploads
     disk:
-      name: uploads
+      name: smart-campus-uploads
       mountPath: /app/uploads
-      sizeGB: 1
+      sizeGB: 10

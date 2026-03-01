@@ -29,7 +29,7 @@ const {
     respondToSubstituteAssignment,
     getMySubstituteAssignments,
     getLeaveStatistics
-} = require('../controllers/substituteController');
+} = require('../controllers/leaveController');
 const {
     markStudentAttendance,
     getStudentAttendanceReport,
@@ -41,6 +41,7 @@ const {
 const feeController = require('../controllers/feeController');
 const noticeController = require('../controllers/noticeController');
 const analyticsController = require('../controllers/analyticsController');
+const examController = require('../controllers/examController');
 
 // Import middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -72,7 +73,7 @@ router.put('/academic-sessions/:id', principalController.updateAcademicSession);
 
 // Class Management
 router.post('/classes', principalController.createClass);
-router.get('/classes', principalController.getClasses);
+router.get('/classes', principalController.getAllClasses);
 router.put('/classes/:id', principalController.updateClass);
 router.delete('/classes/:id', principalController.deleteClass);
 
@@ -83,7 +84,7 @@ router.put('/sections/:id', principalController.updateSection);
 
 // Subject Management
 router.post('/subjects', principalController.createSubject);
-router.get('/subjects', principalController.getSubjects);
+router.get('/subjects', principalController.getAllSubjects);
 router.put('/subjects/:id', principalController.updateSubject);
 
 // Room Management
@@ -95,22 +96,22 @@ router.put('/rooms/:id', principalController.updateRoom);
  * 👨‍🏫 Step 5: Create Teacher
  */
 
-router.post('/teachers', teacherController.createTeacher);
-router.get('/teachers', teacherController.getTeachers);
-router.put('/teachers/:id', teacherController.updateTeacher);
-router.delete('/teachers/:id', teacherController.deleteTeacher);
-router.post('/teachers/:id/reset-password', teacherController.resetTeacherPassword);
+router.post('/teachers', principalController.createTeacher);
+router.get('/teachers', principalController.getTeachers);
+router.put('/teachers/:id', principalController.updateTeacher);
+router.delete('/teachers/:id', principalController.deleteTeacher);
+router.post('/teachers/:id/reset-password', principalController.resetTeacherPassword);
 
 /**
  * 🎓 Step 6: Create Student
  */
 
-router.post('/students', studentController.createStudent);
-router.get('/students', studentController.getStudents);
-router.put('/students/:id', studentController.updateStudent);
-router.delete('/students/:id', studentController.deleteStudent);
-router.post('/students/bulk-import', studentController.bulkImportStudents);
-router.post('/students/:id/reset-password', studentController.resetStudentPassword);
+router.post('/students', principalController.createStudent);
+router.get('/students', principalController.getStudents);
+router.put('/students/:id', principalController.updateStudent);
+router.delete('/students/:id', principalController.deleteStudent);
+router.post('/students/bulk-import', principalController.bulkImportStudents);
+router.post('/students/:id/reset-password', principalController.resetStudentPassword);
 
 /**
  * 🔹 PHASE 4: ROUTINE SETUP
@@ -152,11 +153,11 @@ router.patch('/attendance/alerts/:attendanceId/:alertId/acknowledge', acknowledg
  */
 
 // Exam Management
-router.post('/exams', checkFeatureAccess('exam'), principalController.createExam);
-router.get('/exams', principalController.getExams);
-router.put('/exams/:id', principalController.updateExam);
-router.delete('/exams/:id', principalController.deleteExam);
-router.post('/exams/:id/publish', principalController.publishExamResults);
+router.post('/exams', checkFeatureAccess('exam'), examController.createExam);
+router.get('/exams', examController.getExams);
+router.put('/exams/:id', examController.updateExam);
+router.delete('/exams/:id', examController.deleteExam);
+router.post('/exams/:id/publish', examController.publishExamResults);
 
 /**
  * 🔹 PHASE 7: FEES FLOW

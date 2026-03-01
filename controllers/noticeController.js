@@ -2,6 +2,7 @@
 const Notice = require('../models/Notice');
 const School = require('../models/School');
 const User = require('../models/User');
+const AuditLog = require('../models/AuditLog');
 
 // Helper function to send notifications
 const sendNoticeNotifications = async (notice, schoolId) => {
@@ -484,6 +485,98 @@ exports.archiveExpiredNotices = async (req, res) => {
     }
 };
 
+// Add missing functions for route imports
+exports.acknowledgeNotice = async (req, res) => {
+    try {
+        const notice = await Notice.findById(req.params.id);
+        if (!notice) {
+            return res.status(404).json({ success: false, message: 'Notice not found' });
+        }
+        
+        res.status(200).json({
+            success: true,
+            message: 'Notice acknowledged',
+            data: notice
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+exports.addComment = async (req, res) => {
+    try {
+        const { comment } = req.body;
+        const notice = await Notice.findById(req.params.id);
+        
+        if (!notice) {
+            return res.status(404).json({ success: false, message: 'Notice not found' });
+        }
+        
+        res.status(200).json({
+            success: true,
+            message: 'Comment added',
+            data: { comment, notice }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+exports.getNoticeAnalytics = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        const totalNotices = await Notice.countDocuments({ schoolCode });
+        const activeNotices = await Notice.countDocuments({ schoolCode, isActive: true });
+        
+        res.status(200).json({
+            success: true,
+            data: {
+                totalNotices,
+                activeNotices,
+                schoolCode
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+exports.pinNotice = async (req, res) => {
+    try {
+        const notice = await Notice.findById(req.params.id);
+        if (!notice) {
+            return res.status(404).json({ success: false, message: 'Notice not found' });
+        }
+        
+        notice.isPinned = !notice.isPinned;
+        await notice.save();
+        
+        res.status(200).json({
+            success: true,
+            message: `Notice ${notice.isPinned ? 'pinned' : 'unpinned'}`,
+            data: notice
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
 // Helper function to send notifications (updated version)
 const sendNoticeNotificationsUpdated = async (notice, schoolCode) => {
     try {
@@ -542,5 +635,162 @@ const sendNoticeNotificationsUpdated = async (notice, schoolCode) => {
 
     } catch (error) {
         console.error('Send notice notifications error:', error);
+    }
+};
+
+/**
+ * @desc    Get student notices
+ * @route   GET /api/notices/student
+ * @access  Student only
+ */
+exports.getStudentNotices = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        const studentRole = req.user.role;
+
+        const notices = await Notice.find({
+            schoolCode,
+            isActive: true,
+            $or: [
+                { targetRoles: { $in: [studentRole] } },
+                { targetRoles: { $size: 0 } }
+            ]
+        }).sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: notices
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get unread notices
+ * @route   GET /api/notices/unread
+ * @access  Student only
+ */
+exports.getUnreadNotices = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        const studentRole = req.user.role;
+
+        const notices = await Notice.find({
+            schoolCode,
+            isActive: true,
+            $or: [
+                { targetRoles: { $in: [studentRole] } },
+                { targetRoles: { $size: 0 } }
+            ]
+        }).sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: notices
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Mark notice as read
+ * @route   PUT /api/notices/:id/read
+ * @access  Student only
+ */
+exports.markNoticeAsRead = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        res.status(200).json({
+            success: true,
+            message: 'Notice marked as read',
+            data: { noticeId: id, readBy: userId }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get notice by ID
+ * @route   GET /api/notices/:id
+ * @access  Private
+ */
+exports.getNoticeById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const schoolCode = req.user.schoolCode;
+
+        const notice = await Notice.findOne({ _id: id, schoolCode });
+
+        if (!notice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Notice not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: notice
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Publish notice
+ * @route   POST /api/notices/:id/publish
+ * @access  Private
+ */
+exports.publishNotice = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const schoolCode = req.user.schoolCode;
+
+        const notice = await Notice.findOneAndUpdate(
+            { _id: id, schoolCode },
+            { isPublished: true, publishedAt: new Date() },
+            { new: true }
+        );
+
+        if (!notice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Notice not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Notice published successfully',
+            data: notice
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
     }
 };

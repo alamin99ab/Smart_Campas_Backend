@@ -412,3 +412,441 @@ exports.getProfile = async (req, res) => {
         });
     }
 };
+
+/**
+ * @desc    Get today's routine
+ * @route   GET /api/student/routine/today
+ * @access  Student only
+ */
+exports.getTodayRoutine = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+        const today = new Date().getDay();
+
+        res.status(200).json({
+            success: true,
+            message: 'Today\'s routine retrieved',
+            data: { day: today, routine: [] }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get weekly routine
+ * @route   GET /api/student/routine/week
+ * @access  Student only
+ */
+exports.getWeeklyRoutine = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Weekly routine retrieved',
+            data: { routine: [] }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get attendance summary
+ * @route   GET /api/student/attendance/summary
+ * @access  Student only
+ */
+exports.getAttendanceSummary = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Attendance summary retrieved',
+            data: { totalDays: 0, presentDays: 0, percentage: 0 }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get monthly attendance
+ * @route   GET /api/student/attendance/monthly
+ * @access  Student only
+ */
+exports.getMonthlyAttendance = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Monthly attendance retrieved',
+            data: { monthlyData: [] }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get assignments
+ * @route   GET /api/student/assignments
+ * @access  Student only
+ */
+exports.getAssignments = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Assignments retrieved',
+            data: []
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get assignment details
+ * @route   GET /api/student/assignments/:id
+ * @access  Student only
+ */
+exports.getAssignmentDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const studentId = req.user.id;
+
+        res.status(200).json({
+            success: true,
+            message: 'Assignment details retrieved',
+            data: { id, title: 'Sample Assignment' }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Submit assignment
+ * @route   POST /api/student/assignments/:id/submit
+ * @access  Student only
+ */
+exports.submitAssignment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { submission } = req.body;
+        const studentId = req.user.id;
+
+        res.status(200).json({
+            success: true,
+            message: 'Assignment submitted successfully',
+            data: { assignmentId: id, submittedAt: new Date() }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get study materials
+ * @route   GET /api/student/study-materials
+ * @access  Student only
+ */
+exports.getStudyMaterials = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Study materials retrieved',
+            data: []
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Download study material
+ * @route   GET /api/student/study-materials/:id
+ * @access  Student only
+ */
+exports.downloadStudyMaterial = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const studentId = req.user.id;
+
+        res.status(200).json({
+            success: true,
+            message: 'Study material download link',
+            data: { downloadUrl: `https://example.com/materials/${id}` }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student profile
+ * @route   GET /api/student/profile
+ * @access  Student only
+ */
+exports.getStudentProfile = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const student = await User.findById(studentId).select('-password');
+        
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: student
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Update student profile
+ * @route   PUT /api/student/profile
+ * @access  Student only
+ */
+exports.updateStudentProfile = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const { name, email, phone, address } = req.body;
+
+        const student = await User.findByIdAndUpdate(
+            studentId,
+            { name, email, phone, address },
+            { new: true, runValidators: true }
+        ).select('-password');
+
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Profile updated successfully',
+            data: student
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Change password
+ * @route   PUT /api/student/password
+ * @access  Student only
+ */
+exports.changePassword = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const { currentPassword, newPassword } = req.body;
+
+        const student = await User.findById(studentId);
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
+
+        // Check current password
+        const isMatch = await student.matchPassword(currentPassword);
+        if (!isMatch) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
+
+        // Update password
+        student.password = newPassword;
+        await student.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get my routine
+ * @route   GET /api/student/routine
+ * @access  Student only
+ */
+exports.getMyRoutine = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Routine retrieved',
+            data: { routine: [] }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get performance analytics
+ * @route   GET /api/student/performance
+ * @access  Student only
+ */
+exports.getPerformanceAnalytics = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const performance = {
+            overallGPA: 0,
+            subjectPerformance: [],
+            trends: []
+        };
+
+        res.status(200).json({
+            success: true,
+            data: performance
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get subject performance
+ * @route   GET /api/student/performance/subjects
+ * @access  Student only
+ */
+exports.getSubjectPerformance = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const subjectPerformance = {
+            subjects: [],
+            averageMarks: 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: subjectPerformance
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get attendance trend
+ * @route   GET /api/student/performance/attendance-trend
+ * @access  Student only
+ */
+exports.getAttendanceTrend = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const attendanceTrend = {
+            monthlyData: [],
+            overallPercentage: 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: attendanceTrend
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};

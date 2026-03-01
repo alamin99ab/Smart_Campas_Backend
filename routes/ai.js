@@ -7,18 +7,7 @@ const express = require('express');
 const router = express.Router();
 
 // Import controllers
-const {
-    analyzeStudentPerformance,
-    predictAttendancePatterns,
-    generateExamQuestions,
-    assistGrading,
-    generateLearningPath,
-    recommendContent,
-    detectPlagiarism,
-    predictStudentSuccess,
-    processStudentQuery,
-    generateReport
-} = require('../controllers/aiController');
+const aiController = require('../controllers/aiController');
 
 // Import middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -223,5 +212,13 @@ router.get('/analytics',
         }
     }
 );
+
+// Learning Analytics & Early Warning
+router.post('/learning-analytics', aiController.getLearningAnalytics);
+router.post('/early-warning', aiController.getEarlyWarning);
+router.post('/content-recommendation', aiController.getContentRecommendation);
+
+// Teacher Tools
+router.post('/grading-assistant', checkFeatureAccess('ai'), aiController.getGradingAssistant);
 
 module.exports = router;

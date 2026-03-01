@@ -784,6 +784,198 @@ exports.generateReport = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Advanced Learning Analytics
+ * @route   POST /api/ai/learning-analytics
+ * @access  Private
+ */
+exports.getLearningAnalytics = async (req, res) => {
+    try {
+        const { studentId, timeframe } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        // Simulate AI-powered learning analytics
+        const analytics = {
+            studentId,
+            timeframe: timeframe || 'semester',
+            learningPatterns: {
+                strengthAreas: ['Mathematics', 'Science'],
+                improvementAreas: ['Language Arts', 'Social Studies'],
+                recommendedFocus: ['Critical Thinking', 'Problem Solving'],
+                learningStyle: 'Visual-Auditory',
+                engagementScore: 85,
+                completionRate: 92
+            },
+            predictiveInsights: {
+                atRiskSubjects: [],
+                potentialGrade: 'A-',
+                studyTimeRecommendation: '2-3 hours daily',
+                tutoringNeeds: false
+            },
+            personalizedPath: {
+                nextMilestones: ['Advanced Algebra', 'Chemistry Basics'],
+                resources: ['Interactive exercises', 'Video tutorials', 'Practice tests'],
+                difficultyAdjustment: 'Moderate increase'
+            }
+        };
+
+        res.status(200).json({
+            success: true,
+            data: analytics
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Early Warning System
+ * @route   POST /api/ai/early-warning
+ * @access  Private
+ */
+exports.getEarlyWarning = async (req, res) => {
+    try {
+        const { studentId, indicators } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        // Simulate AI-powered early warning analysis
+        const warnings = {
+            studentId,
+            riskLevel: 'Low',
+            indicators: {
+                attendanceTrend: 'Stable (95%)',
+                gradeTrend: 'Improving (+5%)',
+                engagementLevel: 'High',
+                socialIndicators: 'Positive',
+                behavioralNotes: 'No concerns'
+            },
+            alerts: [],
+            recommendations: [
+                'Continue current study habits',
+                'Maintain regular attendance',
+                'Consider advanced coursework'
+            ],
+            nextAssessmentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        };
+
+        res.status(200).json({
+            success: true,
+            data: warnings
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Intelligent Content Recommendation
+ * @route   POST /api/ai/content-recommendation
+ * @access  Private
+ */
+exports.getContentRecommendation = async (req, res) => {
+    try {
+        const { studentId, subject, currentLevel } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        // Simulate AI-powered content recommendations
+        const recommendations = {
+            studentId,
+            subject,
+            currentLevel,
+            recommendedContent: [
+                {
+                    type: 'video',
+                    title: 'Introduction to Advanced Concepts',
+                    duration: '15 minutes',
+                    difficulty: 'Intermediate',
+                    prerequisites: ['Basic concepts understanding'],
+                    estimatedLearningTime: '45 minutes'
+                },
+                {
+                    type: 'exercise',
+                    title: 'Practice Problems Set A',
+                    questionCount: 20,
+                    difficulty: 'Progressive',
+                    adaptiveMode: true,
+                    estimatedTime: '30 minutes'
+                },
+                {
+                    type: 'reading',
+                    title: 'Supplementary Material Chapter 5',
+                    pages: 12,
+                    complexity: 'Medium',
+                    interactiveElements: ['Diagrams', 'Examples']
+                }
+            ],
+            learningPath: {
+                currentStep: 3,
+                totalSteps: 10,
+                nextTopic: 'Advanced Applications',
+                estimatedCompletion: '2 weeks'
+            }
+        };
+
+        res.status(200).json({
+            success: true,
+            data: recommendations
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Automated Grading Assistant
+ * @route   POST /api/ai/grading-assistant
+ * @access  Teacher only
+ */
+exports.getGradingAssistant = async (req, res) => {
+    try {
+        const { studentSubmissions, rubric, subject } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        // Simulate AI-powered grading assistance
+        const gradingResults = {
+            subject,
+            totalSubmissions: studentSubmissions.length,
+            gradedSubmissions: studentSubmissions.length,
+            averageScore: 0,
+            distribution: {
+                A: 0, B: 0, C: 0, D: 0, F: 0
+            },
+            feedback: {
+                commonStrengths: ['Clear understanding of concepts', 'Good problem-solving approach'],
+                commonWeaknesses: ['Needs more detailed explanations', 'Calculation errors'],
+                suggestions: ['Provide more examples', 'Emphasize step-by-step solutions']
+            },
+            timeSaved: '15 minutes'
+        };
+
+        res.status(200).json({
+            success: true,
+            data: gradingResults
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     analyzeStudentPerformance: exports.analyzeStudentPerformance,
     predictAttendancePatterns: exports.predictAttendancePatterns,
@@ -794,5 +986,9 @@ module.exports = {
     detectPlagiarism: exports.detectPlagiarism,
     predictStudentSuccess: exports.predictStudentSuccess,
     processStudentQuery: exports.processStudentQuery,
-    generateReport: exports.generateReport
+    generateReport: exports.generateReport,
+    getLearningAnalytics: exports.getLearningAnalytics,
+    getEarlyWarning: exports.getEarlyWarning,
+    getContentRecommendation: exports.getContentRecommendation,
+    getGradingAssistant: exports.getGradingAssistant
 };

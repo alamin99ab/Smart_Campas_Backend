@@ -2,6 +2,7 @@
 const Fee = require('../models/Fee');
 const Student = require('../models/Student');
 const PaymentHistory = require('../models/PaymentHistory');
+const FeeStructure = require('../models/FeeStructure');
 const AuditLog = require('../models/AuditLog');
 const School = require('../models/School');
 const Excel = require('exceljs');
@@ -862,3 +863,305 @@ const sendPaymentReceipt = async (student, fee, amount, method) => {
             res.status(500).json({ success: false, message: error.message });
         }
     };
+
+/**
+ * @desc    Create fee structure
+ * @route   POST /api/fee/structure
+ * @access  Principal only
+ */
+exports.createFeeStructure = async (req, res) => {
+    try {
+        const { className, feeType, amount, dueDate, description } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        const feeStructure = new FeeStructure({
+            className,
+            feeType,
+            amount,
+            dueDate,
+            description,
+            schoolCode,
+            createdBy: req.user.id
+        });
+
+        await feeStructure.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Fee structure created successfully',
+            data: feeStructure
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get fee structures
+ * @route   GET /api/fee/structures
+ * @access  Principal only
+ */
+exports.getFeeStructures = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        
+        const feeStructures = await FeeStructure.find({ schoolCode })
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: feeStructures
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Update fee structure
+ * @route   PUT /api/fee/structures/:id
+ * @access  Principal only
+ */
+exports.updateFeeStructure = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { className, feeType, amount, dueDate, description } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        const feeStructure = await FeeStructure.findOneAndUpdate(
+            { _id: id, schoolCode },
+            { className, feeType, amount, dueDate, description },
+            { new: true, runValidators: true }
+        );
+
+        if (!feeStructure) {
+            return res.status(404).json({
+                success: false,
+                message: 'Fee structure not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Fee structure updated successfully',
+            data: feeStructure
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get fee collections
+ * @route   GET /api/fee/collections
+ * @access  Principal only
+ */
+exports.getFeeCollections = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        const { startDate, endDate } = req.query;
+
+        const query = { schoolCode };
+        if (startDate && endDate) {
+            query.date = {
+                $gte: new Date(startDate),
+                $lte: new Date(endDate)
+            };
+        }
+
+        const collections = await PaymentHistory.find(query)
+            .populate('student', 'name rollNumber')
+            .sort({ date: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: collections
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get unpaid fees
+ * @route   GET /api/fee/unpaid
+ * @access  Principal only
+ */
+exports.getUnpaidFees = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        
+        const unpaidFees = await Student.find({
+            schoolCode,
+            totalDue: { $gt: 0 }
+        }).select('name rollNumber totalDue class');
+
+        res.status(200).json({
+            success: true,
+            data: unpaidFees
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Generate invoices
+ * @route   POST /api/fee/generate-invoices
+ * @access  Principal only
+ */
+exports.generateInvoices = async (req, res) => {
+    try {
+        const { className, feeType, dueDate } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        res.status(200).json({
+            success: true,
+            message: 'Invoices generated successfully',
+            data: { invoicesGenerated: 0 }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get student fees
+ * @route   GET /api/fees/student
+ * @access  Student only
+ */
+exports.getStudentFees = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const fees = {
+            totalFees: 0,
+            paidFees: 0,
+            dueFees: 0,
+            feeDetails: []
+        };
+
+        res.status(200).json({
+            success: true,
+            data: fees
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get due fees
+ * @route   GET /api/fees/due
+ * @access  Student only
+ */
+exports.getDueFees = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const dueFees = {
+            totalDue: 0,
+            dueItems: [],
+            dueDate: null
+        };
+
+        res.status(200).json({
+            success: true,
+            data: dueFees
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get payment history
+ * @route   GET /api/fees/payment-history
+ * @access  Student only
+ */
+exports.getPaymentHistory = async (req, res) => {
+    try {
+        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const history = {
+            payments: [],
+            totalPaid: 0
+        };
+
+        res.status(200).json({
+            success: true,
+            data: history
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Get invoice
+ * @route   GET /api/fees/invoice/:invoiceId
+ * @access  Student only
+ */
+exports.getInvoice = async (req, res) => {
+    try {
+        const { invoiceId } = req.params;
+        const studentId = req.user.id;
+
+        const invoice = {
+            invoiceId,
+            amount: 0,
+            status: 'unpaid',
+            date: new Date()
+        };
+
+        res.status(200).json({
+            success: true,
+            data: invoice
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};

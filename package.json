@@ -1,72 +1,59 @@
 {
-  "name": "smart-campus-backend",
+  "name": "smart-campus-saas",
   "version": "5.0.0",
-  "description": "Smart Campus Enterprise SaaS - Full Management System Backend API",
-  "main": "render-server.js",
+  "description": "Smart Campus SaaS - Complete Educational Management Platform",
+  "main": "index.js",
   "scripts": {
-    "start": "node render-server.js",
-    "dev": "nodemon render-server.js",
-    "render": "node render-server.js",
-    "test": "node scripts/comprehensive-api-test.js",
-    "docker:build": "docker build -t smart-campus-api .",
-    "docker:run": "docker run -p 5000:5000 smart-campus-api",
-    "docker:compose": "docker-compose up -d"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "keywords": [
-    "smart-campus",
     "education",
     "saas",
-    "multi-tenant",
-    "api",
-    "security"
+    "school-management",
+    "campus",
+    "learning-management-system",
+    "nodejs",
+    "express",
+    "mongodb"
   ],
   "author": "Smart Campus Development Team",
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
   "dependencies": {
-    "archiver": "^7.0.1",
-    "axios": "^1.6.2",
-    "bcrypt": "^5.1.1",
-    "bcryptjs": "^2.4.3",
-    "cloudinary": "^2.9.0",
-    "compression": "^1.7.4",
-    "cookie-parser": "^1.4.6",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "exceljs": "^4.4.0",
     "express": "^4.18.2",
-    "express-mongo-sanitize": "^2.2.0",
+    "mongoose": "^8.0.3",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
     "express-rate-limit": "^7.1.5",
     "express-validator": "^7.0.1",
-    "helmet": "^7.1.0",
-    "hpp": "^0.2.3",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.0.0",
-    "morgan": "^1.10.0",
-    "multer": "^2.0.1",
+    "multer": "^1.4.5-lts.1",
     "nodemailer": "^8.0.1",
     "pdfkit": "^0.15.0",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.0",
-    "validator": "^13.11.0",
     "winston": "^3.19.0",
     "xss": "^1.0.14",
-    "xss-clean": "^0.1.4"
+    "validator": "^13.11.0",
+    "xss-clean": "^0.1.4",
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
   },
-  "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
-  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/alamin99ab/Smart_Campas_Backend.git"
+    "url": "https://github.com/your-username/smart-campus-backend.git"
   },
   "bugs": {
-    "url": "https://github.com/alamin99ab/Smart_Campas_Backend/issues"
+    "url": "https://github.com/your-username/smart-campus-backend/issues"
   },
-  "homepage": "https://github.com/alamin99ab/Smart_Campas_Backend#readme"
+  "homepage": "https://github.com/your-username/smart-campus-backend#readme"
 }
