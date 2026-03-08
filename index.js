@@ -9,6 +9,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
+const { ensureSuperAdmin } = require('./scripts/deploy-init-admin');
 require('dotenv').config();
 
 const app = express();
@@ -250,6 +251,26 @@ const startServer = async () => {
                 });
                 console.log('✅ Connected to MongoDB - Full Features Enabled');
                 console.log(`📍 Database: ${mongoose.connection.name}`);
+                
+                // Initialize Super Admin for deployment
+                if (process.env.NODE_ENV === 'production' || process.env.AUTO_CREATE_ADMIN === 'true') {
+                    console.log('\n🚀 Deployment: Initializing Super Admin...');
+                    try {
+                        const adminResult = await ensureSuperAdmin();
+                        if (adminResult.success) {
+                            console.log(`✅ Super Admin ${adminResult.action}: ${adminResult.admin}`);
+                            if (adminResult.credentials) {
+                                console.log(`📧 Email: ${adminResult.credentials.email}`);
+                                console.log(`🔑 Password: ${adminResult.credentials.password}`);
+                            }
+                        } else {
+                            console.log(`⚠️  Super Admin initialization failed: ${adminResult.error}`);
+                        }
+                    } catch (adminError) {
+                        console.log(`⚠️  Super Admin initialization error: ${adminError.message}`);
+                    }
+                }
+                
             } catch (dbError) {
                 console.log('⚠️  MongoDB connection failed, continuing without database:', dbError.message);
                 console.log('📝 Some features may be limited without database');
