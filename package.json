@@ -10,7 +10,9 @@
     "admin-full": "node scripts/add-super-admin.js",
     "setup-admin": "node scripts/add-super-admin.js --force",
     "auto-admin": "node scripts/auto-create-admin.js",
-    "deploy-init": "node scripts/deploy-init-admin.js"
+    "deploy-init": "node scripts/deploy-init-admin.js",
+    "force-admin": "node scripts/force-create-admin.js",
+    "admin-api": "node scripts/create-admin-api.js"
   },
   "keywords": [
     "education",
