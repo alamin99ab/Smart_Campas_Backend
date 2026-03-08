@@ -8,7 +8,9 @@
     "dev": "nodemon index.js",
     "admin": "node scripts/quick-admin.js",
     "admin-full": "node scripts/add-super-admin.js",
-    "setup-admin": "node scripts/add-super-admin.js --force"
+    "setup-admin": "node scripts/add-super-admin.js --force",
+    "auto-admin": "node scripts/auto-create-admin.js",
+    "deploy-init": "node scripts/deploy-init-admin.js"
   },
   "keywords": [
     "education",
