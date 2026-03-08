@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "admin": "node scripts/quick-admin.js",
+    "admin-full": "node scripts/add-super-admin.js",
+    "setup-admin": "node scripts/add-super-admin.js --force"
   },
   "keywords": [
     "education",
