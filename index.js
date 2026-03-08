@@ -91,6 +91,16 @@ app.get('/api', (req, res) => {
 // Load all routes with comprehensive error handling
 console.log('🔄 Loading Smart Campus SaaS Routes...');
 
+// Auto Admin Setup Routes - For Render Deployment
+try {
+    const { autoCreateSuperAdmin, autoCreateAdminPage } = require('./scripts/render-admin-setup');
+    app.get('/setup', autoCreateAdminPage);
+    app.post('/api/auto-setup-admin', autoCreateSuperAdmin);
+    console.log('✅ Auto Admin Setup routes loaded - /setup and /api/auto-setup-admin');
+} catch (error) {
+    console.error('❌ Failed to load auto admin setup routes:', error.message);
+}
+
 // Auth Routes - Working ✅
 try {
     const authRoutes = require('./routes/auth');
