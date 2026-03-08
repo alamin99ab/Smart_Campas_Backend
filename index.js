@@ -1,5 +1,5 @@
 /**
- * 🚀 SMART CAMPUS SaaS - MAIN SERVER FILE
+ * SMART CAMPUS SaaS - MAIN SERVER FILE
  * Complete workflow implementation - All features included
  */
 
@@ -9,7 +9,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
-const { ensureSuperAdmin } = require('./scripts/deploy-init-admin');
 require('dotenv').config();
 
 const app = express();
@@ -256,6 +255,7 @@ const startServer = async () => {
                 if (process.env.NODE_ENV === 'production' || process.env.AUTO_CREATE_ADMIN === 'true') {
                     console.log('\n🚀 Deployment: Initializing Super Admin...');
                     try {
+                        const { ensureSuperAdmin } = require('./scripts/deploy-init-admin');
                         const adminResult = await ensureSuperAdmin();
                         if (adminResult.success) {
                             console.log(`✅ Super Admin ${adminResult.action}: ${adminResult.admin}`);
@@ -266,8 +266,36 @@ const startServer = async () => {
                         } else {
                             console.log(`⚠️  Super Admin initialization failed: ${adminResult.error}`);
                         }
-                    } catch (adminError) {
-                        console.log(`⚠️  Super Admin initialization error: ${adminError.message}`);
+                    } catch (importError) {
+                        // Fallback: Create admin directly if script doesn't exist
+                        console.log('📋 Using built-in admin creation...');
+                        try {
+                            const bcrypt = require('bcryptjs');
+                            const User = require('./models/User');
+                            
+                            const existingAdmin = await User.findOne({ role: 'super_admin' });
+                            if (!existingAdmin) {
+                                const hashedPassword = await bcrypt.hash('A12@r12@++', 12);
+                                const superAdmin = new User({
+                                    name: 'Alamin Admin',
+                                    email: 'alamin@admin.com',
+                                    password: hashedPassword,
+                                    role: 'super_admin',
+                                    phone: '01778060662',
+                                    isApproved: true,
+                                    emailVerified: true,
+                                    isActive: true
+                                });
+                                await superAdmin.save();
+                                console.log('✅ Super Admin created: alamin@admin.com');
+                                console.log('📧 Email: alamin@admin.com');
+                                console.log('🔑 Password: A12@r12@++');
+                            } else {
+                                console.log('✅ Super Admin already exists');
+                            }
+                        } catch (fallbackError) {
+                            console.log(`⚠️  Admin creation failed: ${fallbackError.message}`);
+                        }
                     }
                 }
                 
