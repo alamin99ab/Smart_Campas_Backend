@@ -82,37 +82,42 @@ app.get('/api', (req, res) => {
             phase5: 'Daily Operations ✅',
             phase6: 'Results ✅',
             phase7: 'Fees ✅',
-            phase8: 'Notices ✅',
-            phase9: 'Analytics ✅'
         }
     });
 });
 
 // Load all routes with comprehensive error handling
-console.log('🔄 Loading Smart Campus SaaS Routes...');
+console.log('🔄 Loading Smart Campus SaaS Routes...");
 
-// Auto Admin Setup Routes - For Render Deployment
+// Auto Admin Setup Routes - For Render Deployment (Built-in)
 try {
-    const { autoCreateSuperAdmin, autoCreateAdminPage } = require('./scripts/render-admin-setup');
-    app.get('/setup', autoCreateAdminPage);
-    app.post('/api/auto-setup-admin', autoCreateSuperAdmin);
-    console.log('✅ Auto Admin Setup routes loaded - /setup and /api/auto-setup-admin');
-} catch (error) {
-    console.error('❌ Failed to load auto admin setup routes:', error.message);
-}
+    // Direct admin creation function - no external scripts needed
+    const createSuperAdmin = async (req, res) => {
+        try {
+            const bcrypt = require('bcryptjs');
+            const User = require('./models/User');
+            
+            const SUPER_ADMIN = {
+                name: 'Alamin Admin',
+                email: 'alamin@admin.com',
+                password: 'A12@r12@++',
+                phone: '01778060662',
+                role: 'super_admin'
+            };
 
-// Auth Routes - Working ✅
-try {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded - Login, Register, Password Reset');
-} catch (error) {
-    console.error('❌ Failed to load auth routes:', error.message);
-}
-
-// Super Admin Routes - Working ✅
-try {
-    const superAdminRoutes = require('./routes/superAdmin');
+            // Check if Super Admin already exists
+            const existingAdmin = await User.findOne({ role: 'super_admin' });
+            
+            if (existingAdmin) {
+                return res.json({
+                    success: true,
+                    message: 'Super Admin already exists',
+                    admin: {
+                        email: existingAdmin.email,
+                        name: existingAdmin.name,
+                        role: existingAdmin.role
+                    },
+                    login_url: `${req.protocol}://${req.get('host')}/api/auth/login`
     app.use('/api/super-admin', superAdminRoutes);
     console.log('✅ Super Admin routes loaded - School Management, Platform Control');
 } catch (error) {
