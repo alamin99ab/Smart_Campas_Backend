@@ -159,8 +159,10 @@ Expected response:
 ```bash
 curl -X POST https://your-app.onrender.com/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"alamin@admin.com","password":"A12@j12@++"}'
+  -d '{"email":"${SUPER_ADMIN_EMAIL}","password":"${SUPER_ADMIN_PASSWORD}"}'
 ```
+
+**Note:** Replace with your actual credentials from environment variables.
 
 ### 3. Database Connection Test
 ```bash
@@ -237,9 +239,14 @@ curl https://your-app.onrender.com/api/health \
 
 ### Super Admin Credentials
 ```
-Email: alamin@admin.com
-Password: A12@j12@++
+Email: ${SUPER_ADMIN_EMAIL} (from .env file)
+Password: ${SUPER_ADMIN_PASSWORD} (from .env file)
+Default: admin@school.local / ChangeMe123!
 ```
+
+**⚠️ IMPORTANT:** Change default credentials in production by setting environment variables:
+- `SUPER_ADMIN_EMAIL`
+- `SUPER_ADMIN_PASSWORD`
 
 ### API Base URL
 ```

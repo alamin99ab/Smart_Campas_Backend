@@ -3,36 +3,47 @@
  * Provides full functionality when MongoDB is unavailable
  */
 
+// Load environment variables
+require('dotenv').config();
+
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
 // In-memory database
 const mockDB = {
-  users: [
-    {
-      _id: '507f1f77bcf86cd799439011',
-      name: 'Super Administrator',
-      email: 'alamin@admin.com',
-      password: '$2a$12$Qqc8ziB0b3.v3VaJF0s4yeLbM2Dm9A/8QeX7l5p7vJ9c1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6',
-      role: 'super_admin',
-      isActive: true,
-      emailVerified: true,
-      permissions: ['manage_schools', 'manage_users', 'view_analytics', 'system_settings'],
-      createdAt: new Date('2024-01-01'),
-      updatedAt: new Date()
-    }
-  ],
+  users: [],
   schools: [],
   tokens: new Map()
 };
 
 // Hash the super admin password properly
 async function initializeMockDB() {
-  const hashedPassword = await bcrypt.hash('A12@j12@++', 12);
-  mockDB.users[0].password = hashedPassword;
+  // Use environment variables for credentials
+  const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@school.local';
+  const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'ChangeMe123!';
+  
+  const hashedPassword = await bcrypt.hash(adminPassword, 12);
+  
+  // Create Super Admin
+  const superAdmin = {
+    _id: '507f1f77bcf86cd799439011',
+    name: 'Super Administrator',
+    email: adminEmail,
+    password: hashedPassword,
+    role: 'super_admin',
+    isActive: true,
+    emailVerified: true,
+    permissions: ['manage_schools', 'manage_users', 'view_analytics', 'system_settings'],
+    createdAt: new Date('2024-01-01'),
+    updatedAt: new Date()
+  };
+  
+  mockDB.users.push(superAdmin);
+  
   console.log('✅ Mock Database Initialized');
-  console.log('   Super Admin: alamin@admin.com');
-  console.log('   Password: A12@j12@++');
+  console.log(`   Super Admin: ${adminEmail}`);
+  console.log('   Password: [Use environment variable SUPER_ADMIN_PASSWORD]');
+  console.log('   ⚠️  Change default credentials in production!');
 }
 
 // Mock User Model
