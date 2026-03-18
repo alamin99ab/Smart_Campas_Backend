@@ -588,23 +588,27 @@ const startServer = async () => {
                         
                         const existingAdmin = await User.findOne({ role: 'super_admin' });
                         if (!existingAdmin) {
-                            const hashedPassword = await bcrypt.hash('A12@r12@++', 12);
+                            // Use environment variables for credentials
+                            const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@school.local';
+                            const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'ChangeMe123!';
+                            const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
+                            
+                            const hashedPassword = await bcrypt.hash(adminPassword, 12);
                             const superAdmin = new User({
-                                name: 'Alamin Admin',
-                                email: 'alamin@admin.com',
+                                name: adminName,
+                                email: adminEmail,
                                 password: hashedPassword,
                                 role: 'super_admin',
-                                phone: '01778060662',
                                 isApproved: true,
                                 emailVerified: true,
                                 isActive: true
                             });
                             await superAdmin.save();
-                            console.log('✅ Super Admin created: alamin@admin.com');
-                            console.log('📧 Email: alamin@admin.com');
-                            console.log('🔑 Password: A12@r12@++');
+                            console.log('✅ Super Admin created: ' + adminEmail);
+                            console.log('📧 Email: ' + adminEmail);
+                            console.log('🔑 Password: [Configured via SUPER_ADMIN_PASSWORD env var]');
                         } else {
-                            console.log('✅ Super Admin already exists');
+                            console.log('✅ Super Admin already exists: ' + existingAdmin.email);
                         }
                     } catch (adminError) {
                         console.log(`⚠️  Admin creation failed: ${adminError.message}`);
