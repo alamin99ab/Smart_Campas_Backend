@@ -2,33 +2,29 @@
 // MODIFIED: Support for both MongoDB and Mock Database
 const mongoose = require('mongoose');
 
-// Determine if we should use mock database
-const useMockDB = mongoose.connection.readyState !== 1;
-
-// Import models (real or mock)
-let User, School, AuditLog;
-
-if (useMockDB) {
-  console.log('📦 Using Mock Database for Authentication');
-  const mockDB = require('../mock-db-controller');
-  User = mockDB.User;
-  School = mockDB.School;
-  AuditLog = mockDB.AuditLog;
-} else {
-  User = require('../models/User');
-  School = require('../models/School');
-  AuditLog = require('../models/AuditLog');
-}
+// Dynamic database check - returns models based on current connection state
+const getModels = () => {
+    const useMockDB = mongoose.connection.readyState !== 1;
+    if (useMockDB) {
+        const mockDB = require('../mock-db-controller');
+        return {
+            User: mockDB.User,
+            School: mockDB.School,
+            AuditLog: mockDB.AuditLog,
+            mockDB: mockDB.mockDB
+        };
+    }
+    return {
+        User: require('../models/User'),
+        School: require('../models/School'),
+        AuditLog: require('../models/AuditLog'),
+        mockDB: null
+    };
+};
 
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-
-// Initialize mock database if needed
-if (useMockDB) {
-  const { initializeMockDB } = require('../mock-db-controller');
-  initializeMockDB();
-}
 
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
@@ -37,20 +33,29 @@ const { sendSMS } = require('../utils/smsService');
 
 // ==================== HELPER FUNCTIONS ====================
 
+// Validate JWT configuration at startup
+const getJwtSecret = () => {
+    const secret = process.env.JWT_SECRET;
+    if (process.env.NODE_ENV === 'production' && (!secret || secret.includes('your_') || secret.length < 32)) {
+        throw new Error('JWT_SECRET must be set with a strong value (min 32 characters) in production');
+    }
+    return secret || 'dev_secret_key_32_chars_minimum_for_development_only';
+};
+
 const generateToken = (id, role, schoolCode, permissions = [], deviceId = null) => {
     return jwt.sign(
         { id, role, schoolCode, permissions, deviceId },
-        process.env.JWT_SECRET,
+        getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 };
 
 const getRefreshSecret = () => {
     const secret = process.env.JWT_REFRESH_SECRET;
-    if (process.env.NODE_ENV === 'production' && !secret) {
-        throw new Error('JWT_REFRESH_SECRET is required in production');
+    if (process.env.NODE_ENV === 'production' && (!secret || secret.includes('your_') || secret.length < 32)) {
+        throw new Error('JWT_REFRESH_SECRET must be set with a strong value (min 32 characters) in production');
     }
-    return secret || 'refresh_secret';
+    return secret || 'dev_refresh_secret_32_chars_minimum_for_development_only';
 };
 
 const generateRefreshToken = (id, deviceId = null) => {
@@ -82,6 +87,10 @@ const setRefreshTokenCookie = (res, token) => {
 
 const createAuditLog = async (userId, action, details, req) => {
     try {
+        // Get models dynamically
+        const { AuditLog } = getModels();
+        if (!AuditLog) return; // Skip audit logging if not available
+        
         await AuditLog.create({
             user: userId,
             action,
@@ -103,6 +112,9 @@ const createAuditLog = async (userId, action, details, req) => {
 exports.registerUser = async (req, res) => {
     const { name, email, password, role, schoolName, schoolCode, phone } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
+
+    // Get models dynamically
+    const { User, School, AuditLog } = getModels();
 
     try {
         if (!name || !email || !password || !role) {
@@ -244,6 +256,9 @@ exports.loginUser = async (req, res) => {
     const { email, password, twoFactorToken } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
 
+    // Get models dynamically based on database state
+    const { User, School, AuditLog, mockDB } = getModels();
+
     try {
         if (!email || !password) {
             return res.status(400).json({ 
@@ -254,11 +269,11 @@ exports.loginUser = async (req, res) => {
 
         // Use appropriate query based on database type
         let user;
-        let mockDBReference;
+        let mockDBReference = mockDB;
+        const useMockDB = mongoose.connection.readyState !== 1;
+        
         if (useMockDB) {
             // Mock database query - get full user data
-            const mockDBModule = require('../mock-db-controller');
-            mockDBReference = mockDBModule.mockDB;
             user = await User.findOne({ email });
             if (user) {
                 // Add methods that would normally be on Mongoose document
@@ -433,6 +448,9 @@ exports.refreshToken = async (req, res) => {
     const cookieToken = req.cookies?.refreshToken;
     const deviceId = req.headers['x-device-id'];
 
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         const token = refreshToken || cookieToken;
 
@@ -487,6 +505,9 @@ exports.logoutUser = async (req, res) => {
     const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
     const deviceId = req.headers['x-device-id'];
 
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         if (refreshToken && req.user) {
             await User.updateOne(
@@ -510,6 +531,9 @@ exports.logoutUser = async (req, res) => {
 // @route   POST /api/auth/logout-all
 // @access  Private
 exports.logoutAllDevices = async (req, res) => {
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         await User.updateOne(
             { _id: req.user._id },
@@ -530,9 +554,21 @@ exports.logoutAllDevices = async (req, res) => {
 // @route   GET /api/auth/profile
 // @access  Private
 exports.getUserProfile = async (req, res) => {
+    // Get models dynamically
+    const { User, School, AuditLog } = getModels();
+
     try {
-        const user = await User.findById(req.user._id)
-            .select('-password -refreshToken -emailVerificationToken -resetPasswordToken -twoFactorSecret');
+        // Handle both Mongoose (chainable) and MockDB (direct) patterns
+        let user;
+        const selectFields = '-password -refreshToken -emailVerificationToken -resetPasswordToken -twoFactorSecret';
+        
+        if (typeof User.findById(req.user._id).select === 'function') {
+            // Mongoose pattern - chainable
+            user = await User.findById(req.user._id).select(selectFields);
+        } else {
+            // MockDB pattern - select as second param
+            user = await User.findById(req.user._id, selectFields);
+        }
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -547,10 +583,13 @@ exports.getUserProfile = async (req, res) => {
 
         await createAuditLog(user._id, 'PROFILE_VIEW', {}, req);
 
+        // Handle both Mongoose (toObject) and MockDB (plain object)
+        const userData = typeof user.toObject === 'function' ? user.toObject() : user;
+
         res.json({
             success: true,
             data: {
-                ...user.toObject(),
+                ...userData,
                 activeSessions,
                 devices,
                 ...(school && { school })
@@ -568,6 +607,9 @@ exports.getUserProfile = async (req, res) => {
 // @access  Private
 exports.updateUserProfile = async (req, res) => {
     const { name, phone, address, profileImage } = req.body;
+
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
 
     try {
         const user = await User.findById(req.user._id);
@@ -602,6 +644,9 @@ exports.updateUserProfile = async (req, res) => {
 // @access  Private
 exports.changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
+
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
 
     try {
         if (!currentPassword || !newPassword) {
@@ -654,6 +699,9 @@ exports.changePassword = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
     const { email } = req.body;
 
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         const user = await User.findOne({ email });
         if (!user) {
@@ -704,6 +752,9 @@ exports.resetPassword = async (req, res) => {
     const { token } = req.params;
     const { password } = req.body;
 
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
         const user = await User.findOne({
@@ -750,6 +801,9 @@ exports.resetPassword = async (req, res) => {
 exports.verifyEmail = async (req, res) => {
     const { token } = req.params;
 
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         const user = await User.findOne({
             emailVerificationToken: token,
@@ -780,6 +834,9 @@ exports.verifyEmail = async (req, res) => {
 // @access  Public
 exports.resendVerificationEmail = async (req, res) => {
     const { email } = req.body;
+
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
 
     try {
         const user = await User.findOne({ email });
@@ -817,6 +874,9 @@ exports.resendVerificationEmail = async (req, res) => {
 // @route   POST /api/auth/setup-2fa
 // @access  Private
 exports.setup2FA = async (req, res) => {
+    // Get models dynamically
+    const { User, AuditLog } = getModels();
+
     try {
         const user = await User.findById(req.user._id);
         if (user.twoFactorEnabled) {

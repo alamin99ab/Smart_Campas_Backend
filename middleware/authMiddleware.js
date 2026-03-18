@@ -1,19 +1,26 @@
 // middleware/authMiddleware.js
-// MODIFIED: Added Mock Database support
+// MODIFIED: Added Mock Database support with dynamic checking
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 
-// Determine if we should use mock database
-const useMockDB = mongoose.connection.readyState !== 1;
+// Validate JWT configuration at startup
+const getJwtSecret = () => {
+    const secret = process.env.JWT_SECRET;
+    if (process.env.NODE_ENV === 'production' && (!secret || secret.includes('your_') || secret.length < 32)) {
+        throw new Error('JWT_SECRET must be set with a strong value (min 32 characters) in production');
+    }
+    return secret || 'dev_secret_key_32_chars_minimum_for_development_only';
+};
 
-// Import User model (real or mock)
-let User;
-if (useMockDB) {
-  const mockDB = require('../mock-db-controller');
-  User = mockDB.User;
-} else {
-  User = require('../models/User');
-}
+// Get User model dynamically based on current database state
+const getUserModel = () => {
+    const useMockDB = mongoose.connection.readyState !== 1;
+    if (useMockDB) {
+        const mockDB = require('../mock-db-controller');
+        return mockDB.User;
+    }
+    return require('../models/User');
+};
 
 const protect = async (req, res, next) => {
     let token;
@@ -30,7 +37,10 @@ const protect = async (req, res, next) => {
     }
 
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, getJwtSecret());
+        
+        // Get User model dynamically
+        const User = getUserModel();
         const user = await User.findById(decoded.id);
 
         if (!user) {
@@ -41,7 +51,9 @@ const protect = async (req, res, next) => {
         }
 
         // Remove password from user object before attaching to req
-        const { password, ...userWithoutPassword } = user;
+        // Convert to plain object to avoid Mongoose document issues
+        const userObj = user.toObject ? user.toObject() : user;
+        const { password, ...userWithoutPassword } = userObj;
         req.user = userWithoutPassword;
         next();
     } catch (error) {

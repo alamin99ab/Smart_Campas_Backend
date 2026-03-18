@@ -5,6 +5,9 @@
  */
 
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 
 // Determine if we should use mock database
 const useMockDB = mongoose.connection.readyState !== 1;
@@ -34,10 +37,19 @@ if (useMockDB) {
 }
 
 // Helper functions for token generation
+// Validate JWT configuration at startup
+const getJwtSecret = () => {
+    const secret = process.env.JWT_SECRET;
+    if (process.env.NODE_ENV === 'production' && (!secret || secret.includes('your_') || secret.length < 32)) {
+        throw new Error('JWT_SECRET must be set with a strong value (min 32 characters) in production');
+    }
+    return secret || 'dev_secret_key_32_chars_minimum_for_development_only';
+};
+
 const generateToken = (id, role, schoolCode, permissions = [], deviceId = null) => {
     return jwt.sign(
         { id, role, schoolCode, permissions, deviceId },
-        process.env.JWT_SECRET,
+        getJwtSecret(),
         { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 };

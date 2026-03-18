@@ -1,126 +1,11 @@
-/**
- * MOCK DATABASE CONTROLLER
- * Provides full functionality when MongoDB is unavailable
- */
-
-// Load environment variables
-require('dotenv').config();
-
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
-
-// In-memory database
-const mockDB = {
-  users: [],
-  schools: [],
-  tokens: new Map()
-};
-
-// Hash the super admin password properly
-async function initializeMockDB() {
-  // Use environment variables for credentials
-  const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@school.local';
-  const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'ChangeMe123!';
-  
-  const hashedPassword = await bcrypt.hash(adminPassword, 12);
-  
-  // Create Super Admin
-  const superAdmin = {
-    _id: '507f1f77bcf86cd799439011',
-    name: 'Super Administrator',
-    email: adminEmail,
-    password: hashedPassword,
-    role: 'super_admin',
-    isActive: true,
-    emailVerified: true,
-    permissions: ['manage_schools', 'manage_users', 'view_analytics', 'system_settings'],
-    createdAt: new Date('2024-01-01'),
-    updatedAt: new Date()
-  };
-  
-  mockDB.users.push(superAdmin);
-  
-  console.log('✅ Mock Database Initialized');
-  console.log(`   Super Admin: ${adminEmail}`);
-  console.log('   Password: [Use environment variable SUPER_ADMIN_PASSWORD]');
-  console.log('   ⚠️  Change default credentials in production!');
-}
-
-// Mock User Model
-const MockUser = {
-  findOne: async (query) => {
-    return mockDB.users.find(user => {
-      for (let key in query) {
-        if (user[key] !== query[key]) return false;
-      }
-      return true;
-    }) || null;
-  },
-  find: async (query = {}) => {
-    return mockDB.users.filter(user => {
-      for (let key in query) {
-        if (user[key] !== query[key]) return false;
-      }
-      return true;
-    });
-  },
-  findById: async (id) => {
-    return mockDB.users.find(user => user._id === id) || null;
-  },
-  create: async (data) => {
-    const newUser = {
-      _id: crypto.randomUUID(),
-      ...data,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    if (data.password && !data.password.startsWith('$2a$')) {
-      newUser.password = await bcrypt.hash(data.password, 12);
-    }
-    mockDB.users.push(newUser);
-    return newUser;
-  },
-  countDocuments: async () => mockDB.users.length
-};
-
-// Mock School Model
-const MockSchool = {
-  findOne: async (query) => {
-    return mockDB.schools.find(school => {
-      for (let key in query) {
-        if (school[key] !== query[key]) return false;
-      }
-      return true;
-    }) || null;
-  },
-  find: async () => mockDB.schools,
-  findById: async (id) => mockDB.schools.find(s => s._id === id) || null,
-  create: async (data) => {
-    const newSchool = {
-      _id: crypto.randomUUID(),
-      ...data,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    mockDB.schools.push(newSchool);
-    return newSchool;
-  },
-  countDocuments: async () => mockDB.schools.length
-};
-
-module.exports = {
-  initializeMockDB,
-  mockDB,
-  MockUser,
-  MockSchool
-};
-
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
+const requestId = require('./middleware/requestId');
 require('dotenv').config();
 
 const app = express();
@@ -140,13 +25,19 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// MongoDB sanitize - prevent NoSQL injection
+app.use(mongoSanitize());
+
+// Request ID for tracking
+app.use(requestId);
+
 // Enhanced security middleware
 app.use(enhancedSecurity);
 
 // Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5000, // Increased for testing
+    max: process.env.NODE_ENV === 'production' ? 100 : 5000,
     message: {
         error: 'Too many requests, please try again later.'
     },
@@ -182,8 +73,27 @@ app.get('/api', (req, res) => {
             principal: '/api/principal',
             teacher: '/api/teacher',
             student: '/api/student',
+            parent: '/api/parent',
+            accountant: '/api/accountant',
             dashboard: '/api/dashboard',
             notices: '/api/notices',
+            academicSessions: '/api/academic-sessions',
+            admissions: '/api/admissions',
+            attendance: '/api/attendance',
+            examSchedules: '/api/exam-schedules',
+            fees: '/api/fees',
+            leave: '/api/leave',
+            notifications: '/api/notifications',
+            results: '/api/results',
+            routines: '/api/routines',
+            search: '/api/search',
+            substitutes: '/api/substitutes',
+            teacherAssignments: '/api/teacher-assignments',
+            activities: '/api/activities',
+            analytics: '/api/analytics',
+            rooms: '/api/rooms',
+            events: '/api/events',
+            public: '/api/public',
             ai: '/api/ai'
         },
         workflow: {
@@ -212,10 +122,10 @@ try {
             const User = require('./models/User');
             
             const SUPER_ADMIN = {
-                name: 'Alamin Admin',
-                email: 'alamin@admin.com',
-                password: 'A12@r12@++',
-                phone: '01778060662',
+                name: process.env.SUPER_ADMIN_NAME || 'Alamin Admin',
+                email: process.env.SUPER_ADMIN_EMAIL || 'alamin@admin.com',
+                password: process.env.SUPER_ADMIN_PASSWORD || 'A12@r12@++',
+                phone: process.env.SUPER_ADMIN_PHONE || '01778060662',
                 role: 'super_admin'
             };
 
@@ -500,11 +410,164 @@ try {
     console.error('❌ Failed to load notice routes:', error.message);
 }
 
-// AI Routes - Working ✅
+// Academic Session Routes
 try {
-    // const aiRoutes = require('./routes/ai');
-    // app.use('/api/ai', aiRoutes);
-    console.log('✅ AI routes temporarily disabled - 10+ AI Features');
+    const academicSessionRoutes = require('./routes/academicSessionRoutes');
+    app.use('/api/academic-sessions', academicSessionRoutes);
+    console.log('✅ Academic Session routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load academic session routes:', error.message);
+}
+
+// Admission Routes
+try {
+    const admissionRoutes = require('./routes/admissionRoutes');
+    app.use('/api/admissions', admissionRoutes);
+    console.log('✅ Admission routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load admission routes:', error.message);
+}
+
+// Attendance Routes
+try {
+    const attendanceRoutes = require('./routes/attendanceRoutes');
+    app.use('/api/attendance', attendanceRoutes);
+    console.log('✅ Attendance routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load attendance routes:', error.message);
+}
+
+// Exam Schedule Routes
+try {
+    const examScheduleRoutes = require('./routes/examScheduleRoutes');
+    app.use('/api/exam-schedules', examScheduleRoutes);
+    console.log('✅ Exam Schedule routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load exam schedule routes:', error.message);
+}
+
+// Fee Routes
+try {
+    const feeRoutes = require('./routes/feeRoutes');
+    app.use('/api/fees', feeRoutes);
+    console.log('✅ Fee routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load fee routes:', error.message);
+}
+
+// Leave Routes
+try {
+    const leaveRoutes = require('./routes/leaveRoutes');
+    app.use('/api/leave', leaveRoutes);
+    console.log('✅ Leave routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load leave routes:', error.message);
+}
+
+// Notification Routes
+try {
+    const notificationRoutes = require('./routes/notificationRoutes');
+    app.use('/api/notifications', notificationRoutes);
+    console.log('✅ Notification routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load notification routes:', error.message);
+}
+
+// Result Routes
+try {
+    const resultRoutes = require('./routes/resultRoutes');
+    app.use('/api/results', resultRoutes);
+    console.log('✅ Result routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load result routes:', error.message);
+}
+
+// Routine Routes
+try {
+    const routineRoutes = require('./routes/routineRoutes');
+    app.use('/api/routines', routineRoutes);
+    console.log('✅ Routine routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load routine routes:', error.message);
+}
+
+// Search Routes
+try {
+    const searchRoutes = require('./routes/searchRoutes');
+    app.use('/api/search', searchRoutes);
+    console.log('✅ Search routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load search routes:', error.message);
+}
+
+// Substitute Routes
+try {
+    const substituteRoutes = require('./routes/substituteRoutes');
+    app.use('/api/substitutes', substituteRoutes);
+    console.log('✅ Substitute routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load substitute routes:', error.message);
+}
+
+// Teacher Assignment Routes
+try {
+    const teacherAssignmentRoutes = require('./routes/teacherAssignmentRoutes');
+    app.use('/api/teacher-assignments', teacherAssignmentRoutes);
+    console.log('✅ Teacher Assignment routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load teacher assignment routes:', error.message);
+}
+
+// Activity Routes
+try {
+    const activityRoutes = require('./routes/activityRoutes');
+    app.use('/api/activities', activityRoutes);
+    console.log('✅ Activity routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load activity routes:', error.message);
+}
+
+// Analytics Routes
+try {
+    const analyticsRoutes = require('./routes/analyticsRoutes');
+    app.use('/api/analytics', analyticsRoutes);
+    console.log('✅ Analytics routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load analytics routes:', error.message);
+}
+
+// Room Routes
+try {
+    const roomRoutes = require('./routes/roomRoutes');
+    app.use('/api/rooms', roomRoutes);
+    console.log('✅ Room routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load room routes:', error.message);
+}
+
+// Event Routes
+try {
+    const eventRoutes = require('./routes/eventRoutes');
+    app.use('/api/events', eventRoutes);
+    console.log('✅ Event routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load event routes:', error.message);
+}
+
+// Public Routes
+try {
+    const publicRoutes = require('./routes/publicRoutes');
+    app.use('/api/public', publicRoutes);
+    console.log('✅ Public routes loaded');
+} catch (error) {
+    console.error('❌ Failed to load public routes:', error.message);
+}
+
+// AI Routes
+try {
+    const aiRoutes = require('./routes/ai');
+    app.use('/api/ai', aiRoutes);
+    console.log('✅ AI routes loaded - 10+ AI Features');
 } catch (error) {
     console.error('❌ Failed to load AI routes:', error.message);
 }
@@ -528,6 +591,23 @@ app.use('*', (req, res) => {
             accountant: '/api/accountant',
             dashboard: '/api/dashboard',
             notices: '/api/notices',
+            academicSessions: '/api/academic-sessions',
+            admissions: '/api/admissions',
+            attendance: '/api/attendance',
+            examSchedules: '/api/exam-schedules',
+            fees: '/api/fees',
+            leave: '/api/leave',
+            notifications: '/api/notifications',
+            results: '/api/results',
+            routines: '/api/routines',
+            search: '/api/search',
+            substitutes: '/api/substitutes',
+            teacherAssignments: '/api/teacher-assignments',
+            activities: '/api/activities',
+            analytics: '/api/analytics',
+            rooms: '/api/rooms',
+            events: '/api/events',
+            public: '/api/public',
             ai: '/api/ai'
         },
         workflow: 'Complete Smart Campus SaaS Workflow Available'
@@ -619,11 +699,19 @@ const startServer = async () => {
                 console.log('⚠️  MongoDB connection failed, continuing without database:', dbError.message);
                 console.log('📝 Some features may be limited without database');
                 console.log('💡 Check your MONGO_URI in .env file');
+                
+                // Initialize mock database for testing without MongoDB
+                const { initializeMockDB } = require('./mock-db-controller');
+                await initializeMockDB();
             }
         } else {
             console.log('\n⚠️  No valid MONGO_URI provided, running without database');
             console.log('📝 Set MONGO_URI in .env for full functionality');
             console.log('🔗 Example: mongodb+srv://username:password@cluster.mongodb.net/dbname');
+            
+            // Initialize mock database for testing without MongoDB
+            const { initializeMockDB } = require('./mock-db-controller');
+            await initializeMockDB();
         }
         
     } catch (error) {
