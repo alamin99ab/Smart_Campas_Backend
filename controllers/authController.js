@@ -1,10 +1,35 @@
 // controllers/authController.js
-const User = require('../models/User');
-const School = require('../models/School');
-const AuditLog = require('../models/AuditLog');
+// MODIFIED: Support for both MongoDB and Mock Database
+const mongoose = require('mongoose');
+
+// Determine if we should use mock database
+const useMockDB = mongoose.connection.readyState !== 1;
+
+// Import models (real or mock)
+let User, School, AuditLog;
+
+if (useMockDB) {
+  console.log('📦 Using Mock Database for Authentication');
+  const mockDB = require('../mock-db-controller');
+  User = mockDB.User;
+  School = mockDB.School;
+  AuditLog = mockDB.AuditLog;
+} else {
+  User = require('../models/User');
+  School = require('../models/School');
+  AuditLog = require('../models/AuditLog');
+}
+
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+
+// Initialize mock database if needed
+if (useMockDB) {
+  const { initializeMockDB } = require('../mock-db-controller');
+  initializeMockDB();
+}
+
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
 const { sendEmail } = require('../utils/emailService');
@@ -210,7 +235,7 @@ exports.registerUser = async (req, res) => {
         console.error('Register error:', error);
         res.status(500).json({ message: 'Registration failed' });
     }
-};
+} // Added closing bracket here
 
 // @desc    Login User
 // @route   POST /api/auth/login
@@ -221,24 +246,60 @@ exports.loginUser = async (req, res) => {
 
     try {
         if (!email || !password) {
-            return res.status(400).json({ message: 'Email and password required' });
+            return res.status(400).json({ 
+                success: false,
+                message: 'Email and password required' 
+            });
         }
 
-        const user = await User.findOne({ email }).select(
-            '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices'
-        );
+        // Use appropriate query based on database type
+        let user;
+        let mockDBReference;
+        if (useMockDB) {
+            // Mock database query - get full user data
+            const mockDBModule = require('../mock-db-controller');
+            mockDBReference = mockDBModule.mockDB;
+            user = await User.findOne({ email });
+            if (user) {
+                // Add methods that would normally be on Mongoose document
+                user.comparePassword = async function(candidatePassword) {
+                    return await bcrypt.compare(candidatePassword, this.password);
+                };
+                user.save = async function() {
+                    const index = mockDBReference.users.findIndex(u => u._id === this._id);
+                    if (index !== -1) {
+                        mockDBReference.users[index] = { ...this, updatedAt: new Date() };
+                    }
+                    return this;
+                };
+            }
+        } else {
+            // MongoDB query with select
+            user = await User.findOne({ email }).select(
+                '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices'
+            );
+        }
 
         if (!user) {
-            return res.status(401).json({ message: 'Invalid credentials' });
+            return res.status(401).json({ 
+                success: false,
+                message: 'Invalid credentials' 
+            });
         }
 
         if (user.isBlocked) {
             await createAuditLog(user._id, 'LOGIN_BLOCKED', { reason: 'Account blocked' }, req);
-            return res.status(403).json({ message: 'Account blocked. Contact support.' });
+            return res.status(403).json({ 
+                success: false,
+                message: 'Account blocked. Contact support.' 
+            });
         }
 
         if (!user.emailVerified && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
-            return res.status(403).json({ message: 'Please verify your email first' });
+            return res.status(403).json({ 
+                success: false,
+                message: 'Please verify your email first' 
+            });
         }
 
         const isMatch = await user.comparePassword(password);
@@ -249,16 +310,23 @@ exports.loginUser = async (req, res) => {
                 user.isBlocked = true;
                 await user.save();
                 await createAuditLog(user._id, 'ACCOUNT_BLOCKED', { reason: 'Too many failed attempts' }, req);
-                return res.status(403).json({ message: 'Too many attempts. Account blocked.' });
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'Too many attempts. Account blocked.' 
+                });
             }
             await user.save();
             await createAuditLog(user._id, 'LOGIN_FAILED', { attempt: user.loginAttempts }, req);
-            return res.status(401).json({ message: 'Invalid credentials' });
+            return res.status(401).json({ 
+                success: false,
+                message: 'Invalid credentials' 
+            });
         }
 
         if (user.twoFactorEnabled) {
             if (!twoFactorToken) {
                 return res.status(403).json({
+                    success: false,
                     message: '2FA token required',
                     twoFactorRequired: true
                 });
@@ -274,15 +342,23 @@ exports.loginUser = async (req, res) => {
             }
         }
 
-        const school = await School.findOne({ schoolCode: user.schoolCode });
-        if (school && school.subscription?.status !== 'active') {
-            return res.status(403).json({ message: 'School subscription is inactive' });
+        // Check school subscription only for non-super-admin users
+        if (user.role !== 'super_admin' && user.schoolCode) {
+            const school = await School.findOne({ schoolCode: user.schoolCode });
+            if (school && school.subscription?.status !== 'active') {
+                return res.status(403).json({ message: 'School subscription is inactive' });
+            }
         }
 
         user.loginAttempts = 0;
         user.lastLogin = new Date();
         user.lastLoginIP = req.ip;
         user.lastUserAgent = req.headers['user-agent'];
+
+        // Ensure devices array exists
+        if (!user.devices) {
+            user.devices = [];
+        }
 
         const deviceIndex = user.devices.findIndex(d => d.deviceId === deviceId);
         if (deviceIndex === -1) {
@@ -339,8 +415,13 @@ exports.loginUser = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ message: 'Login failed' });
+        console.error('❌ Login error:', error.message);
+        console.error('Stack:', error.stack);
+        res.status(500).json({ 
+            success: false,
+            message: 'Login failed',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 

@@ -1,0 +1,65 @@
+# Docker Compose for Smart School Management System
+# Use this for local development with Docker
+
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart-school-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MONGO_URI=${MONGO_URI}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - smart-school-network
+
+  # Optional: MongoDB service for local development
+  # Uncomment if you want to run MongoDB in Docker
+  # mongodb:
+  #   image: mongo:6-jammy
+  #   container_name: smart-school-mongo
+  #   restart: unless-stopped
+  #   ports:
+  #     - "27017:27017"
+  #   environment:
+  #     - MONGO_INITDB_ROOT_USERNAME=admin
+  #     - MONGO_INITDB_ROOT_PASSWORD=password123
+  #   volumes:
+  #     - mongo-data:/data/db
+  #   networks:
+  #     - smart-school-network
+
+  # Optional: Redis for caching (future feature)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: smart-school-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   networks:
+  #     - smart-school-network
+
+networks:
+  smart-school-network:
+    driver: bridge
+
+# volumes:
+#   mongo-data:
+#     driver: local

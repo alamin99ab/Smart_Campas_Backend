@@ -1,7 +1,108 @@
 /**
- * SMART CAMPUS SaaS - MAIN SERVER FILE
- * Complete workflow implementation - All features included
+ * MOCK DATABASE CONTROLLER
+ * Provides full functionality when MongoDB is unavailable
  */
+
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+
+// In-memory database
+const mockDB = {
+  users: [
+    {
+      _id: '507f1f77bcf86cd799439011',
+      name: 'Super Administrator',
+      email: 'alamin@admin.com',
+      password: '$2a$12$Qqc8ziB0b3.v3VaJF0s4yeLbM2Dm9A/8QeX7l5p7vJ9c1h2i3j4k5l6m7n8o9p0q1r2s3t4u5v6w7x8y9z0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6',
+      role: 'super_admin',
+      isActive: true,
+      emailVerified: true,
+      permissions: ['manage_schools', 'manage_users', 'view_analytics', 'system_settings'],
+      createdAt: new Date('2024-01-01'),
+      updatedAt: new Date()
+    }
+  ],
+  schools: [],
+  tokens: new Map()
+};
+
+// Hash the super admin password properly
+async function initializeMockDB() {
+  const hashedPassword = await bcrypt.hash('A12@j12@++', 12);
+  mockDB.users[0].password = hashedPassword;
+  console.log('✅ Mock Database Initialized');
+  console.log('   Super Admin: alamin@admin.com');
+  console.log('   Password: A12@j12@++');
+}
+
+// Mock User Model
+const MockUser = {
+  findOne: async (query) => {
+    return mockDB.users.find(user => {
+      for (let key in query) {
+        if (user[key] !== query[key]) return false;
+      }
+      return true;
+    }) || null;
+  },
+  find: async (query = {}) => {
+    return mockDB.users.filter(user => {
+      for (let key in query) {
+        if (user[key] !== query[key]) return false;
+      }
+      return true;
+    });
+  },
+  findById: async (id) => {
+    return mockDB.users.find(user => user._id === id) || null;
+  },
+  create: async (data) => {
+    const newUser = {
+      _id: crypto.randomUUID(),
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    if (data.password && !data.password.startsWith('$2a$')) {
+      newUser.password = await bcrypt.hash(data.password, 12);
+    }
+    mockDB.users.push(newUser);
+    return newUser;
+  },
+  countDocuments: async () => mockDB.users.length
+};
+
+// Mock School Model
+const MockSchool = {
+  findOne: async (query) => {
+    return mockDB.schools.find(school => {
+      for (let key in query) {
+        if (school[key] !== query[key]) return false;
+      }
+      return true;
+    }) || null;
+  },
+  find: async () => mockDB.schools,
+  findById: async (id) => mockDB.schools.find(s => s._id === id) || null,
+  create: async (data) => {
+    const newSchool = {
+      _id: crypto.randomUUID(),
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    mockDB.schools.push(newSchool);
+    return newSchool;
+  },
+  countDocuments: async () => mockDB.schools.length
+};
+
+module.exports = {
+  initializeMockDB,
+  mockDB,
+  MockUser,
+  MockSchool
+};
 
 const express = require('express');
 const mongoose = require('mongoose');
