@@ -119,7 +119,7 @@ exports.superAdminLogin = async (req, res) => {
         // Security checks
         if (superAdmin.isBlocked) {
             await AuditLog.create({
-                userId: superAdmin._id,
+                user: superAdmin._id,
                 action: 'BLOCKED_LOGIN_ATTEMPT',
                 details: 'Blocked super admin attempted login',
                 ip: req.ip,
@@ -142,7 +142,7 @@ exports.superAdminLogin = async (req, res) => {
                 await superAdmin.save();
                 
                 await AuditLog.create({
-                    userId: superAdmin._id,
+                    user: superAdmin._id,
                     action: 'ACCOUNT_AUTO_BLOCKED',
                     details: 'Super admin account auto-blocked due to multiple failed attempts',
                     ip: req.ip,
@@ -157,7 +157,7 @@ exports.superAdminLogin = async (req, res) => {
             
             await superAdmin.save();
             await AuditLog.create({
-                userId: superAdmin._id,
+                user: superAdmin._id,
                 action: 'SUPER_ADMIN_LOGIN_FAILED',
                 details: `Invalid password. Attempt ${superAdmin.loginAttempts}/5`,
                 ip: req.ip,
@@ -1168,7 +1168,7 @@ exports.getUserDetails = async (req, res) => {
         }
 
         // Get user activity logs
-        const recentActivity = await AuditLog.find({ userId: id })
+        const recentActivity = await AuditLog.find({ user: id })
             .sort({ createdAt: -1 })
             .limit(20);
 

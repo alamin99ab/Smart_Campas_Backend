@@ -139,8 +139,33 @@ try {
 
             // Check if Super Admin already exists
             const existingAdmin = await User.findOne({ role: 'super_admin' });
+            const forceReset = req.body.force === true || req.query.force === 'true';
             
             if (existingAdmin) {
+                // If force reset is requested, unblock and reset password
+                if (forceReset) {
+                    const newPassword = req.body.password || SUPER_ADMIN.password || 'Admin@123456';
+                    const hashedPassword = await bcrypt.hash(newPassword, 12);
+                    
+                    existingAdmin.password = hashedPassword;
+                    existingAdmin.isBlocked = false;
+                    existingAdmin.loginAttempts = 0;
+                    existingAdmin.isActive = true;
+                    await existingAdmin.save();
+                    
+                    return res.json({
+                        success: true,
+                        message: 'Super Admin reset successfully',
+                        admin: {
+                            email: existingAdmin.email,
+                            name: existingAdmin.name,
+                            role: existingAdmin.role,
+                            password: newPassword
+                        },
+                        login_url: `${req.protocol}://${req.get('host')}/api/auth/login`
+                    });
+                }
+                
                 return res.json({
                     success: true,
                     message: 'Super Admin already exists',
