@@ -40,6 +40,12 @@ services:
       - key: SUPER_ADMIN_PHONE
         value: ""
       
+      # Emergency Reset Key (for account recovery)
+      - key: EMERGENCY_RESET_KEY
+        value: smart_campus_2024_reset
+      - key: EMERGENCY_SECRET
+        value: emergency_reset_2024
+      
       # Frontend Configuration
       - key: FRONTEND_URL
         value: https://smart-campus-api.onrender.com
