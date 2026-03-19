@@ -6,10 +6,25 @@ const mongoose = require('mongoose');
 // Validate JWT configuration at startup
 const getJwtSecret = () => {
     const secret = process.env.JWT_SECRET;
-    if (process.env.NODE_ENV === 'production' && (!secret || secret.includes('your_') || secret.length < 32)) {
-        throw new Error('JWT_SECRET must be set with a strong value (min 32 characters) in production');
+    
+    // In production, JWT_SECRET is required and validated before server starts
+    // This is an additional safety check
+    if (process.env.NODE_ENV === 'production') {
+        if (!secret) {
+            throw new Error('JWT_SECRET environment variable is required in production');
+        }
+        if (secret.includes('your_') || secret.length < 32) {
+            throw new Error('JWT_SECRET must be a strong value (min 32 characters, no placeholder values) in production');
+        }
     }
-    return secret || 'dev_secret_key_32_chars_minimum_for_development_only';
+    
+    // Development fallback - only used when NODE_ENV is not production
+    if (!secret) {
+        console.warn('⚠️  WARNING: Using development JWT_SECRET. Set JWT_SECRET in .env for production.');
+        return 'dev_secret_key_32_chars_minimum_for_development_only';
+    }
+    
+    return secret;
 };
 
 const protect = async (req, res, next) => {

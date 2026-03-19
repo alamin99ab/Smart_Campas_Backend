@@ -21,6 +21,24 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      - key: JWT_EXPIRE
+        value: 7d
+      - key: JWT_REFRESH_EXPIRE
+        value: 30d
+      - key: BCRYPT_ROUNDS
+        value: 12
+      - key: SESSION_SECRET
+        generateValue: true
+      
+      # Super Admin (Configure in Render dashboard - required)
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: SUPER_ADMIN_NAME
+        value: Super Admin
+      - key: SUPER_ADMIN_PHONE
+        value: ""
       
       # Frontend Configuration
       - key: FRONTEND_URL
@@ -31,8 +49,8 @@ services:
       # Database (Configure in Render dashboard)
       - key: MONGO_URI
         sync: false
-      - key: REDIS_URL
-        sync: false
+      - key: MONGO_DB_NAME
+        value: smartcampus
       
       # Email Service (Optional - Configure in dashboard)
       - key: EMAIL_HOST
@@ -73,8 +91,6 @@ services:
         sync: false
       
       # Security & Performance
-      - key: BCRYPT_ROUNDS
-        value: 12
       - key: RATE_LIMIT_WINDOW_MS
         value: 900000
       - key: RATE_LIMIT_MAX_REQUESTS

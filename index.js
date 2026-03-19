@@ -6,10 +6,18 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
 const requestId = require('./middleware/requestId');
+const { validateEnv } = require('./utils/validateEnv');
 require('dotenv').config();
 
+// Validate environment variables before starting
+if (!validateEnv()) {
+    console.error('\n❌ Server startup aborted due to missing environment variables');
+    console.error('📝 Please check .env.example for required variables\n');
+    process.exit(1);
+}
+
 const app = express();
-const PORT = process.env.PORT || 3001; // Render uses PORT env var
+const PORT = process.env.PORT || 3001; // Render automatically sets PORT
 
 // Basic middleware
 app.use(helmet({
@@ -122,10 +130,10 @@ try {
             const User = require('./models/User');
             
             const SUPER_ADMIN = {
-                name: process.env.SUPER_ADMIN_NAME || 'Alamin Admin',
-                email: process.env.SUPER_ADMIN_EMAIL || 'alamin@admin.com',
-                password: process.env.SUPER_ADMIN_PASSWORD || 'A12@r12@++',
-                phone: process.env.SUPER_ADMIN_PHONE || '01778060662',
+                name: process.env.SUPER_ADMIN_NAME,
+                email: process.env.SUPER_ADMIN_EMAIL,
+                password: process.env.SUPER_ADMIN_PASSWORD,
+                phone: process.env.SUPER_ADMIN_PHONE,
                 role: 'super_admin'
             };
 
@@ -232,11 +240,11 @@ try {
         <h2>Auto Super Admin Setup</h2>
         
         <div class="info">
-            <p><strong>📋 This will automatically create the Super Admin account:</strong></p>
+            <p><strong>📋 This will create the Super Admin account using environment variables:</strong></p>
             <pre>
-Email: alamin@admin.com
-Password: A12@r12@++
-Phone: 01778060662
+Email: ${process.env.SUPER_ADMIN_EMAIL || 'admin@example.com'}
+Password: [Set in environment variables]
+Phone: ${process.env.SUPER_ADMIN_PHONE || '+1234567890'}
 Role: super_admin
             </pre>
         </div>
@@ -627,65 +635,65 @@ app.use((error, req, res, next) => {
 // Database connection and server start
 const startServer = async () => {
     try {
-        // Connect to MongoDB FIRST before starting server
-        if (!process.env.MONGO_URI || process.env.MONGO_URI === 'mongodb+srv://username:password@cluster.mongodb.net/smartcampus?retryWrites=true&w=majority') {
-            console.error('❌ No MONGO_URI provided in .env file');
-            console.error('💡 Set MONGO_URI in .env for full functionality');
-            console.error('🔗 Example: mongodb+srv://username:password@cluster.mongodb.net/dbname');
-            process.exit(1);
-        }
-
+        // Connect to MongoDB - environment variable already validated
         console.log('\n🔄 Connecting to MongoDB...');
-        console.log(`📍 Database: ${process.env.MONGO_DB_NAME || 'smartcampus'}`);
+        console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
         
         await mongoose.connect(process.env.MONGO_URI, {
             serverSelectionTimeoutMS: 30000,
             socketTimeoutMS: 45000,
             connectTimeoutMS: 30000,
             maxPoolSize: 10,
+            minPoolSize: 2,
+            retryWrites: true,
+            w: 'majority'
         });
         
         console.log('✅ MongoDB Connected Successfully!');
         console.log(`📍 Database: ${mongoose.connection.name}`);
+        console.log(`📍 Host: ${mongoose.connection.host}`);
         
         // Initialize Super Admin for deployment
-        if (process.env.NODE_ENV === 'production' || process.env.AUTO_CREATE_ADMIN === 'true') {
-            console.log('\n🚀 Deployment: Initializing Super Admin...');
-            try {
-                const bcrypt = require('bcryptjs');
-                const User = require('./models/User');
+        console.log('\n🚀 Initializing Super Admin...');
+        try {
+            const bcrypt = require('bcryptjs');
+            const User = require('./models/User');
+            
+            const existingAdmin = await User.findOne({ role: 'super_admin' });
+            if (!existingAdmin) {
+                // Use environment variables for credentials (already validated)
+                const adminEmail = process.env.SUPER_ADMIN_EMAIL;
+                const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
+                const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
+                const adminPhone = process.env.SUPER_ADMIN_PHONE || '';
                 
-                const existingAdmin = await User.findOne({ role: 'super_admin' });
-                if (!existingAdmin) {
-                    // Use environment variables for credentials
-                    const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@school.local';
-                    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'ChangeMe123!';
-                    const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
-                    
-                    const hashedPassword = await bcrypt.hash(adminPassword, 12);
-                    const superAdmin = new User({
-                        name: adminName,
-                        email: adminEmail,
-                        password: hashedPassword,
-                        role: 'super_admin',
-                        isApproved: true,
-                        emailVerified: true,
-                        isActive: true
-                    });
-                    await superAdmin.save();
-                    console.log('✅ Super Admin created: ' + adminEmail);
-                    console.log('📧 Email: ' + adminEmail);
-                    console.log('🔑 Password: [Configured via SUPER_ADMIN_PASSWORD env var]');
-                } else {
-                    console.log('✅ Super Admin already exists: ' + existingAdmin.email);
-                }
-            } catch (adminError) {
-                console.log(`⚠️  Admin creation failed: ${adminError.message}`);
+                const hashedPassword = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+                const superAdmin = new User({
+                    name: adminName,
+                    email: adminEmail,
+                    password: hashedPassword,
+                    phone: adminPhone,
+                    role: 'super_admin',
+                    isApproved: true,
+                    emailVerified: true,
+                    isActive: true
+                });
+                await superAdmin.save();
+                console.log('✅ Super Admin created successfully');
+                console.log(`📧 Email: ${adminEmail}`);
+                console.log(`👤 Name: ${adminName}`);
+            } else {
+                console.log('✅ Super Admin already exists');
+                console.log(`📧 Email: ${existingAdmin.email}`);
+                console.log(`👤 Name: ${existingAdmin.name}`);
             }
+        } catch (adminError) {
+            console.error(`❌ Admin creation failed: ${adminError.message}`);
+            // Don't exit - admin can be created via /setup endpoint
         }
         
         // Start server AFTER successful DB connection
-        app.listen(PORT, () => {
+        app.listen(PORT, '0.0.0.0', () => {
             console.log(`\n🚀 SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING`);
             console.log(`📍 Server: http://localhost:${PORT}`);
             console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
