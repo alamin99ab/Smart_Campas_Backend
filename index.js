@@ -330,9 +330,86 @@ Role: super_admin
         res.send(html);
     };
 
+    // Emergency reset endpoint - can unblock and reset super admin
+    const emergencyReset = async (req, res) => {
+        try {
+            const bcrypt = require('bcryptjs');
+            const User = require('./models/User');
+            
+            // Get reset key from query or body
+            const resetKey = req.query.key || req.body.key;
+            const validKey = process.env.EMERGENCY_RESET_KEY || 'emergency2024';
+            
+            if (resetKey !== validKey) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Invalid reset key'
+                });
+            }
+            
+            const newPassword = req.body.password || 'Admin@123456';
+            const hashedPassword = await bcrypt.hash(newPassword, 12);
+            
+            // Find and update super admin
+            const admin = await User.findOne({ role: 'super_admin' });
+            
+            if (!admin) {
+                // Create new if doesn't exist
+                const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@smartcampus.com';
+                const adminName = process.env.SUPER_ADMIN_NAME || 'Super Admin';
+                
+                const newAdmin = new User({
+                    name: adminName,
+                    email: adminEmail,
+                    password: hashedPassword,
+                    phone: process.env.SUPER_ADMIN_PHONE || '',
+                    role: 'super_admin',
+                    isApproved: true,
+                    emailVerified: true,
+                    isActive: true,
+                    isBlocked: false
+                });
+                
+                await newAdmin.save();
+                
+                return res.json({
+                    success: true,
+                    message: 'Super Admin created with password reset',
+                    credentials: {
+                        email: adminEmail,
+                        password: newPassword
+                    }
+                });
+            }
+            
+            // Update existing admin - unblock and reset password
+            admin.password = hashedPassword;
+            admin.isBlocked = false;
+            admin.loginAttempts = 0;
+            admin.isActive = true;
+            await admin.save();
+            
+            res.json({
+                success: true,
+                message: 'Super Admin unblocked and password reset',
+                credentials: {
+                    email: admin.email,
+                    password: newPassword
+                }
+            });
+        } catch (error) {
+            console.error('Emergency reset error:', error);
+            res.status(500).json({
+                success: false,
+                message: error.message
+            });
+        }
+    };
+
     app.get('/setup', setupPage);
     app.post('/api/auto-setup-admin', createSuperAdmin);
-    console.log('✅ Auto Admin Setup routes loaded - /setup and /api/auto-setup-admin');
+    app.post('/api/emergency-reset', emergencyReset);
+    console.log('✅ Auto Admin Setup routes loaded - /setup, /api/auto-setup-admin, /api/emergency-reset');
 } catch (error) {
     console.error('❌ Failed to load auto admin setup routes:', error.message);
 }
