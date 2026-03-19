@@ -3,6 +3,9 @@
  * Industry-level Teacher management for Smart Campus System
  */
 
+const mongoose = require('mongoose');
+
+// MongoDB Models
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
@@ -21,32 +24,43 @@ exports.getTeacherDashboard = async (req, res) => {
         const teacherId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        // Get subjects assigned to this teacher
-        const assignedSubjects = await Subject.find({
-            schoolCode,
-            'teachers.teacherId': teacherId,
-            'teachers.isActive': true
-        }).populate('teachers.teacherId', 'name email');
+        // For super_admin, use all data
+        const isSuperAdmin = req.user.role === 'super_admin';
+        const filter = isSuperAdmin ? {} : { schoolCode };
 
-        // Get classes where teacher is assigned
-        const assignedClasses = await Class.find({
-            schoolCode,
-            'subjects.teacherId': teacherId
-        }).populate('classTeacher', 'name email')
-          .populate('subjects.subjectId', 'subjectName subjectCode')
-          .populate('subjects.teacherId', 'name email');
+        let assignedSubjects = [];
+        let assignedClasses = [];
+        let todaySchedule = [];
 
-        // Get today's schedule
+        try {
+            // MongoDB with populate
+            assignedSubjects = await Subject.find({
+                ...filter,
+                'teachers.teacherId': teacherId,
+                'teachers.isActive': true
+            }).populate('teachers.teacherId', 'name email');
+
+            assignedClasses = await Class.find({
+                ...filter,
+                'subjects.teacherId': teacherId
+            }).populate('classTeacher', 'name email')
+              .populate('subjects.subjectId', 'subjectName subjectCode')
+              .populate('subjects.teacherId', 'name email');
+
+            const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+            todaySchedule = await Routine.find({
+                ...filter,
+                'schedule.day': today,
+                'schedule.periods.teacherId': teacherId
+            }).populate('classId', 'className section')
+              .populate('schedule.periods.subjectId', 'subjectName')
+              .populate('schedule.periods.teacherId', 'name');
+        } catch (dbError) {
+            console.error('Teacher dashboard data fetch error:', dbError.message);
+        }
+
         const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-        const Routine = require('../models/Routine');
-        const todaySchedule = await Routine.find({
-            schoolCode,
-            'schedule.day': today,
-            'schedule.periods.teacherId': teacherId
-        }).populate('classId', 'className section')
-          .populate('schedule.periods.subjectId', 'subjectName')
-          .populate('schedule.periods.teacherId', 'name');
-
+        
         res.status(200).json({
             success: true,
             data: {
@@ -56,12 +70,12 @@ exports.getTeacherDashboard = async (req, res) => {
                 summary: {
                     totalSubjects: assignedSubjects.length,
                     totalClasses: assignedClasses.length,
-                    todayPeriods: todaySchedule.reduce((acc, routine) => {
-                        const daySchedule = routine.schedule.find(s => s.day === today);
+                    todayPeriods: Array.isArray(todaySchedule) ? todaySchedule.reduce((acc, routine) => {
+                        const daySchedule = routine.schedule?.find(s => s.day === today);
                         return acc + (daySchedule ? daySchedule.periods.filter(p => 
-                            p.teacherId.toString() === teacherId.toString() && !p.isBreak
+                            p.teacherId?.toString() === teacherId.toString() && !p.isBreak
                         ).length : 0);
-                    }, 0)
+                    }, 0) : 0
                 }
             }
         });

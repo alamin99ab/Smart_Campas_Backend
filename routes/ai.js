@@ -4,6 +4,7 @@
  */
 
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 
 // Import controllers
@@ -28,21 +29,21 @@ router.use(protect);
 router.post('/analyze-performance',
     checkFeatureAccess('ai'),
     authorize(['teacher', 'principal']),
-    analyzeStudentPerformance
+    aiController.analyzeStudentPerformance
 );
 
 // Predict attendance patterns (Teacher, Principal)
 router.post('/predict-attendance',
     checkFeatureAccess('ai'),
     authorize(['teacher', 'principal']),
-    predictAttendancePatterns
+    aiController.predictAttendancePatterns
 );
 
 // Predict student success (Teacher, Principal)
 router.post('/predict-success',
     checkFeatureAccess('ai'),
     authorize(['teacher', 'principal']),
-    predictStudentSuccess
+    aiController.predictStudentSuccess
 );
 
 /**
@@ -53,21 +54,21 @@ router.post('/predict-success',
 router.post('/generate-questions',
     checkFeatureAccess('ai'),
     authorize(['teacher', 'principal']),
-    generateExamQuestions
+    aiController.generateExamQuestions
 );
 
 // Assist with grading (Teacher only)
 router.post('/assist-grading',
     checkFeatureAccess('ai'),
     authorize('teacher'),
-    assistGrading
+    aiController.assistGrading
 );
 
 // Detect plagiarism (Teacher only)
 router.post('/detect-plagiarism',
     checkFeatureAccess('ai'),
     authorize('teacher'),
-    detectPlagiarism
+    aiController.detectPlagiarism
 );
 
 /**
@@ -78,14 +79,14 @@ router.post('/detect-plagiarism',
 router.post('/generate-learning-path',
     checkFeatureAccess('ai'),
     authorize(['student', 'teacher', 'principal']),
-    generateLearningPath
+    aiController.generateLearningPath
 );
 
 // Recommend content (Student, Teacher)
 router.post('/recommend-content',
     checkFeatureAccess('ai'),
     authorize(['student', 'teacher']),
-    recommendContent
+    aiController.recommendContent
 );
 
 /**
@@ -96,7 +97,7 @@ router.post('/recommend-content',
 router.post('/student-support',
     checkFeatureAccess('ai'),
     authorize('student'),
-    processStudentQuery
+    aiController.processStudentQuery
 );
 
 /**
@@ -107,7 +108,7 @@ router.post('/student-support',
 router.post('/generate-report',
     checkFeatureAccess('ai'),
     authorize(['principal', 'super_admin']),
-    generateReport
+    aiController.generateReport
 );
 
 /**

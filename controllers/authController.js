@@ -1,26 +1,10 @@
 // controllers/authController.js
-// MODIFIED: Support for both MongoDB and Mock Database
 const mongoose = require('mongoose');
 
-// Dynamic database check - returns models based on current connection state
-const getModels = () => {
-    const useMockDB = mongoose.connection.readyState !== 1;
-    if (useMockDB) {
-        const mockDB = require('../mock-db-controller');
-        return {
-            User: mockDB.User,
-            School: mockDB.School,
-            AuditLog: mockDB.AuditLog,
-            mockDB: mockDB.mockDB
-        };
-    }
-    return {
-        User: require('../models/User'),
-        School: require('../models/School'),
-        AuditLog: require('../models/AuditLog'),
-        mockDB: null
-    };
-};
+// MongoDB Models
+const User = require('../models/User');
+const School = require('../models/School');
+const AuditLog = require('../models/AuditLog');
 
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -112,9 +96,6 @@ const createAuditLog = async (userId, action, details, req) => {
 exports.registerUser = async (req, res) => {
     const { name, email, password, role, schoolName, schoolCode, phone } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
-
-    // Get models dynamically
-    const { User, School, AuditLog } = getModels();
 
     try {
         if (!name || !email || !password || !role) {
@@ -256,9 +237,6 @@ exports.loginUser = async (req, res) => {
     const { email, password, twoFactorToken } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
 
-    // Get models dynamically based on database state
-    const { User, School, AuditLog, mockDB } = getModels();
-
     try {
         if (!email || !password) {
             return res.status(400).json({ 
@@ -267,33 +245,10 @@ exports.loginUser = async (req, res) => {
             });
         }
 
-        // Use appropriate query based on database type
-        let user;
-        let mockDBReference = mockDB;
-        const useMockDB = mongoose.connection.readyState !== 1;
-        
-        if (useMockDB) {
-            // Mock database query - get full user data
-            user = await User.findOne({ email });
-            if (user) {
-                // Add methods that would normally be on Mongoose document
-                user.comparePassword = async function(candidatePassword) {
-                    return await bcrypt.compare(candidatePassword, this.password);
-                };
-                user.save = async function() {
-                    const index = mockDBReference.users.findIndex(u => u._id === this._id);
-                    if (index !== -1) {
-                        mockDBReference.users[index] = { ...this, updatedAt: new Date() };
-                    }
-                    return this;
-                };
-            }
-        } else {
-            // MongoDB query with select
-            user = await User.findOne({ email }).select(
-                '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices'
-            );
-        }
+        // MongoDB query - get user with password field for verification
+        const user = await User.findOne({ email }).select(
+            '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices'
+        );
 
         if (!user) {
             return res.status(401).json({ 

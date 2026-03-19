@@ -3,6 +3,9 @@
  * Complete parent dashboard implementation
  */
 
+const mongoose = require('mongoose');
+
+// MongoDB Models
 const User = require('../models/User');
 const Student = require('../models/Student');
 const Attendance = require('../models/AdvancedAttendance');
@@ -20,81 +23,95 @@ exports.getParentDashboard = async (req, res) => {
         const parentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        // Get children of this parent
-        const children = await Student.find({ 
-            parentId, 
-            schoolCode,
-            isActive: true 
-        }).populate('classId', 'className')
-          .populate('sectionId', 'sectionName');
+        let children = [];
+        let attendanceSummary = [];
+        let resultsSummary = [];
+        let feeSummary = [];
 
-        // Get children's attendance summary
-        const attendanceSummary = await Promise.all(
-            children.map(async (child) => {
-                const attendance = await Attendance.find({
-                    studentId: child._id,
-                    schoolCode
-                }).sort({ date: -1 }).limit(30);
-                
-                const presentCount = attendance.filter(a => a.status === 'present').length;
-                const totalCount = attendance.length;
-                const percentage = totalCount > 0 ? (presentCount / totalCount) * 100 : 0;
+        // MongoDB with populate
+        try {
+            children = await Student.find({ 
+                parentId, 
+                schoolCode,
+                isActive: true 
+            }).populate('classId', 'className')
+              .populate('sectionId', 'sectionName');
 
-                return {
-                    studentId: child._id,
-                    studentName: child.name,
-                    attendancePercentage: Math.round(percentage),
-                    lastAttendance: attendance[0] || null
-                };
-            })
-        );
+            attendanceSummary = await Promise.all(
+                children.map(async (child) => {
+                    const attendance = await Attendance.find({
+                        studentId: child._id,
+                        schoolCode
+                    }).sort({ date: -1 }).limit(30);
+                    
+                    const presentCount = attendance.filter(a => a.status === 'present').length;
+                    const totalCount = attendance.length;
+                    const percentage = totalCount > 0 ? (presentCount / totalCount) * 100 : 0;
 
-        // Get children's recent results
-        const resultsSummary = await Promise.all(
-            children.map(async (child) => {
-                const results = await Result.find({
-                    studentId: child._id,
-                    schoolCode
-                }).sort({ createdAt: -1 }).limit(5);
+                    return {
+                        studentId: child._id,
+                        studentName: child.name,
+                        attendancePercentage: Math.round(percentage),
+                        lastAttendance: attendance[0] || null
+                    };
+                })
+            );
 
-                return {
-                    studentId: child._id,
-                    studentName: child.name,
-                    recentResults: results
-                };
-            })
-        );
+            resultsSummary = await Promise.all(
+                children.map(async (child) => {
+                    const results = await Result.find({
+                        studentId: child._id,
+                        schoolCode
+                    }).sort({ createdAt: -1 }).limit(5);
 
-        // Get fee status for children
-        const feeSummary = await Promise.all(
-            children.map(async (child) => {
-                const fees = await Fee.find({
-                    studentId: child._id,
-                    schoolCode
-                }).sort({ dueDate: -1 }).limit(3);
+                    return {
+                        studentId: child._id,
+                        studentName: child.name,
+                        recentResults: results
+                    };
+                })
+            );
 
-                const totalDue = fees.reduce((sum, fee) => sum + (fee.amount - fee.paidAmount), 0);
-                const upcomingFees = fees.filter(fee => fee.status === 'unpaid');
+            feeSummary = await Promise.all(
+                children.map(async (child) => {
+                    const fees = await Fee.find({
+                        studentId: child._id,
+                        schoolCode
+                    }).sort({ dueDate: -1 }).limit(3);
 
-                return {
-                    studentId: child._id,
-                    studentName: child.name,
-                    totalDue,
-                    upcomingFees: upcomingFees.length,
-                    nextDueDate: upcomingFees[0]?.dueDate || null
-                };
-            })
-        );
+                    const totalDue = fees.reduce((sum, fee) => sum + ((fee.amountDue || fee.amount || 0) - (fee.amountPaid || 0)), 0);
+                    const upcomingFees = fees.filter(fee => fee.status === 'unpaid');
+
+                    return {
+                        studentId: child._id,
+                        studentName: child.name,
+                        totalDue,
+                        upcomingFees: upcomingFees.length,
+                        nextDueDate: upcomingFees[0]?.dueDate || null
+                    };
+                })
+            );
+        } catch (dbError) {
+            console.error('Parent dashboard DB error:', dbError.message);
+        }
 
         // Get notices relevant to parents
-        const notices = await Notice.find({
-            schoolCode,
-            isActive: true,
-            $or: [
-                { targetRoles: { $in: ['parent'] } },
-                { targetRoles: { $size: 0 } }
-            ]
-        }).sort({ createdAt: -1 }).limit(10);
+        let notices = [];
+        try {
+            // MongoDB
+            const Notice = require('../models/Notice');
+            notices = await Notice.find({
+                schoolCode,
+                isActive: true,
+                $or: [
+                    { targetRoles: { $in: ['parent'] } },
+                    { targetRoles: { $size: 0 } }
+                ]
+            }).sort({ createdAt: -1 }).limit(10);
+        }
+        } catch (noticeError) {
+            console.error('Notice fetch error:', noticeError.message);
+        }
 
         const dashboard = {
             children: children.map(child => ({

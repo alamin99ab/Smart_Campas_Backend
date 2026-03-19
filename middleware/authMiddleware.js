@@ -12,16 +12,6 @@ const getJwtSecret = () => {
     return secret || 'dev_secret_key_32_chars_minimum_for_development_only';
 };
 
-// Get User model dynamically based on current database state
-const getUserModel = () => {
-    const useMockDB = mongoose.connection.readyState !== 1;
-    if (useMockDB) {
-        const mockDB = require('../mock-db-controller');
-        return mockDB.User;
-    }
-    return require('../models/User');
-};
-
 const protect = async (req, res, next) => {
     let token;
 
@@ -39,8 +29,8 @@ const protect = async (req, res, next) => {
     try {
         const decoded = jwt.verify(token, getJwtSecret());
         
-        // Get User model dynamically
-        const User = getUserModel();
+        // Get User from MongoDB
+        const User = require('../models/User');
         const user = await User.findById(decoded.id);
 
         if (!user) {

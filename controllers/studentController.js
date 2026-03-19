@@ -4,6 +4,9 @@
  * Students can only view notices and check their results
  */
 
+const mongoose = require('mongoose');
+
+// MongoDB Models
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Notice = require('../models/Notice');
@@ -21,10 +24,57 @@ exports.getStudentDashboard = async (req, res) => {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        // Get student details with class information
-        const student = await User.findById(studentId)
-            .populate('classId', 'className section classLevel')
-            .select('name rollNumber email phone classId');
+        let student = null;
+        let notices = [];
+        let results = [];
+        let attendanceRecords = [];
+        let todayRoutine = null;
+
+        try {
+            // MongoDB with populate
+            student = await User.findById(studentId)
+                .populate('classId', 'className section classLevel')
+                .select('name rollNumber email phone classId');
+
+            notices = await Notice.find({
+                schoolCode,
+                targetAudience: { $in: ['student', 'all'] },
+                isActive: true
+            })
+            .sort({ createdAt: -1 })
+            .limit(5);
+
+            results = await Result.find({
+                schoolCode,
+                studentId,
+                isActive: true
+            })
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('examType')
+            .sort({ examDate: -1 })
+            .limit(5);
+
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            
+            attendanceRecords = await Attendance.find({
+                schoolCode,
+                'attendance.studentId': studentId,
+                date: { $gte: thirtyDaysAgo }
+            });
+
+            const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+            todayRoutine = await Routine.findOne({
+                schoolCode,
+                classId: student?.classId?._id,
+                'schedule.day': today,
+                isActive: true
+            })
+            .populate('schedule.periods.subjectId', 'subjectName')
+            .populate('schedule.periods.teacherId', 'name');
+        } catch (dbError) {
+            console.error('Student dashboard data fetch error:', dbError.message);
+        }
 
         if (!student) {
             return res.status(404).json({
@@ -33,68 +83,35 @@ exports.getStudentDashboard = async (req, res) => {
             });
         }
 
-        // Get recent notices
-        const notices = await Notice.find({
-            schoolCode,
-            targetAudience: { $in: ['student', 'all'] },
-            isActive: true
-        })
-        .sort({ createdAt: -1 })
-        .limit(5);
-
-        // Get recent results
-        const results = await Result.find({
-            schoolCode,
-            studentId,
-            isActive: true
-        })
-        .populate('subjectId', 'subjectName subjectCode')
-        .populate('examType')
-        .sort({ examDate: -1 })
-        .limit(5);
-
-        // Get attendance summary (last 30 days)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // Calculate attendance summary
+        const studentIdStr = studentId.toString();
+        let present = 0, absent = 0, late = 0;
         
-        const attendanceRecords = await Attendance.find({
-            schoolCode,
-            'attendance.studentId': studentId,
-            date: { $gte: thirtyDaysAgo }
+        attendanceRecords.forEach(record => {
+            const att = record.attendance?.find(a => a.studentId?.toString() === studentIdStr);
+            if (att) {
+                if (att.status === 'Present') present++;
+                else if (att.status === 'Absent') absent++;
+                else if (att.status === 'Late') late++;
+            }
         });
 
         const attendanceSummary = {
             total: attendanceRecords.length,
-            present: attendanceRecords.filter(record => 
-                record.attendance.some(att => 
-                    att.studentId.toString() === studentId.toString() && 
-                    att.status === 'Present'
-                )
-            ).length,
-            absent: attendanceRecords.filter(record => 
-                record.attendance.some(att => 
-                    att.studentId.toString() === studentId.toString() && 
-                    att.status === 'Absent'
-                )
-            ).length,
-            late: attendanceRecords.filter(record => 
-                record.attendance.some(att => 
-                    att.studentId.toString() === studentId.toString() && 
-                    att.status === 'Late'
-                )
-            ).length
+            present,
+            absent,
+            late,
+            percentage: attendanceRecords.length > 0 
+                ? Math.round((present / attendanceRecords.length) * 100) 
+                : 0
         };
 
-        // Get today's routine
+        // Get today's schedule from routine
         const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-        const todayRoutine = await Routine.findOne({
-            schoolCode,
-            classId: student.classId._id,
-            'schedule.day': today,
-            isActive: true
-        })
-        .populate('schedule.periods.subjectId', 'subjectName')
-        .populate('schedule.periods.teacherId', 'name');
+        let todaySchedule = null;
+        if (todayRoutine?.schedule) {
+            todaySchedule = todayRoutine.schedule.find(s => s.day === today);
+        }
 
         res.status(200).json({
             success: true,
@@ -102,7 +119,8 @@ exports.getStudentDashboard = async (req, res) => {
                 student: {
                     name: student.name,
                     rollNumber: student.rollNumber,
-                    class: student.classId
+                    email: student.email,
+                    class: student.classId || student.class
                 },
                 notices,
                 results,
@@ -112,7 +130,7 @@ exports.getStudentDashboard = async (req, res) => {
                         ? Math.round((attendanceSummary.present / attendanceSummary.total) * 100)
                         : 0
                 },
-                todayRoutine: todayRoutine ? todayRoutine.schedule.find(s => s.day === today) : null
+                todayRoutine: todaySchedule
             }
         });
 

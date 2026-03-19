@@ -627,7 +627,64 @@ app.use((error, req, res, next) => {
 // Database connection and server start
 const startServer = async () => {
     try {
-        // Start server first
+        // Connect to MongoDB FIRST before starting server
+        if (!process.env.MONGO_URI || process.env.MONGO_URI === 'mongodb+srv://username:password@cluster.mongodb.net/smartcampus?retryWrites=true&w=majority') {
+            console.error('❌ No MONGO_URI provided in .env file');
+            console.error('💡 Set MONGO_URI in .env for full functionality');
+            console.error('🔗 Example: mongodb+srv://username:password@cluster.mongodb.net/dbname');
+            process.exit(1);
+        }
+
+        console.log('\n🔄 Connecting to MongoDB...');
+        console.log(`📍 Database: ${process.env.MONGO_DB_NAME || 'smartcampus'}`);
+        
+        await mongoose.connect(process.env.MONGO_URI, {
+            serverSelectionTimeoutMS: 30000,
+            socketTimeoutMS: 45000,
+            connectTimeoutMS: 30000,
+            maxPoolSize: 10,
+        });
+        
+        console.log('✅ MongoDB Connected Successfully!');
+        console.log(`📍 Database: ${mongoose.connection.name}`);
+        
+        // Initialize Super Admin for deployment
+        if (process.env.NODE_ENV === 'production' || process.env.AUTO_CREATE_ADMIN === 'true') {
+            console.log('\n🚀 Deployment: Initializing Super Admin...');
+            try {
+                const bcrypt = require('bcryptjs');
+                const User = require('./models/User');
+                
+                const existingAdmin = await User.findOne({ role: 'super_admin' });
+                if (!existingAdmin) {
+                    // Use environment variables for credentials
+                    const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@school.local';
+                    const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'ChangeMe123!';
+                    const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
+                    
+                    const hashedPassword = await bcrypt.hash(adminPassword, 12);
+                    const superAdmin = new User({
+                        name: adminName,
+                        email: adminEmail,
+                        password: hashedPassword,
+                        role: 'super_admin',
+                        isApproved: true,
+                        emailVerified: true,
+                        isActive: true
+                    });
+                    await superAdmin.save();
+                    console.log('✅ Super Admin created: ' + adminEmail);
+                    console.log('📧 Email: ' + adminEmail);
+                    console.log('🔑 Password: [Configured via SUPER_ADMIN_PASSWORD env var]');
+                } else {
+                    console.log('✅ Super Admin already exists: ' + existingAdmin.email);
+                }
+            } catch (adminError) {
+                console.log(`⚠️  Admin creation failed: ${adminError.message}`);
+            }
+        }
+        
+        // Start server AFTER successful DB connection
         app.listen(PORT, () => {
             console.log(`\n🚀 SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING`);
             console.log(`📍 Server: http://localhost:${PORT}`);
@@ -647,75 +704,9 @@ const startServer = async () => {
             console.log(`\n🎯 READY FOR COMPLETE WORKFLOW TESTING!`);
         });
         
-        // Try to connect to MongoDB if URI is provided (non-blocking)
-        if (process.env.MONGO_URI && process.env.MONGO_URI !== 'mongodb+srv://username:password@cluster.mongodb.net/smartcampus?retryWrites=true&w=majority') {
-            console.log('\n🔄 Connecting to MongoDB...');
-            try {
-                await mongoose.connect(process.env.MONGO_URI, {
-                    serverSelectionTimeoutMS: 10000,
-                    socketTimeoutMS: 45000,
-                    connectTimeoutMS: 10000,
-                });
-                console.log('✅ Connected to MongoDB - Full Features Enabled');
-                console.log(`📍 Database: ${mongoose.connection.name}`);
-                
-                // Initialize Super Admin for deployment
-                if (process.env.NODE_ENV === 'production' || process.env.AUTO_CREATE_ADMIN === 'true') {
-                    console.log('\n🚀 Deployment: Initializing Super Admin...');
-                    try {
-                        const bcrypt = require('bcryptjs');
-                        const User = require('./models/User');
-                        
-                        const existingAdmin = await User.findOne({ role: 'super_admin' });
-                        if (!existingAdmin) {
-                            // Use environment variables for credentials
-                            const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@school.local';
-                            const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'ChangeMe123!';
-                            const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
-                            
-                            const hashedPassword = await bcrypt.hash(adminPassword, 12);
-                            const superAdmin = new User({
-                                name: adminName,
-                                email: adminEmail,
-                                password: hashedPassword,
-                                role: 'super_admin',
-                                isApproved: true,
-                                emailVerified: true,
-                                isActive: true
-                            });
-                            await superAdmin.save();
-                            console.log('✅ Super Admin created: ' + adminEmail);
-                            console.log('📧 Email: ' + adminEmail);
-                            console.log('🔑 Password: [Configured via SUPER_ADMIN_PASSWORD env var]');
-                        } else {
-                            console.log('✅ Super Admin already exists: ' + existingAdmin.email);
-                        }
-                    } catch (adminError) {
-                        console.log(`⚠️  Admin creation failed: ${adminError.message}`);
-                    }
-                }
-                
-            } catch (dbError) {
-                console.log('⚠️  MongoDB connection failed, continuing without database:', dbError.message);
-                console.log('📝 Some features may be limited without database');
-                console.log('💡 Check your MONGO_URI in .env file');
-                
-                // Initialize mock database for testing without MongoDB
-                const { initializeMockDB } = require('./mock-db-controller');
-                await initializeMockDB();
-            }
-        } else {
-            console.log('\n⚠️  No valid MONGO_URI provided, running without database');
-            console.log('📝 Set MONGO_URI in .env for full functionality');
-            console.log('🔗 Example: mongodb+srv://username:password@cluster.mongodb.net/dbname');
-            
-            // Initialize mock database for testing without MongoDB
-            const { initializeMockDB } = require('./mock-db-controller');
-            await initializeMockDB();
-        }
-        
     } catch (error) {
         console.error('❌ Failed to start server:', error.message);
+        console.error('💡 MongoDB connection failed. Check your MONGO_URI in .env file');
         process.exit(1);
     }
 };

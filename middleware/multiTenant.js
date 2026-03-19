@@ -3,24 +3,25 @@
  * Enterprise-level data isolation for SaaS architecture
  */
 
-const School = require('../models/School');
-const User = require('../models/User');
+const mongoose = require('mongoose');
 
 /**
  * Middleware to ensure proper tenant isolation
- * Validates schoolId and sets tenant context
+ * Validates schoolId/schoolCode and sets tenant context
  */
 exports.ensureTenantIsolation = async (req, res, next) => {
     try {
+        const School = require('../models/School');
+        
         // Skip for super admin routes
         if (req.user && req.user.role === 'super_admin') {
             return next();
         }
 
-        // Get schoolId from authenticated user
-        const schoolId = req.user?.schoolId;
+        // Get schoolCode from authenticated user (JWT contains schoolCode)
+        const schoolCode = req.user?.schoolCode;
         
-        if (!schoolId) {
+        if (!schoolCode) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: No school context found'
@@ -29,7 +30,7 @@ exports.ensureTenantIsolation = async (req, res, next) => {
 
         // Verify school exists and is active
         const school = await School.findOne({ 
-            _id: schoolId, 
+            $or: [{ _id: schoolCode }, { schoolCode }],
             isActive: true 
         });
 
@@ -40,8 +41,9 @@ exports.ensureTenantIsolation = async (req, res, next) => {
             });
         }
 
-        // Check subscription status
-        if (school.subscription.status !== 'active') {
+        // Check subscription status (handle both formats)
+        const subscriptionStatus = school.subscription?.status || school.status;
+        if (subscriptionStatus !== 'active') {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: School subscription not active'
@@ -50,15 +52,15 @@ exports.ensureTenantIsolation = async (req, res, next) => {
 
         // Set tenant context in request
         req.tenant = {
-            schoolId,
+            schoolId: school._id,
             schoolCode: school.schoolCode,
             schoolName: school.schoolName,
-            subscription: school.subscription,
-            features: school.features
+            subscription: school.subscription || { status: 'active' },
+            features: school.features || {}
         };
 
-        // Add schoolId filter to all queries
-        req.queryFilter = { schoolId };
+        // Add schoolCode filter to all queries (more reliable than schoolId)
+        req.queryFilter = { schoolCode };
 
         next();
     } catch (error) {

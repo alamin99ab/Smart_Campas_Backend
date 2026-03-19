@@ -1,7 +1,7 @@
 /**
  * 🏢 SUPER ADMIN CONTROLLER
  * Industry-level Super Admin management for Smart Campus System
- * MODIFIED: Added Mock Database support for full functionality
+ * MongoDB only - Mock DB removed
  */
 
 const mongoose = require('mongoose');
@@ -9,32 +9,11 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 
-// Determine if we should use mock database
-const useMockDB = mongoose.connection.readyState !== 1;
-
-// Import models (real or mock)
-let School, User, Subscription, AuditLog;
-let mockDBReference; // Store reference to mockDB for updates
-
-if (useMockDB) {
-  console.log('📦 Using Mock Database for Super Admin Controller');
-  const mockDB = require('../mock-db-controller');
-  School = mockDB.School;
-  User = mockDB.User;
-  AuditLog = mockDB.AuditLog;
-  mockDBReference = mockDB.mockDB; // Get reference to the actual mockDB object
-  // Subscription uses mock School
-  Subscription = {
-    find: async () => [],
-    countDocuments: async () => 0,
-    aggregate: async () => []
-  };
-} else {
-  School = require('../models/School');
-  User = require('../models/User');
-  Subscription = require('../models/Subscription');
-  AuditLog = require('../models/AuditLog');
-}
+// Import MongoDB models
+const School = require('../models/School');
+const User = require('../models/User');
+const Subscription = require('../models/Subscription');
+const AuditLog = require('../models/AuditLog');
 
 // Helper functions for token generation
 // Validate JWT configuration at startup
@@ -329,61 +308,72 @@ exports.superAdminLogin = async (req, res) => {
  */
 exports.getSuperAdminDashboard = async (req, res) => {
     try {
-        console.log('📊 Dashboard: Starting request...');
-        let dashboardData;
+        console.log('📊 Dashboard: Starting MongoDB request...');
         
-        if (useMockDB) {
-            console.log('📊 Dashboard: Using Mock Database');
-            // Mock database - use simple queries
-            const totalSchools = await School.countDocuments();
-            console.log('📊 Dashboard: Total schools:', totalSchools);
-            
-            const totalUsers = await User.countDocuments();
-            console.log('📊 Dashboard: Total users:', totalUsers);
-            
-            const totalPrincipals = await User.countDocuments({ role: 'principal' });
-            console.log('📊 Dashboard: Total principals:', totalPrincipals);
-            
-            const totalTeachers = await User.countDocuments({ role: 'teacher' });
-            console.log('📊 Dashboard: Total teachers:', totalTeachers);
-            
-            const totalStudents = await User.countDocuments({ role: 'student' });
-            console.log('📊 Dashboard: Total students:', totalStudents);
-            
-            dashboardData = {
-                overview: {
-                    totalSchools,
-                    activeSchools: totalSchools,
-                    totalPrincipals,
-                    totalTeachers,
-                    totalStudents,
-                    activeStudents: totalStudents,
-                    totalUsers
+        // MongoDB queries - get all data
+        const schools = await School.find({});
+        const users = await User.find({});
+        
+        // Calculate stats
+        const activeSchools = schools.filter(s => s.status === 'Active').length;
+        const inactiveSchools = schools.length - activeSchools;
+        
+        // Role distribution
+        const roleStats = await User.aggregate([
+            { $group: { _id: '$role', count: { $sum: 1 } } }
+        ]);
+        
+        const totalPrincipals = roleStats.find(r => r._id === 'principal')?.count || 0;
+        const totalTeachers = roleStats.find(r => r._id === 'teacher')?.count || 0;
+        const totalStudents = roleStats.find(r => r._id === 'student')?.count || 0;
+        const totalParents = roleStats.find(r => r._id === 'parent')?.count || 0;
+        
+        // Recent schools
+        const recentSchools = await School.find({})
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .populate('principalId', 'name email');
+        
+        // Subscription stats
+        const subscriptionBreakdown = {
+            free: schools.filter(s => (s.subscriptionType || 'Free') === 'Free').length,
+            basic: schools.filter(s => s.subscriptionType === 'Basic').length,
+            pro: schools.filter(s => s.subscriptionType === 'Pro').length,
+            premium: schools.filter(s => s.subscriptionType === 'Premium').length
+        };
+        
+        const memUsage = process.memoryUsage();
+        
+        const dashboardData = {
+            overview: {
+                totalSchools: schools.length,
+                activeSchools,
+                inactiveSchools,
+                totalUsers: users.length,
+                totalPrincipals,
+                totalTeachers,
+                totalStudents,
+                totalParents
+            },
+            schools: {
+                list: schools,
+                recent: recentSchools,
+                breakdown: subscriptionBreakdown
+            },
+            roleStats,
+            systemHealth: {
+                uptime: process.uptime(),
+                memoryUsage: {
+                    rss: Math.round(memUsage.rss / 1024 / 1024) + ' MB',
+                    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + ' MB'
                 },
-                recentLogins: [],
-                recentActivity: [],
-                subscriptionStats: [],
-                roleStats: [
-                    { _id: 'super_admin', count: 1 },
-                    { _id: 'principal', count: totalPrincipals },
-                    { _id: 'teacher', count: totalTeachers },
-                    { _id: 'student', count: totalStudents }
-                ],
-                systemHealth: {
-                    uptime: process.uptime(),
-                    memoryUsage: process.memoryUsage(),
-                    nodeVersion: process.version,
-                    platform: process.platform,
-                    database: 'Mock Database (In-Memory)'
-                },
-                securityEvents: []
-            };
-            console.log('📊 Dashboard: Mock data prepared');
-        } else {
-            // MongoDB queries...
-        }
+                nodeVersion: process.version,
+                platform: process.platform,
+                database: 'MongoDB'
+            }
+        };
 
-        console.log('📊 Dashboard: Sending response');
+        console.log('📊 Dashboard: MongoDB data prepared, sending response');
         res.status(200).json({ success: true, data: dashboardData });
 
     } catch (error) {
@@ -516,90 +506,46 @@ exports.createSchool = async (req, res) => {
             });
         }
 
-        // Create school - handle both MongoDB and Mock DB
-        let school;
-        if (useMockDB) {
-            school = await School.create({
-                schoolName,
-                schoolCode,
-                address,
-                phone,
-                email,
-                status: 'Active',
-                subscriptionType: 'Premium',
-                maxStudents: 2000,
-                isActive: true
-            });
-        } else {
-            school = new School({
-                schoolName,
-                schoolCode,
-                address,
-                phone,
-                email,
-                status: 'Active',
-                subscriptionType: 'Premium',
-                maxStudents: 2000,
-                isActive: true
-            });
-            await school.save();
-        }
+        // Create school in MongoDB
+        const school = new School({
+            schoolName,
+            schoolCode,
+            address,
+            phone,
+            email,
+            status: 'Active',
+            subscriptionType: 'Premium',
+            maxStudents: 2000,
+            isActive: true
+        });
+        await school.save();
 
-        // Create principal account - handle both MongoDB and Mock DB
+        // Create principal account in MongoDB
         const bcrypt = require('bcryptjs');
         const salt = await bcrypt.genSalt(12);
         const passwordToHash = principalPassword || 'Principal@123';
         const hashedPassword = await bcrypt.hash(passwordToHash, salt);
 
-        let principal;
-        if (useMockDB) {
-            principal = await User.create({
-                name: principalName,
-                email: principalEmail,
-                password: hashedPassword,
-                role: 'principal',
-                phone: principalPhone,
-                schoolCode: schoolCode,
-                isActive: true,
-                isEmailVerified: true,
-                permissions: [
-                    'manage_students', 'manage_teachers', 'manage_classes',
-                    'manage_subjects', 'manage_routine', 'view_reports',
-                    'manage_attendance', 'manage_results'
-                ]
-            });
-        } else {
-            principal = new User({
-                name: principalName,
-                email: principalEmail,
-                password: hashedPassword,
-                role: 'principal',
-                phone: principalPhone,
-                schoolCode: schoolCode,
-                isActive: true,
-                isEmailVerified: true,
-                permissions: [
-                    'manage_students', 'manage_teachers', 'manage_classes',
-                    'manage_subjects', 'manage_routine', 'view_reports',
-                    'manage_attendance', 'manage_results'
-                ]
-            });
-            await principal.save();
-        }
+        const principal = new User({
+            name: principalName,
+            email: principalEmail,
+            password: hashedPassword,
+            role: 'principal',
+            phone: principalPhone,
+            schoolCode: schoolCode,
+            isActive: true,
+            isEmailVerified: true,
+            permissions: [
+                'manage_students', 'manage_teachers', 'manage_classes',
+                'manage_subjects', 'manage_routine', 'view_reports',
+                'manage_attendance', 'manage_results'
+            ]
+        });
+        await principal.save();
 
         // Update school with principal
         school.principalId = principal._id;
-        
-        // Save school update (handle both MongoDB and Mock DB)
-        if (!useMockDB) {
-            await school.save();
-        } else {
-            // For mock DB, school is already in the array, just update it
-            const schoolIndex = mockDBReference.schools.findIndex(s => s._id === school._id);
-            if (schoolIndex !== -1) {
-                mockDBReference.schools[schoolIndex] = school;
-            }
-        }
+        await school.save();
 
         // Log audit
         await AuditLog.create({

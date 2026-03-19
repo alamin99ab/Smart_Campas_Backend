@@ -1,8 +1,12 @@
+const mongoose = require('mongoose');
+
+// MongoDB Models
 const User = require('../models/User');
 const Student = require('../models/Student');
 const Attendance = require('../models/Attendance');
 const Fee = require('../models/Fee');
 const Notice = require('../models/Notice');
+const Class = require('../models/Class');
 
 exports.getOverview = async (req, res) => {
     try {
@@ -105,12 +109,62 @@ exports.getPrincipalDashboard = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
         
+        // For super_admin, get stats across all schools
+        const isSuperAdmin = req.user.role === 'super_admin';
+        const filter = isSuperAdmin ? {} : { schoolCode };
+        
+        // Get counts from database
+        let totalStudents = 0;
+        let totalTeachers = 0;
+        let totalClasses = 0;
+        let totalFeeCollected = 0;
+        let totalFeeDue = 0;
+        let activeNotices = 0;
+        
+        // MongoDB - use aggregation for accurate counts
+        try {
+            const [studentCount, teacherCount, classCount, feeStats, noticeCount] = await Promise.all([
+                Student.countDocuments({ ...filter, isActive: true }),
+                User.countDocuments({ ...filter, role: 'teacher', isActive: true }),
+                Class.countDocuments({ ...filter, isActive: true }),
+                Fee.aggregate([
+                    { $match: filter },
+                    {
+                        $group: {
+                            _id: null,
+                            totalCollected: { $sum: '$amountPaid' },
+                            totalDue: { $sum: { $subtract: ['$amountDue', '$amountPaid'] } }
+                        }
+                    }
+                ]),
+                Notice.countDocuments({ ...filter, isActive: true })
+            ]);
+            
+            totalStudents = studentCount || 0;
+            totalTeachers = teacherCount || 0;
+            totalClasses = classCount || 0;
+            totalFeeCollected = feeStats[0]?.totalCollected || 0;
+            totalFeeDue = feeStats[0]?.totalDue || 0;
+            activeNotices = noticeCount || 0;
+        } catch (dbError) {
+            console.error('Dashboard data fetch error:', dbError.message);
+            // Continue with zeros if DB query fails
+        }
+
         const dashboard = {
-            totalStudents: 0,
-            totalTeachers: 0,
-            totalClasses: 0,
-            attendanceRate: 0,
-            feeCollection: 0
+            totalStudents,
+            totalTeachers,
+            totalClasses,
+            totalFeeCollected,
+            totalFeeDue,
+            activeNotices,
+            feeCollectionRate: totalFeeDue > 0 
+                ? Math.round((totalFeeCollected / (totalFeeCollected + totalFeeDue)) * 100) 
+                : 100,
+            recentActivity: {
+                newStudentsThisMonth: 0,
+                newTeachersThisMonth: 0
+            }
         };
 
         res.status(200).json({
@@ -118,7 +172,8 @@ exports.getPrincipalDashboard = async (req, res) => {
             data: dashboard
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error('Principal dashboard error:', error);
+        res.status(500).json({ success: false, message: 'Server error: ' + error.message });
     }
 };
 
