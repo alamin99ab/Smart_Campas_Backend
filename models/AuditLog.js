@@ -12,6 +12,15 @@ const auditLogSchema = new mongoose.Schema({
         ref: 'User',
         default: undefined
     },
+    // For environment-based super admin
+    isEnvUser: {
+        type: Boolean,
+        default: false
+    },
+    envUserEmail: {
+        type: String,
+        default: null
+    },
     action: { 
         type: String, 
         required: true,

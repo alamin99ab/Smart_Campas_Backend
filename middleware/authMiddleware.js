@@ -44,6 +44,30 @@ const protect = async (req, res, next) => {
     try {
         const decoded = jwt.verify(token, getJwtSecret());
         
+        // ============================================
+        // Handle Super Admin from Environment Variables
+        // ============================================
+        if (decoded.isEnvBased && decoded.id === 'super_admin_env') {
+            // This is an env-based Super Admin
+            req.user = {
+                _id: 'super_admin_env',
+                id: 'super_admin_env',
+                email: process.env.SUPER_ADMIN_EMAIL,
+                name: process.env.SUPER_ADMIN_NAME || 'Super Admin',
+                role: 'super_admin',
+                schoolId: null,
+                schoolCode: 'SUPER_ADMIN',
+                isEnvBased: true,
+                isActive: true,
+                isApproved: true
+            };
+            // Add to request for AuditLog
+            req.isEnvUser = true;
+            req.envUserEmail = process.env.SUPER_ADMIN_EMAIL;
+            return next();
+        }
+        // ============================================
+        
         // Get User from MongoDB
         const User = require('../models/User');
         const user = await User.findById(decoded.id);

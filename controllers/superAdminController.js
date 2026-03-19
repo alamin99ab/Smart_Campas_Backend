@@ -15,6 +15,34 @@ const User = require('../models/User');
 const Subscription = require('../models/Subscription');
 const AuditLog = require('../models/AuditLog');
 
+// Helper function for AuditLog that handles env-based users
+const createAuditLog = async (userId, action, details, req) => {
+    try {
+        if (!AuditLog) return;
+        
+        // Check if this is an env-based user
+        const isEnvUser = userId === 'super_admin_env' || (req && req.isEnvUser);
+        
+        const logData = {
+            action,
+            details,
+            ip: req?.ip,
+            userAgent: req?.headers?.['user-agent']
+        };
+        
+        if (isEnvUser) {
+            logData.isEnvUser = true;
+            logData.envUserEmail = process.env.SUPER_ADMIN_EMAIL || 'super_admin@env';
+        } else {
+            logData.user = userId;
+        }
+        
+        await AuditLog.create(logData);
+    } catch (error) {
+        console.error('Audit log error:', error);
+    }
+};
+
 // Helper functions for token generation
 // Validate JWT configuration at startup
 const getJwtSecret = () => {

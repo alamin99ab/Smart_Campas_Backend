@@ -102,14 +102,27 @@ const createAuditLog = async (userId, action, details, req) => {
         // Use directly imported AuditLog model
         if (!AuditLog) return; // Skip audit logging if not available
         
-        await AuditLog.create({
-            user: userId,
+        // Check if this is an env-based user (super_admin_env)
+        const isEnvUser = userId === 'super_admin_env' || (req && req.isEnvUser);
+        
+        const logData = {
             action,
             details,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'],
-            deviceId: req.headers['x-device-id'] || null
-        });
+            ip: req?.ip,
+            userAgent: req?.headers?.['user-agent'],
+            deviceId: req?.headers?.['x-device-id'] || null
+        };
+        
+        if (isEnvUser) {
+            // For env-based super admin
+            logData.isEnvUser = true;
+            logData.envUserEmail = process.env.SUPER_ADMIN_EMAIL || 'super_admin@env';
+        } else {
+            // For regular database users
+            logData.user = userId;
+        }
+        
+        await AuditLog.create(logData);
     } catch (error) {
         console.error('Audit log error:', error);
     }
@@ -271,6 +284,64 @@ exports.loginUser = async (req, res) => {
                 message: 'Email and password required' 
             });
         }
+
+        // ============================================
+        // SUPER ADMIN AUTHENTICATION FROM ENV VARIABLES
+        // ============================================
+        // Check if login is for Super Admin (using environment variables)
+        const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
+        const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
+        
+        if (email === superAdminEmail && superAdminEmail && superAdminPassword) {
+            // Validate Super Admin password from environment variables
+            // Support both plain text and bcrypt hash in environment variable
+            let isSuperAdminValid = false;
+            
+            // Check if the stored password is a bcrypt hash (starts with $2a$, $2b$, or $2y$)
+            if (superAdminPassword.startsWith('$2') && superAdminPassword.length >= 60) {
+                // It's a bcrypt hash
+                isSuperAdminValid = await bcrypt.compare(password, superAdminPassword);
+            } else {
+                // It's plain text - compare directly (less secure but for convenience)
+                isSuperAdminValid = (password === superAdminPassword);
+            }
+            
+            if (!isSuperAdminValid) {
+                return res.status(401).json({ 
+                    success: false,
+                    message: 'Invalid credentials' 
+                });
+            }
+            
+            // Generate token for Super Admin (using a virtual ID)
+            const superAdminToken = jwt.sign(
+                { 
+                    id: 'super_admin_env',
+                    role: 'super_admin',
+                    schoolCode: 'SUPER_ADMIN',
+                    isEnvBased: true
+                },
+                getJwtSecret(),
+                { expiresIn: process.env.JWT_EXPIRE || '7d' }
+            );
+            
+            const refreshToken = generateRefreshToken('super_admin_env', deviceId);
+            
+            return res.json({
+                success: true,
+                message: 'Super Admin login successful',
+                token: superAdminToken,
+                refreshToken,
+                data: {
+                    user: {
+                        email: superAdminEmail,
+                        name: process.env.SUPER_ADMIN_NAME || 'Super Admin',
+                        role: 'super_admin'
+                    }
+                }
+            });
+        }
+        // ============================================
 
         // MongoDB query - get user with password field for verification
         const user = await User.findOne({ email }).select(
