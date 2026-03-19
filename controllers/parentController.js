@@ -108,7 +108,6 @@ exports.getParentDashboard = async (req, res) => {
                     { targetRoles: { $size: 0 } }
                 ]
             }).sort({ createdAt: -1 }).limit(10);
-        }
         } catch (noticeError) {
             console.error('Notice fetch error:', noticeError.message);
         }

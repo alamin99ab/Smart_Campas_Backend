@@ -634,65 +634,75 @@ app.use((error, req, res, next) => {
 
 // Database connection and server start
 const startServer = async () => {
+    let dbConnected = false;
+    
+    // Try to connect to MongoDB but allow server to start anyway
     try {
-        // Connect to MongoDB - environment variable already validated
         console.log('\n🔄 Connecting to MongoDB...');
         console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
         
         await mongoose.connect(process.env.MONGO_URI, {
-            serverSelectionTimeoutMS: 30000,
-            socketTimeoutMS: 45000,
-            connectTimeoutMS: 30000,
-            maxPoolSize: 10,
-            minPoolSize: 2,
-            retryWrites: true,
-            w: 'majority'
+            serverSelectionTimeoutMS: 10000,
+            socketTimeoutMS: 30000,
+            connectTimeoutMS: 10000,
+            maxPoolSize: 5,
+            minPoolSize: 1,
+            retryWrites: false
         });
         
+        dbConnected = true;
         console.log('✅ MongoDB Connected Successfully!');
         console.log(`📍 Database: ${mongoose.connection.name}`);
         console.log(`📍 Host: ${mongoose.connection.host}`);
+    } catch (dbError) {
+        console.warn('⚠️  MongoDB connection failed:', dbError.message);
+        console.warn('⚠️  Server starting without database - some features may not work');
+    }
         
-        // Initialize Super Admin for deployment
-        console.log('\n🚀 Initializing Super Admin...');
-        try {
-            const bcrypt = require('bcryptjs');
-            const User = require('./models/User');
-            
-            const existingAdmin = await User.findOne({ role: 'super_admin' });
-            if (!existingAdmin) {
-                // Use environment variables for credentials (already validated)
-                const adminEmail = process.env.SUPER_ADMIN_EMAIL;
-                const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
-                const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
-                const adminPhone = process.env.SUPER_ADMIN_PHONE || '';
+        // Initialize Super Admin only if DB is connected
+        if (dbConnected) {
+            console.log('\n🚀 Initializing Super Admin...');
+            try {
+                const bcrypt = require('bcryptjs');
+                const User = require('./models/User');
                 
-                const hashedPassword = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
-                const superAdmin = new User({
-                    name: adminName,
-                    email: adminEmail,
-                    password: hashedPassword,
-                    phone: adminPhone,
-                    role: 'super_admin',
-                    isApproved: true,
-                    emailVerified: true,
-                    isActive: true
-                });
-                await superAdmin.save();
-                console.log('✅ Super Admin created successfully');
-                console.log(`📧 Email: ${adminEmail}`);
-                console.log(`👤 Name: ${adminName}`);
-            } else {
-                console.log('✅ Super Admin already exists');
-                console.log(`📧 Email: ${existingAdmin.email}`);
-                console.log(`👤 Name: ${existingAdmin.name}`);
+                const existingAdmin = await User.findOne({ role: 'super_admin' });
+                if (!existingAdmin) {
+                    // Use environment variables for credentials (already validated)
+                    const adminEmail = process.env.SUPER_ADMIN_EMAIL;
+                    const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
+                    const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
+                    const adminPhone = process.env.SUPER_ADMIN_PHONE || '';
+                    
+                    const hashedPassword = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+                    const superAdmin = new User({
+                        name: adminName,
+                        email: adminEmail,
+                        password: hashedPassword,
+                        phone: adminPhone,
+                        role: 'super_admin',
+                        isApproved: true,
+                        emailVerified: true,
+                        isActive: true
+                    });
+                    await superAdmin.save();
+                    console.log('✅ Super Admin created successfully');
+                    console.log(`📧 Email: ${adminEmail}`);
+                    console.log(`👤 Name: ${adminName}`);
+                } else {
+                    console.log('✅ Super Admin already exists');
+                    console.log(`📧 Email: ${existingAdmin.email}`);
+                    console.log(`👤 Name: ${existingAdmin.name}`);
+                }
+            } catch (adminError) {
+                console.error(`❌ Admin creation failed: ${adminError.message}`);
+                // Don't exit - admin can be created via /setup endpoint
             }
-        } catch (adminError) {
-            console.error(`❌ Admin creation failed: ${adminError.message}`);
-            // Don't exit - admin can be created via /setup endpoint
+        } else {
+            console.log('\n⚠️  Skipping Super Admin initialization (no database)');
         }
         
-        // Start server AFTER successful DB connection
+        // Start server regardless of DB connection
         app.listen(PORT, '0.0.0.0', () => {
             console.log(`\n🚀 SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING`);
             console.log(`📍 Server: http://localhost:${PORT}`);
@@ -711,12 +721,6 @@ const startServer = async () => {
             console.log(`   🔹 Phase 9: Analytics`);
             console.log(`\n🎯 READY FOR COMPLETE WORKFLOW TESTING!`);
         });
-        
-    } catch (error) {
-        console.error('❌ Failed to start server:', error.message);
-        console.error('💡 MongoDB connection failed. Check your MONGO_URI in .env file');
-        process.exit(1);
-    }
 };
 
 // Graceful shutdown

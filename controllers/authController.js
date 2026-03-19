@@ -99,8 +99,7 @@ const setRefreshTokenCookie = (res, token) => {
 
 const createAuditLog = async (userId, action, details, req) => {
     try {
-        // Get models dynamically
-        const { AuditLog } = getModels();
+        // Use directly imported AuditLog model
         if (!AuditLog) return; // Skip audit logging if not available
         
         await AuditLog.create({
@@ -431,9 +430,6 @@ exports.refreshToken = async (req, res) => {
     const cookieToken = req.cookies?.refreshToken;
     const deviceId = req.headers['x-device-id'];
 
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         const token = refreshToken || cookieToken;
 
@@ -488,9 +484,6 @@ exports.logoutUser = async (req, res) => {
     const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
     const deviceId = req.headers['x-device-id'];
 
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         if (refreshToken && req.user) {
             await User.updateOne(
@@ -514,9 +507,6 @@ exports.logoutUser = async (req, res) => {
 // @route   POST /api/auth/logout-all
 // @access  Private
 exports.logoutAllDevices = async (req, res) => {
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         await User.updateOne(
             { _id: req.user._id },
@@ -537,21 +527,10 @@ exports.logoutAllDevices = async (req, res) => {
 // @route   GET /api/auth/profile
 // @access  Private
 exports.getUserProfile = async (req, res) => {
-    // Get models dynamically
-    const { User, School, AuditLog } = getModels();
-
     try {
-        // Handle both Mongoose (chainable) and MockDB (direct) patterns
-        let user;
+        // Use Mongoose pattern
         const selectFields = '-password -refreshToken -emailVerificationToken -resetPasswordToken -twoFactorSecret';
-        
-        if (typeof User.findById(req.user._id).select === 'function') {
-            // Mongoose pattern - chainable
-            user = await User.findById(req.user._id).select(selectFields);
-        } else {
-            // MockDB pattern - select as second param
-            user = await User.findById(req.user._id, selectFields);
-        }
+        const user = await User.findById(req.user._id).select(selectFields);
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -566,8 +545,8 @@ exports.getUserProfile = async (req, res) => {
 
         await createAuditLog(user._id, 'PROFILE_VIEW', {}, req);
 
-        // Handle both Mongoose (toObject) and MockDB (plain object)
-        const userData = typeof user.toObject === 'function' ? user.toObject() : user;
+        // Use Mongoose toObject method
+        const userData = user.toObject();
 
         res.json({
             success: true,
@@ -590,9 +569,6 @@ exports.getUserProfile = async (req, res) => {
 // @access  Private
 exports.updateUserProfile = async (req, res) => {
     const { name, phone, address, profileImage } = req.body;
-
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
 
     try {
         const user = await User.findById(req.user._id);
@@ -627,9 +603,6 @@ exports.updateUserProfile = async (req, res) => {
 // @access  Private
 exports.changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
-
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
 
     try {
         if (!currentPassword || !newPassword) {
@@ -682,9 +655,6 @@ exports.changePassword = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
     const { email } = req.body;
 
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         const user = await User.findOne({ email });
         if (!user) {
@@ -735,9 +705,6 @@ exports.resetPassword = async (req, res) => {
     const { token } = req.params;
     const { password } = req.body;
 
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
         const user = await User.findOne({
@@ -784,9 +751,6 @@ exports.resetPassword = async (req, res) => {
 exports.verifyEmail = async (req, res) => {
     const { token } = req.params;
 
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         const user = await User.findOne({
             emailVerificationToken: token,
@@ -817,9 +781,6 @@ exports.verifyEmail = async (req, res) => {
 // @access  Public
 exports.resendVerificationEmail = async (req, res) => {
     const { email } = req.body;
-
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
 
     try {
         const user = await User.findOne({ email });
@@ -857,9 +818,6 @@ exports.resendVerificationEmail = async (req, res) => {
 // @route   POST /api/auth/setup-2fa
 // @access  Private
 exports.setup2FA = async (req, res) => {
-    // Get models dynamically
-    const { User, AuditLog } = getModels();
-
     try {
         const user = await User.findById(req.user._id);
         if (user.twoFactorEnabled) {

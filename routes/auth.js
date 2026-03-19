@@ -15,6 +15,64 @@ const authMiddleware = require('../middleware/authMiddleware');
  * Super Admin account should be created manually in database
  */
 
+// Setup endpoint - Create Super Admin if not exists (for initial deployment)
+router.post('/setup', async (req, res) => {
+    try {
+        const User = require('../models/User');
+        const bcrypt = require('bcryptjs');
+        
+        // Check if super admin already exists
+        const existingAdmin = await User.findOne({ role: 'super_admin' });
+        if (existingAdmin) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Super Admin already exists. Please login with existing credentials.'
+            });
+        }
+        
+        // Get credentials from environment or request body
+        const adminEmail = process.env.SUPER_ADMIN_EMAIL || req.body.email;
+        const adminPassword = process.env.SUPER_ADMIN_PASSWORD || req.body.password;
+        const adminName = process.env.SUPER_ADMIN_NAME || req.body.name || 'Super Administrator';
+        
+        if (!adminEmail || !adminPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD must be set in environment variables'
+            });
+        }
+        
+        const hashedPassword = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+        const superAdmin = new User({
+            name: adminName,
+            email: adminEmail,
+            password: hashedPassword,
+            phone: process.env.SUPER_ADMIN_PHONE || '',
+            role: 'super_admin',
+            isApproved: true,
+            emailVerified: true,
+            isActive: true
+        });
+        
+        await superAdmin.save();
+        
+        res.status(201).json({
+            success: true,
+            message: 'Super Admin created successfully',
+            data: {
+                email: adminEmail,
+                name: adminName
+            }
+        });
+    } catch (error) {
+        console.error('Setup error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
 /**
  * 🔹 PHASE 2: SUPER ADMIN FLOW
  * 👑 Step 1: Super Admin Login
