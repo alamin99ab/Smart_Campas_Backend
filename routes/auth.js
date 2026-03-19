@@ -73,6 +73,86 @@ router.post('/setup', async (req, res) => {
     }
 });
 
+// Emergency recovery endpoint - Reset super admin password and unblock account
+// WARNING: This should only be used in development or emergency situations
+router.post('/emergency-reset', async (req, res) => {
+    try {
+        // Check for emergency secret key (should match environment variable)
+        const EMERGENCY_SECRET = process.env.EMERGENCY_SECRET || 'emergency_reset_2024';
+        const providedSecret = req.body.secret;
+        
+        if (providedSecret !== EMERGENCY_SECRET) {
+            return res.status(403).json({
+                success: false,
+                message: 'Invalid emergency secret'
+            });
+        }
+        
+        const User = require('../models/User');
+        const bcrypt = require('bcryptjs');
+        
+        // Find and update super admin
+        const admin = await User.findOne({ role: 'super_admin' });
+        
+        if (!admin) {
+            // Create new super admin if doesn't exist
+            const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@smartcampus.com';
+            const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Admin@123';
+            const adminName = process.env.SUPER_ADMIN_NAME || 'Super Admin';
+            
+            const hashedPassword = await bcrypt.hash(adminPassword, 12);
+            const newAdmin = new User({
+                name: adminName,
+                email: adminEmail,
+                password: hashedPassword,
+                phone: process.env.SUPER_ADMIN_PHONE || '',
+                role: 'super_admin',
+                isApproved: true,
+                emailVerified: true,
+                isActive: true,
+                isBlocked: false,
+                loginAttempts: 0
+            });
+            
+            await newAdmin.save();
+            
+            return res.status(201).json({
+                success: true,
+                message: 'Super Admin created and unblocked',
+                data: {
+                    email: adminEmail,
+                    password: adminPassword
+                }
+            });
+        }
+        
+        // Reset password and unblock
+        const newPassword = req.body.newPassword || 'Admin@123456';
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        
+        admin.password = hashedPassword;
+        admin.isBlocked = false;
+        admin.loginAttempts = 0;
+        admin.isActive = true;
+        await admin.save();
+        
+        res.json({
+            success: true,
+            message: 'Super Admin unblocked and password reset',
+            data: {
+                email: admin.email,
+                newPassword: newPassword
+            }
+        });
+    } catch (error) {
+        console.error('Emergency reset error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
 /**
  * 🔹 PHASE 2: SUPER ADMIN FLOW
  * 👑 Step 1: Super Admin Login
