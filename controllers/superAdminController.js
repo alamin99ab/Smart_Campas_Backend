@@ -519,10 +519,12 @@ exports.createSchool = async (req, res) => {
             address, 
             phone, 
             email,
+            schoolType,
             principalName,
             principalEmail,
             principalPhone,
-            principalPassword
+            principalPassword,
+            academicSettings
         } = req.body;
 
         // Check if school code already exists
@@ -534,17 +536,23 @@ exports.createSchool = async (req, res) => {
             });
         }
 
-        // Create school in MongoDB
+        // Create school in MongoDB with all required fields
         const school = new School({
             schoolName,
             schoolCode,
+            schoolType: schoolType || 'secondary',
             address,
             phone,
             email,
-            status: 'Active',
-            subscriptionType: 'Premium',
-            maxStudents: 2000,
-            isActive: true
+            academicSettings: academicSettings || {
+                currentSession: new Date().getFullYear().toString()
+            },
+            subscription: {
+                plan: 'trial',
+                status: 'active'
+            },
+            isActive: true,
+            isVerified: false
         });
         await school.save();
 
