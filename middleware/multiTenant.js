@@ -28,9 +28,9 @@ exports.ensureTenantIsolation = async (req, res, next) => {
             });
         }
 
-        // Verify school exists and is active
+        // Verify school exists and is active - only use schoolCode string
         const school = await School.findOne({ 
-            $or: [{ _id: schoolCode }, { schoolCode }],
+            schoolCode: schoolCode,
             isActive: true 
         });
 
