@@ -587,13 +587,22 @@ exports.createSchool = async (req, res) => {
         // Update school with principal (no need to save again, principal is already saved)
         school.principalId = principal._id;
 
-        // Log audit
-        await AuditLog.create({
-            userId: req.user.id,
+        // Log audit - handle environment-based super admin
+        const auditData = {
             action: 'CREATE_SCHOOL',
             details: `Created school: ${schoolName} (${schoolCode})`,
             schoolCode: schoolCode
-        });
+        };
+        
+        if (req.user.isEnvBase) {
+            // Environment-based super admin
+            auditData.isEnvUser = true;
+            auditData.envUserEmail = req.user.email || req.user.id;
+        } else if (req.user._id) {
+            auditData.userId = req.user._id;
+        }
+        
+        await AuditLog.create(auditData);
 
         res.status(201).json({
             success: true,
@@ -696,12 +705,7 @@ exports.updateSchool = async (req, res) => {
         }
 
         // Log audit
-        await AuditLog.create({
-            userId: req.user.id,
-            action: 'UPDATE_SCHOOL',
-            details: `Updated school: ${school.schoolName} (${school.schoolCode})`,
-            schoolCode: school.schoolCode
-        });
+        await createAuditLog(req.user._id || req.user.id, 'UPDATE_SCHOOL', `Updated school: ${school.schoolName} (${school.schoolCode})`, req);
 
         res.status(200).json({
             success: true,
@@ -753,12 +757,7 @@ exports.deleteSchool = async (req, res) => {
         await School.findByIdAndDelete(id);
 
         // Log audit
-        await AuditLog.create({
-            userId: req.user.id,
-            action: 'DELETE_SCHOOL',
-            details: `Deleted school: ${school.schoolName} (${school.schoolCode})`,
-            schoolCode: school.schoolCode
-        });
+        await createAuditLog(req.user._id || req.user.id, 'DELETE_SCHOOL', `Deleted school: ${school.schoolName} (${school.schoolCode})`, req);
 
         res.status(200).json({
             success: true,
