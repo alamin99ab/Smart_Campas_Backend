@@ -560,19 +560,17 @@ exports.createSchool = async (req, res) => {
         });
 
         // Create principal account in MongoDB
-        const bcrypt = require('bcryptjs');
-        const salt = await bcrypt.genSalt(12);
-        const passwordToHash = principalPassword || 'Principal@123';
-        const hashedPassword = await bcrypt.hash(passwordToHash, salt);
+        // Don't hash here - User model's pre-save middleware will handle hashing
+        const passwordToUse = principalPassword || 'Principal@123';
 
         // Save school first to get the _id
         await school.save();
 
-        // Now create principal with schoolId
+        // Now create principal with schoolId - pass plain password, model will hash it
         const principal = new User({
             name: principalName,
             email: principalEmail,
-            password: hashedPassword,
+            password: passwordToUse,
             role: 'principal',
             phone: principalPhone,
             schoolId: school._id,
