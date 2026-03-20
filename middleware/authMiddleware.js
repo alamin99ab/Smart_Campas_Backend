@@ -70,7 +70,9 @@ const protect = async (req, res, next) => {
         
         // Get User from MongoDB
         const User = require('../models/User');
+        console.log('[Protect] Looking for user with id:', decoded.id);
         const user = await User.findById(decoded.id);
+        console.log('[Protect] Found user:', user ? user._id : 'null');
 
         if (!user) {
             return res.status(401).json({ success: false, message: 'User not found' });

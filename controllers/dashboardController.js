@@ -83,8 +83,12 @@ exports.getTeacherDashboard = async (req, res) => {
         const teacherId = req.user.id;
         const schoolCode = req.user.schoolCode;
         
+        console.log('[TeacherDashboard] teacherId:', teacherId, 'schoolCode:', schoolCode);
+        
         // Get teacher's assigned classes and subjects
         const teacher = await User.findById(teacherId);
+        
+        console.log('[TeacherDashboard] Found teacher:', teacher);
         
         if (!teacher) {
             return res.status(404).json({
@@ -123,7 +127,11 @@ exports.getStudentDashboard = async (req, res) => {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
         
+        console.log('[StudentDashboard] studentId:', studentId, 'schoolCode:', schoolCode);
+        
         const student = await User.findById(studentId);
+        
+        console.log('[StudentDashboard] Found student:', student);
         
         if (!student) {
             return res.status(404).json({
