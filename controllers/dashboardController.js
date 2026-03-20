@@ -80,22 +80,9 @@ exports.getPrincipalDashboard = async (req, res) => {
  */
 exports.getTeacherDashboard = async (req, res) => {
     try {
-        const teacherId = req.user.id;
+        // Use req.user directly - it's already populated by protect middleware
+        const teacher = req.user;
         const schoolCode = req.user.schoolCode;
-        
-        console.log('[TeacherDashboard] teacherId:', teacherId, 'schoolCode:', schoolCode);
-        
-        // Get teacher's assigned classes and subjects
-        const teacher = await User.findById(teacherId);
-        
-        console.log('[TeacherDashboard] Found teacher:', teacher);
-        
-        if (!teacher) {
-            return res.status(404).json({
-                success: false,
-                message: 'Teacher not found'
-            });
-        }
         
         res.status(200).json({
             success: true,
@@ -103,8 +90,7 @@ exports.getTeacherDashboard = async (req, res) => {
                 teacher: {
                     name: teacher.name,
                     email: teacher.email,
-                    subjects: teacher.subjects || [],
-                    classes: teacher.classes || []
+                    schoolCode: schoolCode
                 }
             }
         });
@@ -124,21 +110,9 @@ exports.getTeacherDashboard = async (req, res) => {
  */
 exports.getStudentDashboard = async (req, res) => {
     try {
-        const studentId = req.user.id;
+        // Use req.user directly - it's already populated by protect middleware
+        const student = req.user;
         const schoolCode = req.user.schoolCode;
-        
-        console.log('[StudentDashboard] studentId:', studentId, 'schoolCode:', schoolCode);
-        
-        const student = await User.findById(studentId);
-        
-        console.log('[StudentDashboard] Found student:', student);
-        
-        if (!student) {
-            return res.status(404).json({
-                success: false,
-                message: 'Student not found'
-            });
-        }
         
         res.status(200).json({
             success: true,
@@ -146,8 +120,7 @@ exports.getStudentDashboard = async (req, res) => {
                 student: {
                     name: student.name,
                     email: student.email,
-                    class: student.class,
-                    section: student.section
+                    schoolCode: schoolCode
                 }
             }
         });

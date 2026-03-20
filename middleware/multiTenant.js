@@ -22,6 +22,7 @@ exports.ensureTenantIsolation = async (req, res, next) => {
         const schoolCode = req.user?.schoolCode;
         
         if (!schoolCode) {
+            console.log('No schoolCode in user:', req.user?.email, req.user?.role);
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: No school context found'
@@ -35,6 +36,7 @@ exports.ensureTenantIsolation = async (req, res, next) => {
         });
 
         if (!school) {
+            console.log('School not found or inactive:', schoolCode);
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: School not found or inactive'
@@ -44,19 +46,26 @@ exports.ensureTenantIsolation = async (req, res, next) => {
         // Check subscription status (handle both formats)
         const subscriptionStatus = school.subscription?.status || school.status;
         if (subscriptionStatus !== 'active') {
+            console.log('School subscription not active:', schoolCode, subscriptionStatus);
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: School subscription not active'
             });
         }
 
-        // Set tenant context in request
+        // Set tenant context in request - include features from school
         req.tenant = {
             schoolId: school._id,
             schoolCode: school.schoolCode,
             schoolName: school.schoolName,
-            subscription: school.subscription || { status: 'active' },
-            features: school.features || {}
+            subscription: school.subscription || { status: 'active', plan: 'trial' },
+            features: school.features || {
+                routine: true,
+                attendance: true,
+                exam: true,
+                fee: true,
+                notice: true
+            }
         };
 
         // Add schoolCode filter to all queries (more reliable than schoolId)
@@ -84,15 +93,33 @@ exports.checkFeatureAccess = (feature) => {
                 return next();
             }
 
+            // If no tenant context, skip feature check (let it fail at tenant isolation)
+            if (!req.tenant) {
+                console.log('No tenant context, skipping feature check for:', feature);
+                return next();
+            }
+
             const tenantFeatures = req.tenant?.features;
             
-            if (!tenantFeatures || !tenantFeatures[feature]) {
+            // If no features object, allow access (default behavior for older schools)
+            if (!tenantFeatures) {
+                console.log('No features object found, allowing access to:', feature);
+                return next();
+            }
+            
+            // Check if feature exists and is enabled
+            const featureEnabled = tenantFeatures[feature];
+            
+            // If feature is undefined (not set), default to true for backward compatibility
+            // If feature is explicitly false, deny access
+            if (featureEnabled === false) {
                 return res.status(403).json({
                     success: false,
                     message: `Access denied: ${feature} feature not available in your subscription plan`
                 });
             }
 
+            // Allow access if feature is true or undefined (backward compatibility)
             next();
         } catch (error) {
             console.error('Feature access error:', error);
