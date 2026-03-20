@@ -39,16 +39,16 @@ const calculateGPA = (subjects) => {
     return count > 0 ? (totalPoints / count).toFixed(2) : 0;
 };
 
-// @desc    Upload/Publish Result (Teachers/Principal only)
+// @desc    Create Result Draft (Teachers only) - NOT published yet
 // @route   POST /api/results
-// @access  Private
+// @access  Teacher only (Principal can also create)
 exports.uploadResult = async (req, res) => {
     const { studentId, examName, subjects, examDate, gradingSystem, remarks } = req.body;
 
     try {
         // Validation
         if (!studentId || !examName || !subjects || !Array.isArray(subjects) || subjects.length === 0) {
-            return res.status(400).json({ message: 'Student ID, exam name, and subjects array are required' });
+            return res.status(400).json({ success: false, message: 'Student ID, exam name, and subjects array are required' });
         }
 
         // Check if student exists and belongs to this school
@@ -57,27 +57,68 @@ exports.uploadResult = async (req, res) => {
             schoolCode: req.user.schoolCode 
         });
         if (!student) {
-            return res.status(404).json({ message: 'Student not found in your school' });
+            return res.status(404).json({ success: false, message: 'Student not found in your school' });
         }
 
         // Validate each subject
         for (let sub of subjects) {
             if (!sub.subjectName || sub.marks === undefined) {
-                return res.status(400).json({ message: 'Each subject must have subjectName and marks' });
+                return res.status(400).json({ success: false, message: 'Each subject must have subjectName and marks' });
             }
             if (sub.marks < 0 || sub.marks > 100) {
-                return res.status(400).json({ message: 'Marks must be between 0 and 100' });
+                return res.status(400).json({ success: false, message: 'Marks must be between 0 and 100' });
             }
         }
 
         // Check for existing result (same student & exam)
         const existing = await Result.findOne({
             studentId,
-            examName: { $regex: new RegExp(`^${examName}$`, 'i') },
+            examName: { $regex: new RegExp(`^${examName}// controllers/resultController.js
+const Result = require('../models/Result');
+const Student = require('../models/Student');
+const School = require('../models/School');
+const AuditLog = require('../models/AuditLog');
+const PDFDocument = require('pdfkit');
+const Excel = require('exceljs');
+const { sendEmail } = require('../utils/emailService');
+const { sendSMS } = require('../utils/smsService');
+
+// Helper: Calculate Grade
+const calculateGrade = (marks, gradingSystem = 'standard') => {
+    if (gradingSystem === 'standard') {
+        if (marks >= 80) return 'A+';
+        if (marks >= 70) return 'A';
+        if (marks >= 60) return 'A-';
+        if (marks >= 50) return 'B';
+        if (marks >= 40) return 'C';
+        if (marks >= 33) return 'D';
+        return 'F';
+    }
+    // Add other grading systems if needed
+    return 'N/A';
+};
+
+// Helper: Calculate GPA
+const calculateGPA = (subjects) => {
+    const gradePoints = {
+        'A+': 5.0, 'A': 4.0, 'A-': 3.5, 'B': 3.0, 'C': 2.0, 'D': 1.0, 'F': 0.0
+    };
+    let totalPoints = 0;
+    let count = 0;
+    subjects.forEach(sub => {
+        if (sub.grade && gradePoints[sub.grade] !== undefined) {
+            totalPoints += gradePoints[sub.grade];
+            count++;
+        }
+    });
+    return count > 0 ? (totalPoints / count).toFixed(2) : 0;
+};
+
+, 'i') },
             schoolCode: req.user.schoolCode
         });
         if (existing) {
-            return res.status(400).json({ message: 'Result already exists for this student and exam. Use update instead.' });
+            return res.status(400).json({ success: false, message: 'Result already exists for this student and exam. Use update instead.' });
         }
 
         // Process subjects with grade
@@ -89,7 +130,9 @@ exports.uploadResult = async (req, res) => {
         const totalMarks = updatedSubjects.reduce((acc, curr) => acc + curr.marks, 0);
         const gpa = calculateGPA(updatedSubjects);
 
-        // Create result
+        // Create result as DRAFT (isPublished: false)
+        // Teacher can update marks while in draft
+        // Principal must publish to make it visible to students/parents
         const result = await Result.create({
             studentId,
             schoolCode: req.user.schoolCode,
@@ -102,8 +145,9 @@ exports.uploadResult = async (req, res) => {
             totalMarks,
             gpa,
             remarks,
-            publishedBy: req.user._id,
-            isPublished: true
+            createdBy: req.user._id,
+            isPublished: false, // DRAFT - NOT visible to students/parents
+            status: 'draft' // draft, pending_review, published
         });
 
         // Optionally send notification to student/parent
@@ -114,15 +158,16 @@ exports.uploadResult = async (req, res) => {
         // Audit log
         await AuditLog.create({
             user: req.user._id,
-            action: 'RESULT_PUBLISHED',
-            details: { studentId, examName, totalMarks, gpa },
+            action: 'RESULT_CREATED',
+            details: { studentId, examName, totalMarks, gpa, status: 'draft' },
             ip: req.ip,
             userAgent: req.headers['user-agent']
         });
 
         res.status(201).json({ 
-            message: 'Result published successfully', 
-            result: await result.populate('studentId', 'name fatherName motherName')
+            success: true,
+            message: 'Result created as draft. Principal must publish to make it visible.', 
+            data: await result.populate('studentId', 'name fatherName motherName')
         });
 
     } catch (error) {
@@ -241,7 +286,7 @@ exports.searchResult = async (req, res) => {
 
 // @desc    Get all results for a school (with filters)
 // @route   GET /api/results
-// @access  Private
+// @access  Private - Role-based filtering
 exports.getResults = async (req, res) => {
     try {
         const { 
@@ -252,15 +297,39 @@ exports.getResults = async (req, res) => {
             fromDate, 
             toDate, 
             page = 1, 
-            limit = 20 
+            limit = 20,
+            status // Optional: filter by status (draft, published)
         } = req.query;
 
         let query = { schoolCode: req.user.schoolCode };
 
+        // ROLE-BASED FILTERING:
+        // - Principal/Admin: Can see ALL results (draft and published)
+        // - Teacher: Can see results they created (draft and published)
+        // - Student/Parent: Can ONLY see PUBLISHED results
+        const userRole = req.user.role;
+        const userId = req.user.id;
+
+        if (userRole === 'student' || userRole === 'parent') {
+            // Students and parents can only see published results
+            query.isPublished = true;
+            // For students, also filter by their own ID
+            if (userRole === 'student') {
+                query.studentId = userId;
+            }
+            // For parents, we would need to link to child - simplified for now
+        } else if (userRole === 'teacher') {
+            // Teachers can see results they created
+            query.createdBy = userId;
+        }
+        // Principal and Admin can see all results
+
+        // Additional filters
         if (className) query.studentClass = className;
         if (section) query.section = section;
         if (examName) query.examName = { $regex: examName, $options: 'i' };
         if (studentId) query.studentId = studentId;
+        if (status) query.status = status;
         if (fromDate || toDate) {
             query.examDate = {};
             if (fromDate) query.examDate.$gte = new Date(fromDate);
@@ -271,6 +340,7 @@ exports.getResults = async (req, res) => {
 
         const results = await Result.find(query)
             .populate('studentId', 'name roll section')
+            .populate('createdBy', 'name')
             .populate('publishedBy', 'name')
             .sort({ examDate: -1, 'studentId.roll': 1 })
             .skip(skip)
@@ -280,15 +350,18 @@ exports.getResults = async (req, res) => {
         const total = await Result.countDocuments(query);
 
         res.json({
-            results,
-            total,
-            totalPages: Math.ceil(total / limit),
-            currentPage: parseInt(page)
+            success: true,
+            data: {
+                results,
+                total,
+                totalPages: Math.ceil(total / limit),
+                currentPage: parseInt(page)
+            }
         });
 
     } catch (error) {
         console.error('Get results error:', error);
-        res.status(500).json({ message: 'Failed to fetch results' });
+        res.status(500).json({ success: false, message: 'Failed to fetch results' });
     }
 };
 
@@ -350,11 +423,143 @@ exports.deleteResult = async (req, res) => {
             userAgent: req.headers['user-agent']
         });
 
-        res.json({ message: 'Result deleted (hidden from public)' });
+        res.json({ success: true, message: 'Result deleted (hidden from public)' });
 
     } catch (error) {
         console.error('Delete result error:', error);
-        res.status(500).json({ message: 'Failed to delete result' });
+        res.status(500).json({ success: false, message: 'Failed to delete result' });
+    }
+};
+
+// @desc    Publish Result (Principal only) - Makes result visible to students/parents
+// @route   PUT /api/results/:id/publish
+// @access  Principal only
+exports.publishResult = async (req, res) => {
+    try {
+        // Only Principal can publish results
+        if (req.user.role !== 'principal' && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+            return res.status(403).json({ success: false, message: 'Access denied. Only Principal can publish results.' });
+        }
+
+        const result = await Result.findOne({ 
+            _id: req.params.id, 
+            schoolCode: req.user.schoolCode 
+        });
+
+        if (!result) {
+            return res.status(404).json({ success: false, message: 'Result not found' });
+        }
+
+        // Check if already published
+        if (result.isPublished) {
+            return res.status(400).json({ success: false, message: 'Result is already published' });
+        }
+
+        // Publish the result
+        result.isPublished = true;
+        result.status = 'published';
+        result.publishedBy = req.user._id;
+        result.publishedAt = new Date();
+        await result.save();
+
+        // Notify student and parent
+        const Student = require('../models/Student');
+        const student = await Student.findById(result.studentId);
+        
+        if (student) {
+            const { createNotification } = require('../utils/createNotification');
+            await createNotification({
+                title: 'Result Published',
+                body: `Your ${result.examName} result has been published. GPA: ${result.gpa}`,
+                type: 'result',
+                link: `/results/${result._id}`,
+                schoolCode: req.user.schoolCode,
+                recipients: [student.userId]
+            });
+        }
+
+        // Audit log
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'RESULT_PUBLISHED',
+            details: { 
+                resultId: result._id, 
+                examName: result.examName,
+                studentId: result.studentId,
+                gpa: result.gpa
+            },
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+
+        res.json({ 
+            success: true, 
+            message: 'Result published successfully. Students can now view their results.',
+            data: result
+        });
+
+    } catch (error) {
+        console.error('Publish result error:', error);
+        res.status(500).json({ success: false, message: 'Failed to publish result' });
+    }
+};
+
+// @desc    Bulk Publish Results (Principal only) - Publish multiple results at once
+// @route   PUT /api/results/bulk-publish
+// @access  Principal only
+exports.bulkPublishResults = async (req, res) => {
+    try {
+        if (req.user.role !== 'principal' && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+            return res.status(403).json({ success: false, message: 'Access denied. Only Principal can publish results.' });
+        }
+
+        const { resultIds } = req.body;
+
+        if (!resultIds || !Array.isArray(resultIds) || resultIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'Result IDs array is required' });
+        }
+
+        const results = await Result.find({
+            _id: { $in: resultIds },
+            schoolCode: req.user.schoolCode,
+            isPublished: false
+        });
+
+        if (results.length === 0) {
+            return res.status(400).json({ success: false, message: 'No unpublished results found to publish' });
+        }
+
+        // Publish all results
+        const publishedIds = [];
+        for (const result of results) {
+            result.isPublished = true;
+            result.status = 'published';
+            result.publishedBy = req.user._id;
+            result.publishedAt = new Date();
+            await result.save();
+            publishedIds.push(result._id);
+        }
+
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'RESULTS_BULK_PUBLISHED',
+            details: { 
+                count: publishedIds.length,
+                resultIds: publishedIds
+            },
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+
+        res.json({ 
+            success: true, 
+            message: `${publishedIds.length} results published successfully`,
+            data: { publishedCount: publishedIds.length }
+        });
+
+    } catch (error) {
+        console.error('Bulk publish error:', error);
+        res.status(500).json({ success: false, message: 'Failed to bulk publish results' });
     }
 };
 

@@ -7,11 +7,15 @@ const {
     updateRoutine,
     deleteRoutine,
     publishRoutine,
-    checkConflicts
+    checkConflicts,
+    autoGenerateRoutine
 } = require('../controllers/routineController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 
 router.use(protect);
+
+// Auto-generate routine based on teacher subject assignments
+router.post('/auto-generate', authorize('principal', 'admin', 'super_admin'), autoGenerateRoutine);
 
 router.post('/check-conflicts', authorize('principal', 'admin', 'teacher'), checkConflicts);
 router.post('/', authorize('principal', 'admin', 'teacher'), createRoutine);

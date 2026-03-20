@@ -303,3 +303,194 @@ exports.publishRoutine = async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 };
+
+// @desc    Auto-generate routine based on teacher subject assignments
+// @route   POST /api/routine/auto-generate
+// @access  Principal only
+exports.autoGenerateRoutine = async (req, res) => {
+    try {
+        if (req.user.role !== 'principal' && req.user.role !== 'admin') {
+            return res.status(403).json({ success: false, message: 'Access denied. Principal only.' });
+        }
+
+        const { studentClass, section, academicYear, semester } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        if (!studentClass || !academicYear) {
+            return res.status(400).json({ success: false, message: 'Class and academic year are required' });
+        }
+
+        // Get school configuration
+        const School = require('../models/School');
+        const school = await School.findOne({ schoolCode });
+        
+        const workingDays = school?.academicSettings?.workingDays || ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+        const periodsPerDay = 6; // Default periods per day
+
+        // Get subjects for this class
+        const Subject = require('../models/Subject');
+        const subjects = await Subject.find({ 
+            schoolCode, 
+            className: studentClass,
+            isActive: true 
+        }).populate('teachers.teacherId', 'name email');
+
+        if (subjects.length === 0) {
+            return res.status(400).json({ success: false, message: 'No subjects found for this class' });
+        }
+
+        // Get teacher assignments for each subject
+        const teacherAssignments = [];
+        for (const subject of subjects) {
+            for (const teacherAssignment of subject.teachers || []) {
+                if (teacherAssignment.isActive) {
+                    teacherAssignments.push({
+                        subjectId: subject._id,
+                        subjectName: subject.subjectName,
+                        teacherId: teacherAssignment.teacherId?._id || teacherAssignment.teacherId,
+                        teacherName: teacherAssignment.teacherId?.name || 'Unknown'
+                    });
+                }
+            }
+        }
+
+        if (teacherAssignments.length === 0) {
+            return res.status(400).json({ success: false, message: 'No teachers assigned to subjects for this class' });
+        }
+
+        // Generate routine for each day
+        const generatedRoutines = [];
+        const usedSlots = {}; // Track used time slots to avoid conflicts
+n        // Initialize used slots
+        for (const day of workingDays) {
+            usedSlots[day] = {};
+            for (let p = 1; p <= periodsPerDay; p++) {
+                usedSlots[day][p] = { teacher: null, room: null };
+            }
+        }
+
+        // Check existing routines for conflicts
+        const existingRoutines = await ClassRoutine.find({
+            schoolCode,
+            studentClass,
+            section: section || null,
+            academicYear,
+            isActive: true
+        }).lean();
+
+        for (const routine of existingRoutines) {
+            for (const period of routine.periods || []) {
+                const periodNum = period.period || period.periodNumber;
+                if (period.teacher) {
+                    usedSlots[routine.day][periodNum] = { 
+                        teacher: period.teacher.toString(), 
+                        room: period.room 
+                    };
+                }
+            }
+        }
+
+        // Create periods for each day
+        for (const day of workingDays) {
+            const periods = [];
+            let subjectIndex = 0;
+
+            for (let periodNum = 1; periodNum <= periodsPerDay; periodNum++) {
+                // Skip break times (e.g., period 4 is break)
+                if (periodNum === 4) {
+                    periods.push({
+                        period: periodNum,
+                        subject: 'Break',
+                        subjectName: 'Break',
+                        teacher: null,
+                        isBreak: true
+                    });
+                    continue;
+                }
+
+                // Find available teacher for this subject
+                let assignedTeacher = null;
+                let currentSubject = null;
+
+                // Try to assign a teacher for this period
+                for (let attempt = 0; attempt < teacherAssignments.length; attempt++) {
+                    const assignment = teacherAssignments[(subjectIndex + attempt) % teacherAssignments.length];
+                    const teacherId = assignment.teacherId?.toString() || assignment.teacherId;
+                    
+                    // Check if teacher is available at this slot
+                    if (!usedSlots[day][periodNum] || usedSlots[day][periodNum].teacher !== teacherId) {
+                        assignedTeacher = assignment.teacherId;
+                        currentSubject = assignment;
+                        break;
+                    }
+                }
+
+                if (currentSubject) {
+                    periods.push({
+                        period: periodNum,
+                        subject: currentSubject.subjectId,
+                        subjectName: currentSubject.subjectName,
+                        teacher: assignedTeacher,
+                        teacherName: currentSubject.teacherName,
+                        isBreak: false
+                    });
+                    
+                    // Mark slot as used
+                    usedSlots[day][periodNum] = { 
+                        teacher: assignedTeacher?.toString() || assignedTeacher, 
+                        room: null 
+                    };
+                    
+                    subjectIndex = (subjectIndex + 1) % teacherAssignments.length;
+                } else {
+                    // No teacher available
+                    periods.push({
+                        period: periodNum,
+                        subject: null,
+                        subjectName: 'TBA',
+                        teacher: null,
+                        isBreak: false
+                    });
+                }
+            }
+
+            // Create routine for this day
+            const routine = await ClassRoutine.create({
+                schoolCode,
+                studentClass,
+                section: section || null,
+                day,
+                periods,
+                academicYear,
+                semester,
+                createdBy: req.user._id,
+                isAutoGenerated: true
+            });
+
+            generatedRoutines.push(routine);
+        }
+
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'ROUTINE_AUTO_GENERATED',
+            details: { 
+                studentClass, 
+                section, 
+                academicYear,
+                routinesCreated: generatedRoutines.length
+            },
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+
+        res.status(201).json({ 
+            success: true, 
+            message: `Auto-generated ${generatedRoutines.length} routine slots for ${studentClass}${section ? ' - ' + section : ''}`,
+            data: generatedRoutines
+        });
+
+    } catch (err) {
+        console.error('Auto-generate routine error:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
