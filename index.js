@@ -466,22 +466,28 @@ try {
     console.error('❌ Failed to load principal routes:', error.message);
 }
 
-// Teacher Routes - Working ✅
+// Teacher Routes
+console.log('Loading teacher routes...');
 try {
     const teacherRoutes = require('./routes/teacher');
+    console.log('Teacher routes module loaded successfully');
     app.use('/api/teacher', teacherRoutes);
-    console.log('✅ Teacher routes loaded - Attendance, Marks, Daily Operations');
+    console.log('✅ Teacher routes mounted at /api/teacher');
 } catch (error) {
     console.error('❌ Failed to load teacher routes:', error.message);
+    console.error(error.stack);
 }
 
-// Student Routes - Working ✅
+// Student Routes
+console.log('Loading student routes...');
 try {
     const studentRoutes = require('./routes/student');
+    console.log('Student routes module loaded successfully');
     app.use('/api/student', studentRoutes);
-    console.log('✅ Student routes loaded - Dashboard, Results, Fees');
+    console.log('✅ Student routes mounted at /api/student');
 } catch (error) {
     console.error('❌ Failed to load student routes:', error.message);
+    console.error(error.stack);
 }
 
 // Parent Routes - Working ✅
@@ -584,12 +590,15 @@ try {
 }
 
 // Result Routes
+console.log('Loading result routes...');
 try {
     const resultRoutes = require('./routes/resultRoutes');
+    console.log('Result routes module loaded successfully');
     app.use('/api/results', resultRoutes);
-    console.log('✅ Result routes loaded');
+    console.log('✅ Result routes mounted at /api/results');
 } catch (error) {
     console.error('❌ Failed to load result routes:', error.message);
+    console.error(error.stack);
 }
 
 // Routine Routes
