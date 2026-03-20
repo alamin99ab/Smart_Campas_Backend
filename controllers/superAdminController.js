@@ -20,8 +20,11 @@ const createAuditLog = async (userId, action, details, req) => {
     try {
         if (!AuditLog) return;
         
-        // Check if this is an env-based user
-        const isEnvUser = userId === 'super_admin_env' || (req && req.isEnvUser);
+        // Check if this is an env-based user (check both userId and req.user)
+        const isEnvUser = 
+            userId === 'super_admin_env' || 
+            (req && req.user && req.user.isEnvBase) ||
+            (req && req.isEnvBase);
         
         const logData = {
             action,
@@ -32,8 +35,9 @@ const createAuditLog = async (userId, action, details, req) => {
         
         if (isEnvUser) {
             logData.isEnvUser = true;
-            logData.envUserEmail = process.env.SUPER_ADMIN_EMAIL || 'super_admin@env';
-        } else {
+            logData.envUserEmail = process.env.SUPER_ADMIN_EMAIL || 
+                (req?.user?.email) || 'super_admin@env';
+        } else if (userId && mongoose.Types.ObjectId.isValid(userId)) {
             logData.user = userId;
         }
         
@@ -588,21 +592,7 @@ exports.createSchool = async (req, res) => {
         school.principalId = principal._id;
 
         // Log audit - handle environment-based super admin
-        const auditData = {
-            action: 'CREATE_SCHOOL',
-            details: `Created school: ${schoolName} (${schoolCode})`,
-            schoolCode: schoolCode
-        };
-        
-        if (req.user.isEnvBase) {
-            // Environment-based super admin
-            auditData.isEnvUser = true;
-            auditData.envUserEmail = req.user.email || req.user.id;
-        } else if (req.user._id) {
-            auditData.userId = req.user._id;
-        }
-        
-        await AuditLog.create(auditData);
+        await createAuditLog(req.user._id || req.user.id, 'CREATE_SCHOOL', `Created school: ${schoolName} (${schoolCode})`, req);
 
         res.status(201).json({
             success: true,
