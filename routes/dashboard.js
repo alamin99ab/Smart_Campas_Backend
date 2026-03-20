@@ -13,15 +13,15 @@ const dashboardController = require('../controllers/dashboardController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { ensureTenantIsolation } = require('../middleware/multiTenant');
 
-// Apply multi-tenant middleware to all routes
-router.use(ensureTenantIsolation);
-
 /**
  * 🔹 PHASE 9: ANALYTICS FLOW
  */
 
-// All dashboard routes require authentication
+// All dashboard routes require authentication first
 router.use(protect);
+
+// Then apply multi-tenant middleware (after auth, for non-super-admin routes)
+router.use(ensureTenantIsolation);
 
 /**
  * 👑 Super Admin Dashboard

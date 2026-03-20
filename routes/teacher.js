@@ -25,7 +25,8 @@ const resultController = require('../controllers/resultController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { ensureTenantIsolation, checkFeatureAccess, addSchoolScope } = require('../middleware/multiTenant');
 
-// Apply multi-tenant middleware to all routes
+// Authentication first, then tenant isolation
+router.use(protect);
 router.use(ensureTenantIsolation);
 router.use(addSchoolScope);
 

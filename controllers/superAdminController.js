@@ -554,7 +554,6 @@ exports.createSchool = async (req, res) => {
             isActive: true,
             isVerified: false
         });
-        await school.save();
 
         // Create principal account in MongoDB
         const bcrypt = require('bcryptjs');
@@ -562,13 +561,19 @@ exports.createSchool = async (req, res) => {
         const passwordToHash = principalPassword || 'Principal@123';
         const hashedPassword = await bcrypt.hash(passwordToHash, salt);
 
+        // Save school first to get the _id
+        await school.save();
+
+        // Now create principal with schoolId
         const principal = new User({
             name: principalName,
             email: principalEmail,
             password: hashedPassword,
             role: 'principal',
             phone: principalPhone,
+            schoolId: school._id,
             schoolCode: schoolCode,
+            schoolName: schoolName,
             isActive: true,
             isEmailVerified: true,
             permissions: [
@@ -579,9 +584,8 @@ exports.createSchool = async (req, res) => {
         });
         await principal.save();
 
-        // Update school with principal
+        // Update school with principal (no need to save again, principal is already saved)
         school.principalId = principal._id;
-        await school.save();
 
         // Log audit
         await AuditLog.create({
@@ -909,19 +913,32 @@ exports.createUser = async (req, res) => {
         const salt = await bcrypt.genSalt(12);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Create user
-        const user = new User({
+        // Prepare user data
+        const userData = {
             name,
             email,
             password: hashedPassword,
             role,
-            schoolCode: schoolCode || 'SYSTEM',
             phone,
             permissions: permissions || [],
             isActive: true,
             isEmailVerified: true,
             isApproved: ['principal', 'super_admin'].includes(role)
-        });
+        };
+
+        // Add school-specific fields if role requires it
+        if (['principal', 'teacher', 'student', 'parent'].includes(role) && school) {
+            userData.schoolId = school._id;
+            userData.schoolCode = schoolCode;
+            userData.schoolName = school.schoolName;
+        } else if (role === 'super_admin') {
+            userData.schoolCode = 'SUPER_ADMIN';
+        } else {
+            userData.schoolCode = schoolCode || 'SYSTEM';
+        }
+
+        // Create user
+        const user = new User(userData);
 
         await user.save();
 

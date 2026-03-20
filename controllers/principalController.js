@@ -957,6 +957,8 @@ exports.createTeacher = async (req, res) => {
     try {
         const { name, email, password, subjects, classes, phone, address } = req.body;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.user.schoolId;
+        const schoolName = req.user.schoolName;
 
         const teacher = new User({
             name,
@@ -967,7 +969,9 @@ exports.createTeacher = async (req, res) => {
             classes,
             phone,
             address,
+            schoolId,
             schoolCode,
+            schoolName,
             createdBy: req.user.id
         });
 
@@ -1128,6 +1132,8 @@ exports.createStudent = async (req, res) => {
     try {
         const { name, email, password, classId, section, rollNumber, parentInfo } = req.body;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.user.schoolId;
+        const schoolName = req.user.schoolName;
 
         const student = new User({
             name,
@@ -1138,7 +1144,9 @@ exports.createStudent = async (req, res) => {
             section,
             rollNumber,
             parentInfo,
+            schoolId,
             schoolCode,
+            schoolName,
             createdBy: req.user.id
         });
 
