@@ -86,6 +86,13 @@ exports.getTeacherDashboard = async (req, res) => {
         // Get teacher's assigned classes and subjects
         const teacher = await User.findById(teacherId);
         
+        if (!teacher) {
+            return res.status(404).json({
+                success: false,
+                message: 'Teacher not found'
+            });
+        }
+        
         res.status(200).json({
             success: true,
             data: {
@@ -117,6 +124,13 @@ exports.getStudentDashboard = async (req, res) => {
         const schoolCode = req.user.schoolCode;
         
         const student = await User.findById(studentId);
+        
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found'
+            });
+        }
         
         res.status(200).json({
             success: true,
