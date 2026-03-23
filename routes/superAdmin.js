@@ -49,6 +49,9 @@ router.get('/dashboard', getSuperAdminDashboard);
 // User Management
 router.get('/users', getAllUsers);
 
+// Create new user (accountant, parent, etc.)
+router.post('/users', createUser);
+
 // System Settings
 router.get('/settings', getSystemSettings);
 router.put('/settings', updateSystemSettings);
