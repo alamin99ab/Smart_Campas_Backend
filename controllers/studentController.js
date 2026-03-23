@@ -77,9 +77,24 @@ exports.getStudentDashboard = async (req, res) => {
         }
 
         if (!student) {
-            return res.status(404).json({
-                success: false,
-                message: 'Student not found'
+            // User exists but no student record - return a valid response
+            return res.status(200).json({
+                success: true,
+                data: {
+                    student: {
+                        name: req.user.name || 'Student',
+                        email: req.user.email,
+                        class: null,
+                        message: 'Please complete your profile registration'
+                    },
+                    notices: [],
+                    results: [],
+                    attendance: {
+                        summary: { total: 0, present: 0, absent: 0, late: 0, percentage: 0 },
+                        attendancePercentage: 0
+                    },
+                    todayRoutine: null
+                }
             });
         }
 
