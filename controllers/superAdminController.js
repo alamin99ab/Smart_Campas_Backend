@@ -364,7 +364,7 @@ exports.getSuperAdminDashboard = async (req, res) => {
         const recentSchools = await School.find({})
             .sort({ createdAt: -1 })
             .limit(5)
-            .populate('principalId', 'name email');
+            .populate('principal', 'name email');
         
         // Subscription stats
         const subscriptionBreakdown = {
