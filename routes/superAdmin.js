@@ -17,7 +17,8 @@ const {
     getSuperAdminDashboard,
     updateSystemSettings,
     getSystemSettings,
-    getAllUsers
+    getAllUsers,
+    createUser
 } = require('../controllers/superAdminController');
 
 // Import middleware
