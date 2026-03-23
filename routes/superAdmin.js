@@ -16,7 +16,8 @@ const {
     getSystemAnalytics,
     getSuperAdminDashboard,
     updateSystemSettings,
-    getSystemSettings
+    getSystemSettings,
+    getAllUsers
 } = require('../controllers/superAdminController');
 
 // Import middleware
@@ -44,6 +45,9 @@ router.delete('/schools/:id', deleteSchool);
 // Platform Statistics
 router.get('/statistics', getSystemAnalytics);
 router.get('/dashboard', getSuperAdminDashboard);
+
+// User Management
+router.get('/users', getAllUsers);
 
 // System Settings
 router.get('/settings', getSystemSettings);
