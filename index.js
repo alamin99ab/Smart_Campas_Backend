@@ -775,27 +775,35 @@ app.use((error, req, res, next) => {
 const startServer = async () => {
     let dbConnected = false;
     
-    // Try to connect to MongoDB but allow server to start anyway
-    try {
-        console.log('\n🔄 Connecting to MongoDB...');
-        console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-        
-        await mongoose.connect(process.env.MONGO_URI, {
-            serverSelectionTimeoutMS: 10000,
-            socketTimeoutMS: 30000,
-            connectTimeoutMS: 10000,
-            maxPoolSize: 5,
-            minPoolSize: 1,
-            retryWrites: false
-        });
-        
+    // Check if we should use mock database for testing
+    const useMockDB = process.env.USE_MOCK_DB === 'true' || process.env.NODE_ENV === 'test';
+    
+    if (useMockDB) {
+        console.log('\n🔄 Using Mock Database for Testing...');
         dbConnected = true;
-        console.log('✅ MongoDB Connected Successfully!');
-        console.log(`📍 Database: ${mongoose.connection.name}`);
-        console.log(`📍 Host: ${mongoose.connection.host}`);
-    } catch (dbError) {
-        console.warn('⚠️  MongoDB connection failed:', dbError.message);
-        console.warn('⚠️  Server starting without database - some features may not work');
+    } else {
+        // Try to connect to MongoDB but allow server to start anyway
+        try {
+            console.log('\n🔄 Connecting to MongoDB...');
+            console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+            
+            await mongoose.connect(process.env.MONGO_URI, {
+                serverSelectionTimeoutMS: 10000,
+                socketTimeoutMS: 30000,
+                connectTimeoutMS: 10000,
+                maxPoolSize: 5,
+                minPoolSize: 1,
+                retryWrites: false
+            });
+            
+            dbConnected = true;
+            console.log('✅ MongoDB Connected Successfully!');
+            console.log(`📍 Database: ${mongoose.connection.name}`);
+            console.log(`📍 Host: ${mongoose.connection.host}`);
+        } catch (dbError) {
+            console.warn('⚠️  MongoDB connection failed:', dbError.message);
+            console.warn('⚠️  Server starting without database - some features may not work');
+        }
     }
         
         // Initialize Super Admin only if DB is connected

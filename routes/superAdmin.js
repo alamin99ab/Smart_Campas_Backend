@@ -19,7 +19,10 @@ const {
     updateSystemSettings,
     getSystemSettings,
     getAllUsers,
-    createUser
+    createUser,
+    getUserDetails,
+    updateUser,
+    toggleUserBlock
 } = require('../controllers/superAdminController');
 
 // Import middleware
@@ -32,38 +35,34 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 // 👑 Step 1: Super Admin Login
 router.post('/login', superAdminLogin);
 
-// All other routes require super admin authentication
-router.use(protect);
-router.use(authorize('super_admin'));
+// 🏫 Step 2: Create New School (protected)
+router.post('/schools', protect, authorize('super_admin'), createSchool);
 
-// 🏫 Step 2: Create New School
-router.post('/schools', createSchool);
+// School Management (protected)
+router.get('/schools', protect, authorize('super_admin'), getAllSchools);
+router.get('/schools/:id', protect, authorize('super_admin'), getSchool);
+router.put('/schools/:id', protect, authorize('super_admin'), updateSchool);
+router.delete('/schools/:id', protect, authorize('super_admin'), deleteSchool);
 
-// School Management
-router.get('/schools', getAllSchools);
-router.get('/schools/:id', getSchool);
-router.put('/schools/:id', updateSchool);
-router.delete('/schools/:id', deleteSchool);
+// Platform Statistics (protected)
+router.get('/statistics', protect, authorize('super_admin'), getSystemAnalytics);
+router.get('/dashboard', protect, authorize('super_admin'), getSuperAdminDashboard);
 
-// Platform Statistics
-router.get('/statistics', getSystemAnalytics);
-router.get('/dashboard', getSuperAdminDashboard);
+// User Management (protected)
+router.get('/users', protect, authorize('super_admin'), getAllUsers);
+router.get('/users/:id', protect, authorize('super_admin'), getUserDetails);
 
-// User Management
-router.get('/users', getAllUsers);
-router.get('/users/:id', getUserDetails);
+// Create new user (protected)
+router.post('/users', protect, authorize('super_admin'), createUser);
 
-// Create new user
-router.post('/users', createUser);
+// Update user (protected)
+router.put('/users/:id', protect, authorize('super_admin'), updateUser);
 
-// Update user
-router.put('/users/:id', updateUser);
+// Toggle user block (protected)
+router.patch('/users/:id/toggle-block', protect, authorize('super_admin'), toggleUserBlock);
 
-// Toggle user block
-router.patch('/users/:id/toggle-block', toggleUserBlock);
-
-// System Settings
-router.get('/settings', getSystemSettings);
-router.put('/settings', updateSystemSettings);
+// System Settings (protected)
+router.get('/settings', protect, authorize('super_admin'), getSystemSettings);
+router.put('/settings', protect, authorize('super_admin'), updateSystemSettings);
 
 module.exports = router;
