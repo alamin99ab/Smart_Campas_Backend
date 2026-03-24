@@ -27,6 +27,16 @@ exports.markStudentAttendance = async (req, res) => {
             attendanceData // Array of { studentId, status, notes }
         } = req.body;
 
+        // Core validation
+        if (!classId || !sectionId || !subjectId || !date || !attendanceData || !Array.isArray(attendanceData) || attendanceData.length === 0) {
+            return res.status(400).json({ success: false, message: 'Invalid data' });
+        }
+
+        const hasInvalidStudent = attendanceData.some(item => !item.studentId || !item.status);
+        if (hasInvalidStudent) {
+            return res.status(400).json({ success: false, message: 'Invalid attendanceData: studentId and status required for each record' });
+        }
+
         const schoolId = req.tenant.schoolId;
         const teacherId = req.user.id;
 
@@ -174,9 +184,24 @@ exports.markStudentAttendance = async (req, res) => {
  */
 exports.teacherAttendance = async (req, res) => {
     try {
-        const { type, time, location, notes } = req.body; // type: 'check-in' or 'check-out'
+        const { type, time, location, notes, classId, studentId, attendanceDate, status } = req.body;
         const schoolId = req.tenant.schoolId;
         const teacherId = req.user.id;
+
+        if (!type || !['check-in', 'check-out'].includes(type)) {
+            return res.status(400).json({ success: false, message: 'Invalid attendance type' });
+        }
+
+        if (!time) {
+            return res.status(400).json({ success: false, message: 'Time is required' });
+        }
+
+        if (classId || studentId || attendanceDate || status) {
+            // Optional tutoring/registering behavior (not main path)
+            if (!classId || !studentId || !attendanceDate || !status) {
+                return res.status(400).json({ success: false, message: 'classId, studentId, date, status are required when provided' });
+            }
+        }
 
         const today = new Date().toISOString().split('T')[0];
 

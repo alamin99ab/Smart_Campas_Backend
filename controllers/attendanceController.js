@@ -139,16 +139,32 @@ exports.takeAttendance = async (req, res) => {
 // @route   GET /api/attendance/report
 // @access  Private
 exports.getAttendanceReport = async (req, res) => {
-    const { studentClass, section, date, startDate, endDate, studentId, subject, page = 1, limit = 30 } = req.query;
-    
+    const {
+        studentClass,
+        classId,
+        section,
+        date,
+        startDate,
+        endDate,
+        studentId,
+        subject,
+        page = 1,
+        limit = 30
+    } = req.query;
+
     try {
-        if (!studentClass || !section) {
-            return res.status(400).json({ message: 'Class and section are required' });
+        const finalClass = studentClass || classId;
+
+        if (!finalClass) {
+            return res.status(400).json({ success: false, message: 'classId or studentClass is required' });
+        }
+        if (!section) {
+            return res.status(400).json({ success: false, message: 'section is required' });
         }
 
         let query = {
             schoolCode: req.user.schoolCode,
-            studentClass,
+            studentClass: finalClass,
             section
         };
 
@@ -171,7 +187,7 @@ exports.getAttendanceReport = async (req, res) => {
         const total = await Attendance.countDocuments(query);
 
         if (!attendance || attendance.length === 0) {
-            return res.status(404).json({ message: 'No attendance records found' });
+            return res.status(404).json({ success: false, message: 'No attendance records found' });
         }
 
         // Student-specific report
@@ -200,11 +216,14 @@ exports.getAttendanceReport = async (req, res) => {
             };
 
             return res.json({
-                studentId,
-                attendance: studentAttendance,
-                summary,
-                totalPages: Math.ceil(total / limit),
-                currentPage: page
+                success: true,
+                data: {
+                    studentId,
+                    attendance: studentAttendance,
+                    summary,
+                    totalPages: Math.ceil(total / limit),
+                    currentPage: page
+                }
             });
         }
 
@@ -225,11 +244,14 @@ exports.getAttendanceReport = async (req, res) => {
             : 0;
 
         res.json({
-            attendance,
-            summary,
-            totalPages: Math.ceil(total / limit),
-            currentPage: page,
-            total
+            success: true,
+            data: {
+                attendance,
+                summary,
+                totalPages: Math.ceil(total / limit),
+                currentPage: page,
+                total
+            }
         });
 
     } catch (error) {

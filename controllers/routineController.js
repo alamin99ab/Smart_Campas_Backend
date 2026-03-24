@@ -176,6 +176,38 @@ exports.getRoutines = async (req, res) => {
     }
 };
 
+exports.getDailyRoutine = async (req, res) => {
+    try {
+        const { studentClass, section, day } = req.query;
+
+        if (!studentClass || !section) {
+            return res.status(400).json({ success: false, message: 'studentClass and section are required' });
+        }
+
+        const today = day || new Date().toLocaleDateString('en-US', { weekday: 'long' });
+
+        const routine = await ClassRoutine.findOne({
+            schoolCode: req.user.schoolCode,
+            studentClass,
+            section,
+            day: today,
+            isActive: true
+        })
+            .populate('periods.teacher', 'name email')
+            .populate('createdBy', 'name')
+            .lean();
+
+        if (!routine) {
+            return res.status(404).json({ success: false, message: 'Routine not found for today' });
+        }
+
+        res.status(200).json({ success: true, data: routine, message: 'Daily routine fetched successfully' });
+    } catch (err) {
+        console.error('Get daily routine error:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch daily routine' });
+    }
+};
+
 exports.getRoutineById = async (req, res) => {
     try {
         const routine = await ClassRoutine.findOne({

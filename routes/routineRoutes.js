@@ -19,6 +19,7 @@ router.post('/auto-generate', authorize('principal', 'admin', 'super_admin'), au
 
 router.post('/check-conflicts', authorize('principal', 'admin', 'teacher'), checkConflicts);
 router.post('/', authorize('principal', 'admin', 'teacher'), createRoutine);
+router.get('/daily', getDailyRoutine);
 router.get('/', getRoutines);
 router.get('/:id', getRoutineById);
 router.put('/:id', authorize('principal', 'admin', 'teacher'), updateRoutine);

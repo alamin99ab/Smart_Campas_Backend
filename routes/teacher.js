@@ -8,6 +8,7 @@ const router = express.Router();
 
 // Import controllers
 const {
+    markStudentAttendance,
     teacherAttendance,
     getStudentAttendanceReport,
     getClassAttendanceReport,
@@ -45,7 +46,8 @@ router.use(authorize('teacher'));
  * 👨‍🏫 Step 9: Take Attendance
  */
 
-router.post('/attendance/mark', checkFeatureAccess('attendance'), teacherAttendance);
+router.post('/attendance/mark', checkFeatureAccess('attendance'), markStudentAttendance);
+router.post('/attendance/self', checkFeatureAccess('attendance'), teacherAttendance);
 router.get('/attendance/my-report', getTeacherAttendanceReport);
 router.get('/attendance/class/:classId/:sectionId/:date', getClassAttendanceReport);
 router.get('/attendance/student/:studentId/report', getStudentAttendanceReport);
