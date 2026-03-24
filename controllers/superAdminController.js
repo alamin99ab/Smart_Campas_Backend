@@ -930,6 +930,8 @@ exports.createUser = async (req, res) => {
             });
         }
 
+        let school = null; // Declare school variable in outer scope
+
         // For school-specific roles, validate school code
         if (['principal', 'teacher', 'student', 'parent'].includes(role)) {
             if (!schoolCode) {
@@ -939,7 +941,7 @@ exports.createUser = async (req, res) => {
                 });
             }
 
-            const school = await School.findOne({ schoolCode });
+            school = await School.findOne({ schoolCode });
             if (!school) {
                 return res.status(400).json({
                     success: false,
