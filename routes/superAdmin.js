@@ -11,6 +11,7 @@ const {
     superAdminLogin,
     createSchool,
     getAllSchools,
+    getSchool,
     updateSchool,
     deleteSchool,
     getSystemAnalytics,
@@ -40,6 +41,7 @@ router.post('/schools', createSchool);
 
 // School Management
 router.get('/schools', getAllSchools);
+router.get('/schools/:id', getSchool);
 router.put('/schools/:id', updateSchool);
 router.delete('/schools/:id', deleteSchool);
 

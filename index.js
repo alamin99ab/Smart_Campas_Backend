@@ -692,6 +692,33 @@ try {
     console.error('❌ Failed to load AI routes:', error.message);
 }
 
+// Subscription Routes (SaaS)
+try {
+    const subscriptionRoutes = require('./routes/subscriptionRoutes');
+    app.use('/api/subscriptions', subscriptionRoutes);
+    console.log('✅ Subscription routes loaded - SaaS subscription management');
+} catch (error) {
+    console.error('❌ Failed to load subscription routes:', error.message);
+}
+
+// Promotion Routes
+try {
+    const promotionRoutes = require('./routes/promotionRoutes');
+    app.use('/api/promotion', promotionRoutes);
+    console.log('✅ Promotion routes loaded - Academic promotion management');
+} catch (error) {
+    console.error('❌ Failed to load promotion routes:', error.message);
+}
+
+// Student Bulk Import Routes
+try {
+    const studentBulkRoutes = require('./routes/studentBulkRoutes');
+    app.use('/api/students/bulk', studentBulkRoutes);
+    console.log('✅ Student bulk routes loaded - Bulk import support');
+} catch (error) {
+    console.error('❌ Failed to load student bulk routes:', error.message);
+}
+
 // 404 handler with all available endpoints
 app.use('*', (req, res) => {
     res.status(404).json({

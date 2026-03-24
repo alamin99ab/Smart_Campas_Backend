@@ -33,6 +33,17 @@ const studentSchema = new mongoose.Schema({
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     isActive: { type: Boolean, default: true },
+    // Academic history for promotion tracking
+    academicHistory: [{
+        academicYear: { type: String },
+        className: { type: String },
+        section: { type: String },
+        promotionDate: { type: Date },
+        promotedTo: { type: String },
+        promotedToSection: { type: String },
+        examName: { type: String },
+        promotionType: { type: String, enum: ['all', 'passing', 'manual'] }
+    }],
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });

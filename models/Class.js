@@ -51,51 +51,26 @@ const classSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    // Enhanced subject assignment for this class-section
     subjects: [{
         subjectId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Subject'
         },
+        subjectName: String,
+        subjectCode: String,
         teacherId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User'
         },
+        teacherName: String,
         periodsPerWeek: {
             type: Number,
             default: 5
-        }
-    }],
-    schedule: [{
-        day: {
-            type: String,
-            enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
-            required: true
         },
-        periods: [{
-            periodNumber: {
-                type: Number,
-                required: true,
-                min: 1
-            },
-            startTime: {
-                type: String,
-                required: true
-            },
-            endTime: {
-                type: String,
-                required: true
-            },
-            subjectId: {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: 'Subject'
-            },
-            teacherId: {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: 'User'
-            },
-            roomNumber: String
-        }]
+        isActive: { type: Boolean, default: true }
     }],
+    // Class status for academic year
     academicYear: {
         type: String,
         required: true

@@ -274,7 +274,7 @@ exports.registerUser = async (req, res) => {
 // @route   POST /api/auth/login
 // @access  Public
 exports.loginUser = async (req, res) => {
-    const { email, password, twoFactorToken } = req.body;
+    const { email, password, schoolCode, twoFactorToken } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
 
     try {
@@ -288,21 +288,17 @@ exports.loginUser = async (req, res) => {
         // ============================================
         // SUPER ADMIN AUTHENTICATION FROM ENV VARIABLES
         // ============================================
-        // Check if login is for Super Admin (using environment variables)
+        // Super Admin login does NOT require schoolCode - only email + password
         const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
         const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
         
         if (email === superAdminEmail && superAdminEmail && superAdminPassword) {
             // Validate Super Admin password from environment variables
-            // Support both plain text and bcrypt hash in environment variable
             let isSuperAdminValid = false;
             
-            // Check if the stored password is a bcrypt hash (starts with $2a$, $2b$, or $2y$)
             if (superAdminPassword.startsWith('$2') && superAdminPassword.length >= 60) {
-                // It's a bcrypt hash
                 isSuperAdminValid = await bcrypt.compare(password, superAdminPassword);
             } else {
-                // It's plain text - compare directly (less secure but for convenience)
                 isSuperAdminValid = (password === superAdminPassword);
             }
             
@@ -313,7 +309,6 @@ exports.loginUser = async (req, res) => {
                 });
             }
             
-            // Generate token for Super Admin (using a virtual ID)
             const superAdminToken = jwt.sign(
                 { 
                     id: 'super_admin_env',
@@ -343,6 +338,57 @@ exports.loginUser = async (req, res) => {
         }
         // ============================================
 
+        // ============================================
+        // MULTI-SCHOOL SAAS LOGIN VALIDATION
+        // ============================================
+        // For school users (principal, teacher, student, parent, accountant), schoolCode is REQUIRED
+        let validatedSchoolCode = null;
+        
+        // First, check if user exists to determine their role and expected school
+        const userCheck = await User.findOne({ email }).select(
+            '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices schoolCode role'
+        );
+
+        // If user exists, get their schoolCode from database
+        if (userCheck && userCheck.schoolCode) {
+            validatedSchoolCode = userCheck.schoolCode;
+        } else {
+            // If user doesn't exist yet, schoolCode must be provided
+            if (!schoolCode) {
+                return res.status(400).json({ 
+                    success: false,
+                    message: 'School code is required for new user login' 
+                });
+            }
+            
+            // Validate the provided schoolCode exists and is active
+            const school = await School.findOne({ schoolCode: schoolCode.toUpperCase() });
+            if (!school) {
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'School not found with this code' 
+                });
+            }
+            
+            if (!school.isActive) {
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'School account is inactive' 
+                });
+            }
+            
+            // Check subscription status
+            if (school.subscription?.status !== 'active') {
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'School subscription is not active. Please contact your administrator.' 
+                });
+            }
+            
+            validatedSchoolCode = school.schoolCode;
+        }
+        // ============================================
+
         // MongoDB query - get user with password field for verification
         const user = await User.findOne({ email }).select(
             '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices'
@@ -352,6 +398,14 @@ exports.loginUser = async (req, res) => {
             return res.status(401).json({ 
                 success: false,
                 message: 'Invalid credentials' 
+            });
+        }
+
+        // Verify school code matches for this user (multi-school safety check)
+        if (user.schoolCode && schoolCode && user.schoolCode !== schoolCode.toUpperCase()) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Invalid school code for this user' 
             });
         }
 
@@ -439,6 +493,7 @@ exports.loginUser = async (req, res) => {
             user.devices[deviceIndex].lastActive = new Date();
         }
 
+        // Generate token with schoolCode for multi-school SaaS
         const token = generateToken(user._id, user.role, user.schoolCode, user.permissions, deviceId);
         const refreshToken = generateRefreshToken(user._id, deviceId);
 
@@ -456,11 +511,25 @@ exports.loginUser = async (req, res) => {
         });
 
         await user.save();
-        await createAuditLog(user._id, 'LOGIN_SUCCESS', { deviceId }, req);
+        await createAuditLog(user._id, 'LOGIN_SUCCESS', { deviceId, schoolCode: user.schoolCode }, req);
 
         if (process.env.USE_COOKIE === 'true') {
             setTokenCookie(res, token);
             setRefreshTokenCookie(res, refreshToken);
+        }
+
+        // Get school details for response
+        let schoolDetails = null;
+        if (user.schoolCode) {
+            const school = await School.findOne({ schoolCode: user.schoolCode }).select('schoolName subscription');
+            if (school) {
+                schoolDetails = {
+                    schoolName: school.schoolName,
+                    plan: school.subscription?.plan || 'trial',
+                    subscriptionStatus: school.subscription?.status || 'active',
+                    expiryDate: school.subscription?.endDate
+                };
+            }
         }
 
         res.json({
@@ -477,6 +546,7 @@ exports.loginUser = async (req, res) => {
                 twoFactorEnabled: user.twoFactorEnabled,
                 permissions: user.permissions,
                 deviceId,
+                schoolDetails,
                 token: process.env.USE_COOKIE === 'true' ? undefined : token,
                 refreshToken: process.env.USE_COOKIE === 'true' ? undefined : refreshToken
             }

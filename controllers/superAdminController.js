@@ -670,6 +670,58 @@ exports.getAllSchools = async (req, res) => {
 };
 
 /**
+ * @desc    Get school by ID
+ * @route   GET /api/super-admin/schools/:id
+ * @access  Super Admin only
+ */
+exports.getSchool = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Find school by ID
+        const school = await School.findById(id)
+            .populate('principal', 'name email phone role')
+            .lean();
+
+        if (!school) {
+            return res.status(404).json({
+                success: false,
+                message: 'School not found'
+            });
+        }
+
+        // Get student and teacher counts
+        const Student = require('../models/Student');
+        const Teacher = require('../models/Teacher');
+
+        const studentCount = await Student.countDocuments({ schoolId: id });
+        const teacherCount = await Teacher.countDocuments({ schoolId: id });
+
+        const schoolData = {
+            ...school,
+            studentCount: studentCount || 0,
+            teacherCount: teacherCount || 0,
+            principalName: school.principal?.name,
+            principalEmail: school.principal?.email,
+            principalPhone: school.principal?.phone
+        };
+
+        res.status(200).json({
+            success: true,
+            data: schoolData
+        });
+
+    } catch (error) {
+        console.error('Error getting school:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving school',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Update school
  * @route   PUT /api/super-admin/schools/:id
  * @access  Super Admin only

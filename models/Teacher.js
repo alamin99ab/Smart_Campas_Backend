@@ -25,6 +25,39 @@ const teacherSchema = new mongoose.Schema({
     subjects: [{
         type: String
     }],
+    // Enhanced subject assignment with class and section mapping
+    subjectAssignments: [{
+        subjectId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Subject'
+        },
+        subjectName: String,
+        className: String,
+        section: String,
+        isPrimary: { type: Boolean, default: false },
+        assignedDate: { type: Date, default: Date.now },
+        isActive: { type: Boolean, default: true }
+    }],
+    // Class teacher assignment
+    classTeacherOf: {
+        class: String,
+        section: String,
+        assignedDate: Date
+    },
+    // Availability and preferences
+    availability: {
+        maxPeriodsPerDay: { type: Number, default: 6 },
+        maxPeriodsPerWeek: { type: Number, default: 30 },
+        preferredDays: [{
+            type: String,
+            enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+        }],
+        preferredPeriods: [Number],
+        unavailablePeriods: [{
+            day: String,
+            periods: [Number]
+        }]
+    },
     address: String,
     dateOfBirth: Date,
     gender: {
@@ -50,7 +83,6 @@ const teacherSchema = new mongoose.Schema({
     },
     maxPeriodsPerWeek: { type: Number, default: 30 },
     isClassTeacher: { type: Boolean, default: false },
-    classTeacherOf: { class: String, section: String },
     isActive: {
         type: Boolean,
         default: true
