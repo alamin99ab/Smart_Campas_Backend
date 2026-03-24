@@ -270,11 +270,11 @@ exports.registerUser = async (req, res) => {
     }
 } // Added closing bracket here
 
-// @desc    Login User
+// @desc    Login User (Super Admin and School Users)
 // @route   POST /api/auth/login
 // @access  Public
 exports.loginUser = async (req, res) => {
-    const { email, password, schoolCode, twoFactorToken } = req.body;
+    const { email, password, schoolCode, twoFactorToken, isSuperAdminLogin } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
 
     try {
@@ -286,14 +286,13 @@ exports.loginUser = async (req, res) => {
         }
 
         // ============================================
-        // SUPER ADMIN AUTHENTICATION FROM ENV VARIABLES
+        // SUPER ADMIN AUTHENTICATION (ENV-BASED)
         // ============================================
-        // Super Admin login does NOT require schoolCode - only email + password
         const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
         const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
         
         if (email === superAdminEmail && superAdminEmail && superAdminPassword) {
-            // Validate Super Admin password from environment variables
+            // Validate Super Admin password
             let isSuperAdminValid = false;
             
             if (superAdminPassword.startsWith('$2') && superAdminPassword.length >= 60) {
@@ -325,71 +324,26 @@ exports.loginUser = async (req, res) => {
             return res.json({
                 success: true,
                 message: 'Super Admin login successful',
-                token: superAdminToken,
-                refreshToken,
                 data: {
                     user: {
+                        _id: 'super_admin_env',
                         email: superAdminEmail,
                         name: process.env.SUPER_ADMIN_NAME || 'Super Admin',
                         role: 'super_admin'
-                    }
+                    },
+                    token: superAdminToken,
+                    refreshToken,
+                    deviceId
                 }
             });
         }
         // ============================================
 
         // ============================================
-        // MULTI-SCHOOL SAAS LOGIN VALIDATION
+        // SCHOOL USERS LOGIN (Principal, Teacher, Student, etc.)
         // ============================================
-        // For school users (principal, teacher, student, parent, accountant), schoolCode is REQUIRED
-        let validatedSchoolCode = null;
         
-        // First, check if user exists to determine their role and expected school
-        const userCheck = await User.findOne({ email }).select(
-            '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices schoolCode role'
-        );
-
-        // If user exists, get their schoolCode from database
-        if (userCheck && userCheck.schoolCode) {
-            validatedSchoolCode = userCheck.schoolCode;
-        } else {
-            // If user doesn't exist yet, schoolCode must be provided
-            if (!schoolCode) {
-                return res.status(400).json({ 
-                    success: false,
-                    message: 'School code is required for new user login' 
-                });
-            }
-            
-            // Validate the provided schoolCode exists and is active
-            const school = await School.findOne({ schoolCode: schoolCode.toUpperCase() });
-            if (!school) {
-                return res.status(404).json({ 
-                    success: false,
-                    message: 'School not found with this code' 
-                });
-            }
-            
-            if (!school.isActive) {
-                return res.status(403).json({ 
-                    success: false,
-                    message: 'School account is inactive' 
-                });
-            }
-            
-            // Check subscription status
-            if (school.subscription?.status !== 'active') {
-                return res.status(403).json({ 
-                    success: false,
-                    message: 'School subscription is not active. Please contact your administrator.' 
-                });
-            }
-            
-            validatedSchoolCode = school.schoolCode;
-        }
-        // ============================================
-
-        // MongoDB query - get user with password field for verification
+        // First, find user by email
         const user = await User.findOne({ email }).select(
             '+password +refreshToken +loginAttempts +isBlocked +twoFactorSecret +twoFactorEnabled +devices'
         );
@@ -401,19 +355,66 @@ exports.loginUser = async (req, res) => {
             });
         }
 
-        // Verify school code matches for this user (multi-school safety check)
-        if (user.schoolCode && schoolCode && user.schoolCode !== schoolCode.toUpperCase()) {
+        // If user exists in DB, they already have a schoolCode
+        // For db-based users, we use their stored schoolCode
+        // Only validate provided schoolCode if it's explicitly given
+        if (schoolCode && user.schoolCode && user.schoolCode !== schoolCode.toUpperCase()) {
             return res.status(403).json({ 
                 success: false,
-                message: 'Invalid school code for this user' 
+                message: 'Invalid school code for this user account' 
             });
         }
 
+        // Use user's existing schoolCode from database
+        const userSchoolCode = user.schoolCode;
+        
+        // Verify school exists and is active
+        if (userSchoolCode) {
+            const school = await School.findOne({ schoolCode: userSchoolCode });
+            
+            if (!school) {
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'School not found. Contact administrator.' 
+                });
+            }
+            
+            if (!school.isActive) {
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'School account is inactive. Contact administrator.' 
+                });
+            }
+            
+            // Check subscription status
+            if (school.subscription?.status !== 'active') {
+                return res.status(403).json({ 
+                    success: false,
+                    message: 'School subscription has expired. Contact administrator.' 
+                });
+            }
+        }
+
+        // Account status checks
         if (user.isBlocked) {
             await createAuditLog(user._id, 'LOGIN_BLOCKED', { reason: 'Account blocked' }, req);
             return res.status(403).json({ 
                 success: false,
-                message: 'Account blocked. Contact support.' 
+                message: 'Account is blocked. Contact your administrator.' 
+            });
+        }
+
+        if (!user.isActive) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Account is inactive. Contact your administrator.' 
+            });
+        }
+
+        if (user.role !== 'super_admin' && !user.isApproved) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Account pending approval. Please contact your administrator.' 
             });
         }
 
@@ -424,6 +425,7 @@ exports.loginUser = async (req, res) => {
             });
         }
 
+        // Verify password
         const isMatch = await user.comparePassword(password);
 
         if (!isMatch) {
@@ -431,20 +433,21 @@ exports.loginUser = async (req, res) => {
             if (user.loginAttempts >= 5) {
                 user.isBlocked = true;
                 await user.save();
-                await createAuditLog(user._id, 'ACCOUNT_BLOCKED', { reason: 'Too many failed attempts' }, req);
+                await createAuditLog(user._id, 'ACCOUNT_BLOCKED', { reason: 'Too many failed login attempts' }, req);
                 return res.status(403).json({ 
                     success: false,
-                    message: 'Too many attempts. Account blocked.' 
+                    message: 'Too many incorrect password attempts. Account blocked. Contact administrator.' 
                 });
             }
             await user.save();
             await createAuditLog(user._id, 'LOGIN_FAILED', { attempt: user.loginAttempts }, req);
             return res.status(401).json({ 
                 success: false,
-                message: 'Invalid credentials' 
+                message: 'Invalid email or password' 
             });
         }
 
+        // Check 2FA if enabled
         if (user.twoFactorEnabled) {
             if (!twoFactorToken) {
                 return res.status(403).json({
@@ -460,24 +463,19 @@ exports.loginUser = async (req, res) => {
             });
             if (!verified) {
                 await createAuditLog(user._id, '2FA_FAILED', {}, req);
-                return res.status(401).json({ message: 'Invalid 2FA token' });
+                return res.status(401).json({ 
+                    success: false,
+                    message: 'Invalid 2FA token' 
+                });
             }
         }
 
-        // Check school subscription only for non-super-admin users
-        if (user.role !== 'super_admin' && user.schoolCode) {
-            const school = await School.findOne({ schoolCode: user.schoolCode });
-            if (school && school.subscription?.status !== 'active') {
-                return res.status(403).json({ message: 'School subscription is inactive' });
-            }
-        }
-
+        // Update user login info
         user.loginAttempts = 0;
         user.lastLogin = new Date();
         user.lastLoginIP = req.ip;
         user.lastUserAgent = req.headers['user-agent'];
 
-        // Ensure devices array exists
         if (!user.devices) {
             user.devices = [];
         }
@@ -493,10 +491,11 @@ exports.loginUser = async (req, res) => {
             user.devices[deviceIndex].lastActive = new Date();
         }
 
-        // Generate token with schoolCode for multi-school SaaS
+        // Generate JWT token with user info and schoolCode for SaaS multi-tenancy
         const token = generateToken(user._id, user.role, user.schoolCode, user.permissions, deviceId);
         const refreshToken = generateRefreshToken(user._id, deviceId);
 
+        // Store refresh token
         user.refreshToken = refreshToken;
         user.sessions = user.sessions || [];
         if (user.sessions.length >= 5) {
@@ -511,8 +510,9 @@ exports.loginUser = async (req, res) => {
         });
 
         await user.save();
-        await createAuditLog(user._id, 'LOGIN_SUCCESS', { deviceId, schoolCode: user.schoolCode }, req);
+        await createAuditLog(user._id, 'LOGIN_SUCCESS', { deviceId, schoolCode: user.schoolCode, role: user.role }, req);
 
+        // Set cookies if configured
         if (process.env.USE_COOKIE === 'true') {
             setTokenCookie(res, token);
             setRefreshTokenCookie(res, refreshToken);
@@ -520,11 +520,14 @@ exports.loginUser = async (req, res) => {
 
         // Get school details for response
         let schoolDetails = null;
-        if (user.schoolCode) {
-            const school = await School.findOne({ schoolCode: user.schoolCode }).select('schoolName subscription');
+        if (user.schoolCode && user.schoolCode !== 'SUPER_ADMIN') {
+            const school = await School.findOne({ schoolCode: user.schoolCode }).select('schoolName subscription logo');
             if (school) {
                 schoolDetails = {
+                    schoolId: school._id,
                     schoolName: school.schoolName,
+                    schoolCode: school.schoolCode,
+                    logo: school.logo?.url,
                     plan: school.subscription?.plan || 'trial',
                     subscriptionStatus: school.subscription?.status || 'active',
                     expiryDate: school.subscription?.endDate
@@ -532,23 +535,26 @@ exports.loginUser = async (req, res) => {
             }
         }
 
+        // Return success response with clear structure
         res.json({
             success: true,
+            message: 'Login successful',
             data: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                schoolCode: user.schoolCode,
-                schoolName: user.schoolName,
-                isApproved: user.isApproved,
-                emailVerified: user.emailVerified,
-                twoFactorEnabled: user.twoFactorEnabled,
-                permissions: user.permissions,
-                deviceId,
-                schoolDetails,
+                user: {
+                    _id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    role: user.role,
+                    schoolCode: user.schoolCode,
+                    schoolName: user.schoolName,
+                    isApproved: user.isApproved,
+                    emailVerified: user.emailVerified,
+                    permissions: user.permissions,
+                    schoolDetails
+                },
                 token: process.env.USE_COOKIE === 'true' ? undefined : token,
-                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : refreshToken
+                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : refreshToken,
+                deviceId
             }
         });
 
@@ -557,7 +563,7 @@ exports.loginUser = async (req, res) => {
         console.error('Stack:', error.stack);
         res.status(500).json({ 
             success: false,
-            message: 'Login failed',
+            message: 'Login failed. Please try again.',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
