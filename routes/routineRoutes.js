@@ -8,7 +8,8 @@ const {
     deleteRoutine,
     publishRoutine,
     checkConflicts,
-    autoGenerateRoutine
+    autoGenerateRoutine,
+    getDailyRoutine
 } = require('../controllers/routineController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 

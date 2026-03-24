@@ -605,6 +605,7 @@ try {
 try {
     const routineRoutes = require('./routes/routineRoutes');
     app.use('/api/routines', routineRoutes);
+    app.use('/api/routine', routineRoutes); // legacy alias
     console.log('✅ Routine routes loaded');
 } catch (error) {
     console.error('❌ Failed to load routine routes:', error.message);

@@ -155,11 +155,12 @@ exports.getAttendanceReport = async (req, res) => {
     try {
         const finalClass = studentClass || classId;
 
-        if (!finalClass) {
-            return res.status(400).json({ success: false, message: 'classId or studentClass is required' });
-        }
-        if (!section) {
-            return res.status(400).json({ success: false, message: 'section is required' });
+        const missing = [];
+        if (!finalClass) missing.push('classId');
+        if (!section) missing.push('section');
+
+        if (missing.length > 0) {
+            return res.status(400).json({ success: false, message: `${missing.join(' and ')} are required` });
         }
 
         let query = {
