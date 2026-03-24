@@ -6,6 +6,14 @@
 const express = require('express');
 const router = express.Router();
 
+// Test route to verify module loading
+router.get('/test', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Super Admin routes are working'
+    });
+});
+
 // Import controllers
 const authController = require('../controllers/authController');
 const {
