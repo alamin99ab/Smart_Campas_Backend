@@ -51,9 +51,16 @@ router.get('/dashboard', getSuperAdminDashboard);
 
 // User Management
 router.get('/users', getAllUsers);
+router.get('/users/:id', getUserDetails);
 
-// Create new user (accountant, parent, etc.)
+// Create new user
 router.post('/users', createUser);
+
+// Update user
+router.put('/users/:id', updateUser);
+
+// Toggle user block
+router.patch('/users/:id/toggle-block', toggleUserBlock);
 
 // System Settings
 router.get('/settings', getSystemSettings);

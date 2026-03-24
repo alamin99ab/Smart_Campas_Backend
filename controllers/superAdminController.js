@@ -577,6 +577,7 @@ exports.createSchool = async (req, res) => {
             schoolCode: schoolCode,
             schoolName: schoolName,
             isActive: true,
+            isApproved: true,
             isEmailVerified: true,
             permissions: [
                 'manage_students', 'manage_teachers', 'manage_classes',
@@ -984,12 +985,7 @@ exports.createUser = async (req, res) => {
         await user.save();
 
         // Log audit
-        await AuditLog.create({
-            userId: req.user._id,
-            action: 'USER_CREATED',
-            details: `Created user: ${name} (${email}) with role: ${role}`,
-            schoolCode: schoolCode || 'SYSTEM'
-        });
+        await createAuditLog(req.user._id || req.user.id, 'USER_CREATED', `Created user: ${name} (${email}) with role: ${role}`, req);
 
         res.status(201).json({
             success: true,
@@ -1026,14 +1022,21 @@ exports.updateUser = async (req, res) => {
         const { id } = req.params;
         const updates = req.body;
 
-        // Don't allow password updates through this endpoint
+        // Don't allow password updates through this endpoint (use separate reset endpoint)
         delete updates.password;
+
+        // Handle isApproved specifically - can be set to approve users
+        const isApproved = updates.isApproved;
+        delete updates.isApproved;
+
+        const updateObj = { ...updates, lastModifiedBy: req.user._id || req.user.id };
 
         const user = await User.findByIdAndUpdate(
             id,
-            { ...updates, lastModifiedBy: req.user._id },
+            updateObj,
             { new: true, runValidators: true }
         ).select('-password');
+
 
         if (!user) {
             return res.status(404).json({
@@ -1042,13 +1045,14 @@ exports.updateUser = async (req, res) => {
             });
         }
 
+        // If isApproved was provided in request, update it
+        if (isApproved !== undefined) {
+            user.isApproved = isApproved;
+            await user.save();
+        }
+
         // Log audit
-        await AuditLog.create({
-            userId: req.user._id,
-            action: 'USER_UPDATED',
-            details: `Updated user: ${user.name} (${user.email})`,
-            schoolCode: user.schoolCode
-        });
+        await createAuditLog(req.user._id || req.user.id, 'USER_UPDATED', `Updated user: ${user.name} (${user.email})`, req);
 
         res.status(200).json({
             success: true,
