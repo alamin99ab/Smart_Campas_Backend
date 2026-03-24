@@ -1,6 +1,7 @@
 /**
  * 🎓 STUDENT BULK IMPORT CONTROLLER
  * Bulk student upload with validation
+ * Supports: CSV, JSON formats
  */
 
 const Student = require('../models/Student');
@@ -8,8 +9,7 @@ const User = require('../models/User');
 const School = require('../models/School');
 const Class = require('../models/Class');
 const { createNotification } = require('../utils/createNotification');
-const csvParser = require('csv-parse/lib/sync');
-const xlstojson = require('xls-to-json');
+const { parse } = require('csv-parse/sync');
 
 // @desc    Upload and parse student file
 // @route   POST /api/students/parse-file
@@ -32,7 +32,7 @@ exports.parseStudentFile = async (req, res) => {
 
         // Parse file based on format
         if (format === 'csv' || req.file.originalname.endsWith('.csv')) {
-            students = csvParser(req.file.buffer.toString('utf-8'), {
+            students = parse(req.file.buffer.toString('utf-8'), {
                 columns: true,
                 skip_empty_lines: true,
                 trim: true
