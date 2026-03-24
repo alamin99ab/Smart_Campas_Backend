@@ -1140,7 +1140,7 @@ exports.createStudent = async (req, res) => {
             email,
             password,
             role: 'student',
-            class: classId,
+            classId,
             section,
             rollNumber,
             parentInfo,

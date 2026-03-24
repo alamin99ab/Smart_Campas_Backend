@@ -13,6 +13,16 @@ const userSchema = new mongoose.Schema({
     phone: String,
     address: String,
     profileImage: String,
+    classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class' },
+    section: String,
+    rollNumber: String,
+    parentInfo: {
+        name: String,
+        email: String,
+        phone: String
+    },
+    subjects: [{ type: String }],
+    classes: [{ type: String }],
     isApproved: { type: Boolean, default: false },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     approvedAt: Date,

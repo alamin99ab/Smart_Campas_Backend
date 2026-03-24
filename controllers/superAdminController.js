@@ -528,6 +528,7 @@ exports.createSchool = async (req, res) => {
             principalEmail,
             principalPhone,
             principalPassword,
+            plan,
             academicSettings
         } = req.body;
 
@@ -552,7 +553,7 @@ exports.createSchool = async (req, res) => {
                 currentSession: new Date().getFullYear().toString()
             },
             subscription: {
-                plan: 'trial',
+                plan: plan || 'trial',
                 status: 'active'
             },
             isActive: true,
