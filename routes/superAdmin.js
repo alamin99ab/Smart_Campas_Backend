@@ -7,8 +7,8 @@ const express = require('express');
 const router = express.Router();
 
 // Import controllers
+const authController = require('../controllers/authController');
 const {
-    superAdminLogin,
     createSchool,
     getAllSchools,
     getSchool,
@@ -33,7 +33,7 @@ const { protect, authorize } = require('../middleware/authMiddleware');
  */
 
 // 👑 Step 1: Super Admin Login
-router.post('/login', superAdminLogin);
+router.post('/login', authController.loginUser);
 
 // 🏫 Step 2: Create New School (protected)
 router.post('/schools', protect, authorize('super_admin'), createSchool);
