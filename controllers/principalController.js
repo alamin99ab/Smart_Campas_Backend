@@ -15,6 +15,69 @@ const Room = require('../models/Room');
 const Exam = require('../models/Exam');
 
 /**
+ * @desc    Get all users in principal's school
+ * @route   GET /api/principal/users
+ * @access  Principal only
+ */
+exports.getUsers = async (req, res) => {
+    try {
+        const { page = 1, limit = 20, role, search } = req.query;
+        const skip = (page - 1) * limit;
+        const schoolCode = req.user.schoolCode;
+
+        // Build query - only users in principal's school
+        const query = { schoolCode };
+        if (role) query.role = role;
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Principal can only see teacher, student, parent, accountant
+        const manageableRoles = ['teacher', 'student', 'parent', 'accountant'];
+        if (role && !manageableRoles.includes(role)) {
+            return res.status(403).json({
+                success: false,
+                message: `You cannot view ${role} users`
+            });
+        }
+
+        if (!role) {
+            query.role = { $in: manageableRoles };
+        }
+
+        const users = await User.find(query)
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await User.countDocuments(query);
+
+        res.status(200).json({
+            success: true,
+            data: users,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / limit)
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting users:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving users',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Create Academic Session
  * @route   POST /api/principal/academic-sessions
  * @access  Principal only
@@ -1088,9 +1151,104 @@ exports.deleteTeacher = async (req, res) => {
 };
 
 /**
- * @desc    Reset Teacher Password
+ * @desc    Reset User Password (Principal)
+ * @route   POST /api/principal/users/:userId/reset-password
+ * @access  Principal only
+ * 
+ * Principal can reset password for:
+ * - Teachers in their school
+ * - Students in their school
+ * - Parents in their school
+ * - Accountants in their school
+ * 
+ * Cannot reset:
+ * - Other principals
+ * - Super admin
+ * - Users in other schools
+ */
+exports.resetUserPassword = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { newPassword, forceChangeOnNextLogin } = req.body;
+        const principalSchoolCode = req.user.schoolCode;
+
+        // ===== VALIDATION =====
+        if (!newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password is required'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be at least 6 characters'
+            });
+        }
+
+        if (newPassword.length > 128) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be less than 128 characters'
+            });
+        }
+
+        // ===== FETCH TARGET USER =====
+        const targetUser = await User.findById(userId);
+        if (!targetUser) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // ===== AUTHORIZATION CHECKS =====
+        // Check if target user is in same school
+        if (targetUser.schoolCode !== principalSchoolCode) {
+            return res.status(403).json({
+                success: false,
+                message: 'You can only manage users in your own school'
+            });
+        }
+
+        // Check if target role is manageable by principal
+        const manageableRoles = ['teacher', 'student', 'parent', 'accountant'];
+        if (!manageableRoles.includes(targetUser.role)) {
+            return res.status(403).json({
+                success: false,
+                message: `You cannot reset ${targetUser.role} password`
+            });
+        }
+
+        // ===== USE PASSWORD SERVICE =====
+        const passwordService = require('../services/passwordResetService');
+        const result = await passwordService.resetUserPassword({
+            targetUserId: userId,
+            newPassword,
+            requesterId: req.user.id,
+            requesterRole: 'principal',
+            requesterSchoolCode: principalSchoolCode,
+            forceChangeOnNextLogin,
+            req
+        });
+
+        res.status(200).json(result);
+
+    } catch (error) {
+        console.error('Reset password error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to reset password'
+        });
+    }
+};
+
+/**
+ * @desc    Reset Teacher Password (Principal) - Deprecated
  * @route   POST /api/principal/teachers/:id/reset-password
  * @access  Principal only
+ * @deprecated Use POST /api/principal/users/:id/reset-password instead
  */
 exports.resetTeacherPassword = async (req, res) => {
     try {
@@ -1107,7 +1265,10 @@ exports.resetTeacherPassword = async (req, res) => {
             });
         }
 
-        teacher.password = newPassword;
+        // Hash password explicitly (not relying on pre-save hook)
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        teacher.password = hashedPassword;
         await teacher.save();
 
         res.status(200).json({
@@ -1301,9 +1462,10 @@ exports.bulkImportStudents = async (req, res) => {
 };
 
 /**
- * @desc    Reset Student Password
+ * @desc    Reset Student Password (Principal) - Deprecated
  * @route   POST /api/principal/students/:id/reset-password
  * @access  Principal only
+ * @deprecated Use POST /api/principal/users/:id/reset-password instead
  */
 exports.resetStudentPassword = async (req, res) => {
     try {
@@ -1320,7 +1482,10 @@ exports.resetStudentPassword = async (req, res) => {
             });
         }
 
-        student.password = newPassword;
+        // Hash password explicitly (not relying on pre-save hook)
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        student.password = hashedPassword;
         await student.save();
 
         res.status(200).json({

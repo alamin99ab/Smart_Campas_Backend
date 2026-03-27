@@ -26,21 +26,21 @@ router.use(addSchoolScope);
 // Analyze student performance (Teacher, Principal)
 router.post('/analyze-performance',
     checkFeatureAccess('ai'),
-    authorize(['teacher', 'principal']),
+    authorize('teacher', 'principal'),
     aiController.analyzeStudentPerformance
 );
 
 // Predict attendance patterns (Teacher, Principal)
 router.post('/predict-attendance',
     checkFeatureAccess('ai'),
-    authorize(['teacher', 'principal']),
+    authorize('teacher', 'principal'),
     aiController.predictAttendancePatterns
 );
 
 // Predict student success (Teacher, Principal)
 router.post('/predict-success',
     checkFeatureAccess('ai'),
-    authorize(['teacher', 'principal']),
+    authorize('teacher', 'principal'),
     aiController.predictStudentSuccess
 );
 
@@ -51,7 +51,7 @@ router.post('/predict-success',
 // Generate exam questions (Teacher, Principal)
 router.post('/generate-questions',
     checkFeatureAccess('ai'),
-    authorize(['teacher', 'principal']),
+    authorize('teacher', 'principal'),
     aiController.generateExamQuestions
 );
 
@@ -76,14 +76,14 @@ router.post('/detect-plagiarism',
 // Generate learning path (Student, Teacher, Principal)
 router.post('/generate-learning-path',
     checkFeatureAccess('ai'),
-    authorize(['student', 'teacher', 'principal']),
+    authorize('student', 'teacher', 'principal'),
     aiController.generateLearningPath
 );
 
 // Recommend content (Student, Teacher)
 router.post('/recommend-content',
     checkFeatureAccess('ai'),
-    authorize(['student', 'teacher']),
+    authorize('student', 'teacher'),
     aiController.recommendContent
 );
 
@@ -105,7 +105,7 @@ router.post('/student-support',
 // Generate reports (Principal, Super Admin)
 router.post('/generate-report',
     checkFeatureAccess('ai'),
-    authorize(['principal', 'super_admin']),
+    authorize('principal', 'super_admin'),
     aiController.generateReport
 );
 
@@ -115,7 +115,7 @@ router.post('/generate-report',
 
 // Get AI service status (Super Admin, Principal)
 router.get('/status',
-    authorize(['super_admin', 'principal']),
+    authorize('super_admin', 'principal'),
     async (req, res) => {
         try {
             const AIService = require('../services/aiService');
@@ -164,7 +164,7 @@ router.get('/status',
 
 // Get AI usage analytics (Principal, Super Admin)
 router.get('/analytics',
-    authorize(['principal', 'super_admin']),
+    authorize('principal', 'super_admin'),
     async (req, res) => {
         try {
             const AuditLog = require('../models/AuditLog');

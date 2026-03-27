@@ -588,8 +588,9 @@ exports.createSchool = async (req, res) => {
         });
         await principal.save();
 
-        // Update school with principal (no need to save again, principal is already saved)
+        // Update school with principal reference and SAVE
         school.principalId = principal._id;
+        await school.save();  // ✅ CRITICAL FIX: Must save after updating principal reference
 
         // Log audit - handle environment-based super admin
         await createAuditLog(req.user._id || req.user.id, 'CREATE_SCHOOL', `Created school: ${schoolName} (${schoolCode})`, req);
@@ -1186,9 +1187,89 @@ exports.toggleUserBlock = async (req, res) => {
 };
 
 /**
- * @desc    Force Password Reset for User (Super Admin only)
- * @route   POST /api/super-admin/users/:id/reset-password
+ * @desc    Reset Principal/User Password (Super Admin only)
+ * @route   POST /api/super-admin/users/:userId/reset-password
  * @access  Super Admin only
+ * 
+ * Super Admin can reset password for:
+ * - Principal (system-wide)
+ * - Any user in any school
+ * 
+ * Cannot reset another Super Admin's password
+ */
+exports.resetUserPassword = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { newPassword, forceChangeOnNextLogin } = req.body;
+
+        // ===== VALIDATION =====
+        if (!newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password is required'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be at least 6 characters'
+            });
+        }
+
+        if (newPassword.length > 128) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be less than 128 characters'
+            });
+        }
+
+        // ===== FETCH TARGET USER =====
+        const targetUser = await User.findById(userId);
+        if (!targetUser) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // ===== AUTHORIZATION CHECK =====
+        // Super Admin cannot reset another Super Admin's password
+        if (targetUser.role === 'super_admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Super Admin cannot reset another Super Admin password'
+            });
+        }
+
+        // ===== USE PASSWORD SERVICE =====
+        const passwordService = require('../services/passwordResetService');
+        const result = await passwordService.resetUserPassword({
+            targetUserId: userId,
+            newPassword,
+            requesterId: req.user._id || req.user.id,
+            requesterRole: 'super_admin',
+            requesterSchoolCode: 'SUPER_ADMIN',
+            forceChangeOnNextLogin,
+            req
+        });
+
+        res.status(200).json(result);
+
+    } catch (error) {
+        console.error('Reset password error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to reset password'
+        });
+    }
+};
+
+/**
+ * @desc    Force Password Reset for User (Super Admin only) - Deprecated
+ * @route   POST /api/super-admin/users/:id/reset-password (legacy)
+ * @access  Super Admin only
+ * @deprecated Use resetUserPassword instead
  */
 exports.forcePasswordReset = async (req, res) => {
     try {

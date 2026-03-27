@@ -115,7 +115,16 @@ router.post('/students/bulk-import', principalController.bulkImportStudents);
 router.post('/students/:id/reset-password', principalController.resetStudentPassword);
 
 /**
- * 🔹 PHASE 4: ROUTINE SETUP
+ * � PASSWORD MANAGEMENT
+ */
+// Get all users in principal's school
+router.get('/users', principalController.getUsers);
+
+// New unified endpoint for resetting any school user's password (principal only)
+router.post('/users/:userId/reset-password', principalController.resetUserPassword);
+
+/**
+ * �🔹 PHASE 4: ROUTINE SETUP
  */
 
 // 📅 Step 7: Create Class Routine

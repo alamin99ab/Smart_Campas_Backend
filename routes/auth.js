@@ -9,6 +9,7 @@ const router = express.Router();
 // Import controllers
 const authController = require('../controllers/authController');
 const authMiddleware = require('../middleware/authMiddleware');
+const passwordMgmtMiddleware = require('../middleware/passwordManagementMiddleware');
 
 /**
  * 🔹 PHASE 1: SYSTEM INITIAL SETUP
@@ -199,7 +200,11 @@ router.put('/profile', authMiddleware.protect, authController.updateUserProfile)
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 router.post('/verify-email', authController.verifyEmail);
-router.put('/change-password', authMiddleware.protect, authController.changePassword);
+router.put('/change-password', 
+    authMiddleware.protect,
+    passwordMgmtMiddleware.validatePasswordStrength,
+    authController.changePassword
+);
 
 /**
  * 🔐 Two-Factor Authentication

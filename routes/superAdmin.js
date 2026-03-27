@@ -22,7 +22,8 @@ const {
     createUser,
     getUserDetails,
     updateUser,
-    toggleUserBlock
+    toggleUserBlock,
+    resetUserPassword
 } = require('../controllers/superAdminController');
 
 // Import middleware
@@ -60,6 +61,9 @@ router.put('/users/:id', protect, authorize('super_admin'), updateUser);
 
 // Toggle user block (protected)
 router.patch('/users/:id/toggle-block', protect, authorize('super_admin'), toggleUserBlock);
+
+// Reset user password (protected) - Super Admin can reset any user (except other super admin)
+router.post('/users/:userId/reset-password', protect, authorize('super_admin'), resetUserPassword);
 
 // System Settings (protected)
 router.get('/settings', protect, authorize('super_admin'), getSystemSettings);

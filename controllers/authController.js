@@ -745,54 +745,100 @@ exports.updateUserProfile = async (req, res) => {
     }
 };
 
-// @desc    Change Password
+// @desc    Change Password (Self)
 // @route   PUT /api/auth/change-password
-// @access  Private
+// @access  Private (All authenticated users)
+/**
+ * Allows any authenticated user to change their own password
+ * Requires verification of current password
+ * Invalidates all sessions after password change
+ */
 exports.changePassword = async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
+    const { currentPassword, newPassword, confirmPassword } = req.body;
 
     try {
+        // ===== VALIDATION =====
         if (!currentPassword || !newPassword) {
-            return res.status(400).json({ message: 'All fields required' });
-        }
-        if (newPassword.length < 6) {
-            return res.status(400).json({ message: 'Password must be 6+ characters' });
+            return res.status(400).json({
+                success: false,
+                message: 'Current password and new password are required'
+            });
         }
 
+        if (!confirmPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password confirmation is required'
+            });
+        }
+
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password and confirmation do not match'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be at least 6 characters'
+            });
+        }
+
+        if (newPassword.length > 128) {
+            return res.status(400).json({
+                success: false,
+                message: 'Password must be less than 128 characters'
+            });
+        }
+
+        // ===== VERIFY CURRENT PASSWORD =====
         const user = await User.findById(req.user._id).select('+password');
         if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        const isValid = await user.comparePassword(currentPassword);
-
-        if (!isValid) {
-            return res.status(400).json({ message: 'Current password incorrect' });
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
         }
 
-        user.password = await bcrypt.hash(newPassword, 12);
-        user.passwordChangedAt = new Date();
+        const isMatch = await user.comparePassword(currentPassword);
+        if (!isMatch) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
 
-        const currentDeviceId = req.headers['x-device-id'];
-        user.sessions = user.sessions?.filter(s => s.deviceId === currentDeviceId) || [];
-        if (user.sessions.length === 0) user.refreshToken = null;
+        // Check if new password is same as current
+        const isSamePassword = await user.comparePassword(newPassword);
+        if (isSamePassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be different from current password'
+            });
+        }
 
-        await user.save();
+        // ===== USE PASSWORD SERVICE FOR CONSISTENCY =====
+        const passwordService = require('../services/passwordResetService');
+        const deviceId = req.headers['x-device-id'];
 
-        await createAuditLog(user._id, 'PASSWORD_CHANGED', { deviceId: currentDeviceId }, req);
+        const result = await passwordService.changeUserPassword({
+            userId: req.user._id,
+            currentPassword,
+            newPassword,
+            deviceId,
+            req
+        });
 
-        // Send email notification
-        sendEmail({
-            to: user.email,
-            subject: 'Password Changed',
-            template: 'password-changed',
-            data: { name: user.name, time: new Date().toLocaleString() }
-        }).catch(err => console.error('Email error:', err));
-
-        res.json({ message: 'Password changed successfully' });
+        res.json(result);
 
     } catch (error) {
         console.error('Change password error:', error);
-        res.status(500).json({ message: 'Failed to change password' });
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to change password'
+        });
     }
 };
 

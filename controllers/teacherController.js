@@ -534,8 +534,10 @@ exports.changePassword = async (req, res) => {
             });
         }
 
-        // Update password
-        teacher.password = newPassword;
+        // Update password with explicit hashing
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        teacher.password = hashedPassword;
         await teacher.save();
 
         res.status(200).json({

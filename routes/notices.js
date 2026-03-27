@@ -25,7 +25,7 @@ router.use(addSchoolScope);
 // Create notice (Principal, Teacher, Super Admin)
 router.post('/', 
     checkFeatureAccess('notice'),
-    authorize(['principal', 'teacher', 'super_admin']),
+    authorize('principal', 'teacher', 'super_admin'),
     noticeController.createNotice
 );
 
@@ -41,13 +41,13 @@ router.get('/:id',
 
 // Update notice (Creator, Principal, Super Admin)
 router.put('/:id', 
-    authorize(['principal', 'teacher', 'super_admin']),
+    authorize('principal', 'teacher', 'super_admin'),
     noticeController.updateNotice
 );
 
 // Delete notice (Creator, Principal, Super Admin)
 router.delete('/:id', 
-    authorize(['principal', 'teacher', 'super_admin']),
+    authorize('principal', 'teacher', 'super_admin'),
     noticeController.deleteNotice
 );
 
@@ -67,7 +67,7 @@ router.post('/:id/comments',
 
 // Pin/Unpin notice (Principal, Super Admin)
 router.patch('/:id/pin', 
-    authorize(['principal', 'super_admin']),
+    authorize('principal', 'super_admin'),
     noticeController.pinNotice
 );
 
@@ -77,7 +77,7 @@ router.patch('/:id/pin',
 
 // Get notice analytics
 router.get('/analytics/dashboard', 
-    authorize(['principal', 'super_admin']),
+    authorize('principal', 'super_admin'),
     noticeController.getNoticeAnalytics
 );
 
@@ -110,7 +110,7 @@ router.post('/class/create',
 
 // Get my created notices
 router.get('/my/created', 
-    authorize(['principal', 'teacher', 'super_admin']),
+    authorize('principal', 'teacher', 'super_admin'),
     noticeController.getNotices
 );
 
@@ -120,13 +120,13 @@ router.get('/my/created',
 
 // Get notices for student/parent
 router.get('/student/view', 
-    authorize(['student', 'parent']),
+    authorize('student', 'parent'),
     noticeController.getNotices
 );
 
 // Get unread notices
 router.get('/student/unread', 
-    authorize(['student', 'parent']),
+    authorize('student', 'parent'),
     noticeController.getNotices
 );
 
