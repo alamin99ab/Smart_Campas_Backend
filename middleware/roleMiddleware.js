@@ -42,17 +42,16 @@ exports.accountantOnly = (req, res, next) => {
 
 exports.sameSchool = (req, res, next) => {
     if (!req.user) return res.status(401).json({ success: false, message: 'Not authorized' });
+    // For superadmin or platform admin, allow cross-school access immediately
+    if (req.user.role === 'super_admin' || req.user.role === 'admin') {
+        return next();
+    }
 
     const targetSchoolCode = req.body.schoolCode || req.params.schoolCode || req.query.schoolCode;
 
     if (targetSchoolCode && targetSchoolCode !== req.user.schoolCode) {
         return res.status(403).json({ success: false, message: 'Access denied. You can only access your own school data.' });
     }
-    
-    // For superadmin, allow cross-school access
-    if (req.user.role === 'super_admin' || req.user.role === 'admin') {
-        return next();
-    }
-    
+
     next();
 };

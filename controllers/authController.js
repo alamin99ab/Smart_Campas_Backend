@@ -155,8 +155,7 @@ exports.registerUser = async (req, res) => {
         }
 
         if (role === 'super_admin') {
-            // Super admin doesn't need school code or school name
-            // Can register without school association
+            return res.status(403).json({ message: 'Registration of super_admin via API is not allowed. Super Admin is managed via environment variables.' });
         }
 
         if (role === 'principal') {
@@ -329,7 +328,8 @@ exports.loginUser = async (req, res) => {
                         _id: 'super_admin_env',
                         email: superAdminEmail,
                         name: process.env.SUPER_ADMIN_NAME || 'Super Admin',
-                        role: 'super_admin'
+                        role: 'super_admin',
+                        isEnvBased: true
                     },
                     token: superAdminToken,
                     refreshToken,
@@ -352,6 +352,13 @@ exports.loginUser = async (req, res) => {
             return res.status(401).json({ 
                 success: false,
                 message: 'Invalid credentials' 
+            });
+        }
+
+        if (user.role === 'super_admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Super Admin is environment-based only. Remove any legacy super_admin DB user and use SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD.'
             });
         }
 
@@ -591,6 +598,28 @@ exports.refreshToken = async (req, res) => {
             return res.status(401).json({ message: 'Invalid device' });
         }
 
+        if (decoded.id === 'super_admin_env') {
+            const newToken = jwt.sign(
+                {
+                    id: 'super_admin_env',
+                    role: 'super_admin',
+                    schoolCode: 'SUPER_ADMIN',
+                    isEnvBased: true
+                },
+                getJwtSecret(),
+                { expiresIn: process.env.JWT_EXPIRE || '7d' }
+            );
+            const newRefreshToken = generateRefreshToken('super_admin_env', deviceId);
+            if (process.env.USE_COOKIE === 'true') {
+                setTokenCookie(res, newToken);
+                setRefreshTokenCookie(res, newRefreshToken);
+            }
+            return res.json({
+                token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
+                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+            });
+        }
+
         const user = await User.findOne({ _id: decoded.id, 'sessions.token': token });
 
         if (!user) {
@@ -632,12 +661,14 @@ exports.logoutUser = async (req, res) => {
     const deviceId = req.headers['x-device-id'];
 
     try {
-        if (refreshToken && req.user) {
+        if (refreshToken && req.user && !req.user.isEnvBased) {
             await User.updateOne(
                 { _id: req.user._id },
                 { $pull: { sessions: { token: refreshToken } }, $set: { refreshToken: null } }
             );
             await createAuditLog(req.user._id, 'LOGOUT', { deviceId }, req);
+        } else if (req.user?.isEnvBased) {
+            await createAuditLog('super_admin_env', 'LOGOUT', { deviceId }, req);
         }
 
         res.clearCookie('token');
@@ -675,6 +706,25 @@ exports.logoutAllDevices = async (req, res) => {
 // @access  Private
 exports.getUserProfile = async (req, res) => {
     try {
+        if (req.user.isEnvBased && req.user._id === 'super_admin_env') {
+            await createAuditLog('super_admin_env', 'PROFILE_VIEW', {}, req);
+            return res.json({
+                success: true,
+                data: {
+                    _id: 'super_admin_env',
+                    name: req.user.name,
+                    email: req.user.email,
+                    role: 'super_admin',
+                    schoolCode: 'SUPER_ADMIN',
+                    isEnvBased: true,
+                    emailVerified: true,
+                    isApproved: true,
+                    activeSessions: 0,
+                    devices: []
+                }
+            });
+        }
+
         // Use Mongoose pattern
         const selectFields = '-password -refreshToken -emailVerificationToken -resetPasswordToken -twoFactorSecret';
         const user = await User.findById(req.user._id).select(selectFields);
@@ -718,6 +768,13 @@ exports.updateUserProfile = async (req, res) => {
     const { name, phone, address, profileImage } = req.body;
 
     try {
+        if (req.user.isEnvBased) {
+            return res.status(403).json({
+                success: false,
+                message: 'Platform Super Admin profile is managed via environment variables (e.g. SUPER_ADMIN_NAME).'
+            });
+        }
+
         const user = await User.findById(req.user._id);
 
         if (name) user.name = name;
@@ -757,6 +814,13 @@ exports.changePassword = async (req, res) => {
     const { currentPassword, newPassword, confirmPassword } = req.body;
 
     try {
+        if (req.user.isEnvBased) {
+            return res.status(403).json({
+                success: false,
+                message: 'Super Admin password is managed in hosting environment (SUPER_ADMIN_PASSWORD), not in the app.'
+            });
+        }
+
         // ===== VALIDATION =====
         if (!currentPassword || !newPassword) {
             return res.status(400).json({
@@ -895,10 +959,13 @@ exports.forgotPassword = async (req, res) => {
 // @route   PUT /api/auth/reset-password/:token
 // @access  Public
 exports.resetPassword = async (req, res) => {
-    const { token } = req.params;
+    const token = req.params.token || req.body?.token;
     const { password } = req.body;
 
     try {
+        if (!token) {
+            return res.status(400).json({ message: 'Reset token is required' });
+        }
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
         const user = await User.findOne({
             resetPasswordToken: hashedToken,
@@ -942,9 +1009,12 @@ exports.resetPassword = async (req, res) => {
 // @route   GET /api/auth/verify-email/:token
 // @access  Public
 exports.verifyEmail = async (req, res) => {
-    const { token } = req.params;
+    const token = req.params.token || req.body?.token;
 
     try {
+        if (!token) {
+            return res.status(400).json({ message: 'Verification token is required' });
+        }
         const user = await User.findOne({
             emailVerificationToken: token,
             emailVerificationExpire: { $gt: Date.now() }

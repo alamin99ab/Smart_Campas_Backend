@@ -1,7 +1,8 @@
-﻿// controllers/resultController.js
+// controllers/resultController.js
 const Result = require('../models/Result');
 const Student = require('../models/Student');
 const School = require('../models/School');
+const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
 const AuditLog = require('../models/AuditLog');
 const PDFDocument = require('pdfkit');
 const Excel = require('exceljs');
@@ -459,18 +460,29 @@ exports.lockResult = async (req, res) => {
  */
 exports.getStudentResults = async (req, res) => {
     try {
-        const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const studentOid = await resolveStudentObjectIdFromUser(req.user);
 
-        const results = {
-            exams: [],
-            overallGPA: 0,
-            classRank: 0
-        };
+        if (!studentOid) {
+            return res.status(200).json({
+                success: true,
+                data: [],
+                message:
+                    'No Student record matches your account (class/roll). Ask the school to link your profile if results are missing.'
+            });
+        }
 
-        res.status(200).json({
+        const list = await Result.find({
+            schoolCode,
+            studentId: studentOid,
+            isPublished: true
+        })
+            .sort({ examDate: -1 })
+            .lean();
+
+        return res.status(200).json({
             success: true,
-            data: results
+            data: list
         });
     } catch (error) {
         res.status(500).json({
@@ -489,15 +501,29 @@ exports.getStudentResults = async (req, res) => {
 exports.getStudentExamResult = async (req, res) => {
     try {
         const { examId } = req.params;
-        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+        const studentOid = await resolveStudentObjectIdFromUser(req.user);
 
-        const result = {
-            examId,
-            subjects: [],
-            totalMarks: 0,
-            percentage: 0,
-            grade: 'A'
-        };
+        if (!studentOid) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student profile not linked'
+            });
+        }
+
+        const result = await Result.findOne({
+            _id: examId,
+            schoolCode,
+            studentId: studentOid,
+            isPublished: true
+        }).lean();
+
+        if (!result) {
+            return res.status(404).json({
+                success: false,
+                message: 'Result not found'
+            });
+        }
 
         res.status(200).json({
             success: true,

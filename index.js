@@ -124,102 +124,27 @@ console.log('🔄 Loading Smart Campus SaaS Routes...');
 // Auto Admin Setup Routes - For Render Deployment (Built-in)
 try {
     // Direct admin creation function - no external scripts needed
+    // Auto-setup endpoint is read-only: Super Admin must be configured via environment variables.
     const createSuperAdmin = async (req, res) => {
         try {
-            const bcrypt = require('bcryptjs');
-            const User = require('./models/User');
-            
-            const SUPER_ADMIN = {
-                name: process.env.SUPER_ADMIN_NAME,
-                email: process.env.SUPER_ADMIN_EMAIL,
-                password: process.env.SUPER_ADMIN_PASSWORD,
-                phone: process.env.SUPER_ADMIN_PHONE,
-                role: 'super_admin'
-            };
-
-            // Check if Super Admin already exists
-            const existingAdmin = await User.findOne({ role: 'super_admin' });
-            const forceReset = req.body.force === true || req.query.force === 'true';
-            
-            if (existingAdmin) {
-                // If force reset is requested, unblock and reset password
-                if (forceReset) {
-                    const newPassword = req.body.password || SUPER_ADMIN.password || 'Admin@123456';
-                    const hashedPassword = await bcrypt.hash(newPassword, 12);
-                    
-                    existingAdmin.password = hashedPassword;
-                    existingAdmin.isBlocked = false;
-                    existingAdmin.loginAttempts = 0;
-                    existingAdmin.isActive = true;
-                    await existingAdmin.save();
-                    
-                    return res.json({
-                        success: true,
-                        message: 'Super Admin reset successfully',
-                        admin: {
-                            email: existingAdmin.email,
-                            name: existingAdmin.name,
-                            role: existingAdmin.role,
-                            password: newPassword
-                        },
-                        login_url: `${req.protocol}://${req.get('host')}/api/auth/login`
-                    });
-                }
-                
-                return res.json({
-                    success: true,
-                    message: 'Super Admin already exists',
-                    admin: {
-                        email: existingAdmin.email,
-                        name: existingAdmin.name,
-                        role: existingAdmin.role
-                    },
-                    login_url: `${req.protocol}://${req.get('host')}/api/auth/login`
+            const adminEmail = process.env.SUPER_ADMIN_EMAIL;
+            if (!adminEmail) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Super Admin is not configured. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in environment.'
                 });
             }
 
-            // Create new Super Admin
-            const hashedPassword = await bcrypt.hash(SUPER_ADMIN.password, 12);
-            
-            const superAdmin = new User({
-                name: SUPER_ADMIN.name,
-                email: SUPER_ADMIN.email,
-                password: hashedPassword,
-                role: SUPER_ADMIN.role,
-                phone: SUPER_ADMIN.phone,
-                isApproved: true,
-                emailVerified: true,
-                isActive: true
-            });
-
-            await superAdmin.save();
-
-            console.log('✅ Super Admin created successfully via endpoint');
-
-            res.json({
+            return res.json({
                 success: true,
-                message: 'Super Admin created successfully',
-                admin: {
-                    email: SUPER_ADMIN.email,
-                    name: SUPER_ADMIN.name,
-                    role: SUPER_ADMIN.role,
-                    password: SUPER_ADMIN.password
-                },
-                login_url: `${req.protocol}://${req.get('host')}/api/auth/login`,
-                instructions: {
-                    step1: 'Use the credentials above to login',
-                    step2: 'Change password after first login',
-                    step3: 'Start creating schools and users'
-                }
+                message: 'Super Admin is managed via environment variables. No database record is created.',
+                data: { email: process.env.SUPER_ADMIN_EMAIL, name: process.env.SUPER_ADMIN_NAME || 'Super Admin' },
+                login_url: `${req.protocol}://${req.get('host')}/api/auth/super-admin/login`,
+                note: 'To change Super Admin credentials, update environment variables in your hosting provider (Render, etc.).'
             });
-
         } catch (error) {
-            console.error('❌ Auto-admin creation failed:', error.message);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to create Super Admin',
-                error: error.message
-            });
+            console.error('❌ Auto-admin endpoint error:', error.message);
+            res.status(500).json({ success: false, message: 'Auto-admin endpoint failed', error: error.message });
         }
     };
 
@@ -304,135 +229,38 @@ Role: super_admin
                 });
                 
                 const data = await response.json();
-                
-                if (data.success) {
-                    result.innerHTML = \`
-                        <div class="success">
-                            <h3>✅ Success! Super Admin Ready</h3>
-                            <p><strong>Email:</strong> \${data.admin.email}</p>
-                            <p><strong>Password:</strong> \${data.admin.password}</p>
-                            <p><strong>Name:</strong> \${data.admin.name}</p>
-                            <hr>
-                            <h4>🔗 Login URL:</h4>
-                            <p><a href="\${data.login_url}" target="_blank">\${data.login_url}</a></p>
-                            <h4>📋 Next Steps:</h4>
-                            <ol>
-                                <li>Click the login URL above</li>
-                                <li>Use the credentials to login</li>
-                                <li>Change password after first login</li>
-                                <li>Start creating schools</li>
-                            </ol>
-                        </div>
-                    \`;
-                    btnText.innerHTML = '✅ Setup Complete!';
-                    btn.className = 'btn success';
-                } else {
-                    result.innerHTML = \`
-                        <div class="error">
-                            <h3>❌ Setup Failed</h3>
-                            <p>\${data.message}</p>
-                            \${data.error ? \`<p><strong>Error:</strong> \${data.error}</p>\` : ''}
-                        </div>
-                    \`;
-                    btnText.innerHTML = '🔄 Try Again';
-                    btn.disabled = false;
-                }
-            } catch (error) {
-                result.innerHTML = \`
-                    <div class="error">
-                        <h3>❌ Network Error</h3>
-                        <p>\${error.message}</p>
-                    </div>
-                \`;
-                btnText.innerHTML = '🔄 Try Again';
+
                 btn.disabled = false;
+                btnText.innerText = '🔥 Create Super Admin Now';
+
+                if (data && data.success) {
+                    result.innerHTML = '<div class="result success">' + (data.message || '') + '<pre>' + JSON.stringify(data.data || {}, null, 2) + '</pre></div>';
+                } else {
+                    result.innerHTML = '<div class="result error">' + (data && data.message ? data.message : 'Failed to create Super Admin') + '</div>';
+                }
+            } catch (err) {
+                btn.disabled = false;
+                btnText.innerText = '🔥 Create Super Admin Now';
+                result.innerHTML = '<div class="result error">' + (err.message || '') + '</div>';
             }
         }
+
     </script>
 </body>
 </html>`;
-        
-        res.send(html);
-    };
 
-    // Emergency reset endpoint - can unblock and reset super admin
-    const emergencyReset = async (req, res) => {
-        try {
-            const bcrypt = require('bcryptjs');
-            const User = require('./models/User');
-            
-            // Get reset key from query or body
-            const resetKey = req.query.key || req.body.key;
-            const validKey = process.env.EMERGENCY_RESET_KEY || 'emergency2024';
-            
-            if (resetKey !== validKey) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Invalid reset key'
-                });
-            }
-            
-            const newPassword = req.body.password || 'Admin@123456';
-            const hashedPassword = await bcrypt.hash(newPassword, 12);
-            
-            // Find and update super admin
-            const admin = await User.findOne({ role: 'super_admin' });
-            
-            if (!admin) {
-                // Create new if doesn't exist
-                const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@smartcampus.com';
-                const adminName = process.env.SUPER_ADMIN_NAME || 'Super Admin';
-                
-                const newAdmin = new User({
-                    name: adminName,
-                    email: adminEmail,
-                    password: hashedPassword,
-                    phone: process.env.SUPER_ADMIN_PHONE || '',
-                    role: 'super_admin',
-                    isApproved: true,
-                    emailVerified: true,
-                    isActive: true,
-                    isBlocked: false
-                });
-                
-                await newAdmin.save();
-                
-                return res.json({
-                    success: true,
-                    message: 'Super Admin created with password reset',
-                    credentials: {
-                        email: adminEmail,
-                        password: newPassword
-                    }
-                });
-            }
-            
-            // Update existing admin - unblock and reset password
-            admin.password = hashedPassword;
-            admin.isBlocked = false;
-            admin.loginAttempts = 0;
-            admin.isActive = true;
-            await admin.save();
-            
-            res.json({
-                success: true,
-                message: 'Super Admin unblocked and password reset',
-                credentials: {
-                    email: admin.email,
-                    password: newPassword
-                }
-            });
-        } catch (error) {
-            console.error('Emergency reset error:', error);
-            res.status(500).json({
-                success: false,
-                message: error.message
-            });
-        }
+    res.status(200).send(html);
     };
 
     app.get('/setup', setupPage);
     app.post('/api/auto-setup-admin', createSuperAdmin);
+    const emergencyReset = async (req, res) => {
+        return res.status(403).json({
+            success: false,
+            message: 'Emergency reset disabled. Super Admin is managed via environment variables. Update credentials via your hosting provider.'
+        });
+    };
+
     app.post('/api/emergency-reset', emergencyReset);
     console.log('✅ Auto Admin Setup routes loaded - /setup, /api/auto-setup-admin, /api/emergency-reset');
 } catch (error) {
@@ -808,45 +636,9 @@ const startServer = async () => {
         
         // Initialize Super Admin only if DB is connected
         if (dbConnected) {
-            console.log('\n🚀 Initializing Super Admin...');
-            try {
-                const bcrypt = require('bcryptjs');
-                const User = require('./models/User');
-                
-                const existingAdmin = await User.findOne({ role: 'super_admin' });
-                if (!existingAdmin) {
-                    // Use environment variables for credentials (already validated)
-                    const adminEmail = process.env.SUPER_ADMIN_EMAIL;
-                    const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
-                    const adminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
-                    const adminPhone = process.env.SUPER_ADMIN_PHONE || '';
-                    
-                    const hashedPassword = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
-                    const superAdmin = new User({
-                        name: adminName,
-                        email: adminEmail,
-                        password: hashedPassword,
-                        phone: adminPhone,
-                        role: 'super_admin',
-                        isApproved: true,
-                        emailVerified: true,
-                        isActive: true
-                    });
-                    await superAdmin.save();
-                    console.log('✅ Super Admin created successfully');
-                    console.log(`📧 Email: ${adminEmail}`);
-                    console.log(`👤 Name: ${adminName}`);
-                } else {
-                    console.log('✅ Super Admin already exists');
-                    console.log(`📧 Email: ${existingAdmin.email}`);
-                    console.log(`👤 Name: ${existingAdmin.name}`);
-                }
-            } catch (adminError) {
-                console.error(`❌ Admin creation failed: ${adminError.message}`);
-                // Don't exit - admin can be created via /setup endpoint
-            }
+            console.log('\n✅ Super Admin is environment-only (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD). No DB bootstrap.');
         } else {
-            console.log('\n⚠️  Skipping Super Admin initialization (no database)');
+            console.log('\n⚠️  Database not connected — school features unavailable; Super Admin still logs in via environment credentials.');
         }
         
         // Start server regardless of DB connection
@@ -871,20 +663,28 @@ const startServer = async () => {
 };
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
     console.log('\nSIGTERM received, shutting down gracefully...');
-    mongoose.connection.close(() => {
+    try {
+        await mongoose.connection.close();
         console.log('MongoDB connection closed');
         process.exit(0);
-    });
+    } catch (err) {
+        console.error('Error closing MongoDB connection on SIGTERM:', err);
+        process.exit(1);
+    }
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
     console.log('\nSIGINT received, shutting down gracefully...');
-    mongoose.connection.close(() => {
+    try {
+        await mongoose.connection.close();
         console.log('MongoDB connection closed');
         process.exit(0);
-    });
+    } catch (err) {
+        console.error('Error closing MongoDB connection on SIGINT:', err);
+        process.exit(1);
+    }
 });
 
 // Handle unhandled promise rejections

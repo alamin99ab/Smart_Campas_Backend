@@ -8,6 +8,37 @@ const axios = require('axios');
 
 const BASE_URL = 'https://smart-campas-backend.onrender.com/api';
 
+// Test credentials must be provided via environment variables to avoid committing secrets.
+// Set these in your CI or local environment before running this script.
+// Example:
+// TEST_SUPERADMIN_EMAIL=admin@example.com TEST_SUPERADMIN_PASSWORD=StrongPass node live-api-test.js
+const TEST_USERS = {
+  superAdmin: {
+    email: process.env.TEST_SUPERADMIN_EMAIL,
+    password: process.env.TEST_SUPERADMIN_PASSWORD
+  },
+  principal: {
+    email: process.env.TEST_PRINCIPAL_EMAIL,
+    password: process.env.TEST_PRINCIPAL_PASSWORD
+  },
+  teacher: {
+    email: process.env.TEST_TEACHER_EMAIL,
+    password: process.env.TEST_TEACHER_PASSWORD
+  },
+  student: {
+    email: process.env.TEST_STUDENT_EMAIL,
+    password: process.env.TEST_STUDENT_PASSWORD
+  },
+  parent: {
+    email: process.env.TEST_PARENT_EMAIL,
+    password: process.env.TEST_PARENT_PASSWORD
+  },
+  accountant: {
+    email: process.env.TEST_ACCOUNTANT_EMAIL,
+    password: process.env.TEST_ACCOUNTANT_PASSWORD
+  }
+};
+
 // Colors for console output
 const colors = {
   reset: '\x1b[0m',
@@ -126,70 +157,94 @@ async function runTests() {
   // ============================================
   logSection('2. AUTHENTICATION');
 
-  // Super Admin Login
-  result = await testAPI('POST', '/auth/login', {
-    email: 'alamin-admin@pandait.com',
-    password: 'pandaitalaminn'
-  });
-  recordResult('POST /auth/login (Super Admin)', result, 200);
-  if (result.success && result.data.token) {
-    tokens.superAdmin = result.data.token;
-    log('   Token obtained ✓', 'green');
+  // Super Admin Login (requires TEST_SUPERADMIN_EMAIL and TEST_SUPERADMIN_PASSWORD)
+  if (TEST_USERS.superAdmin.email && TEST_USERS.superAdmin.password) {
+    result = await testAPI('POST', '/auth/login', {
+      email: TEST_USERS.superAdmin.email,
+      password: TEST_USERS.superAdmin.password
+    });
+    recordResult('POST /auth/login (Super Admin)', result, 200);
+    if (result.success && result.data.token) {
+      tokens.superAdmin = result.data.token;
+      log('   Token obtained ✓', 'green');
+    }
+  } else {
+    log('Skipping Super Admin login: TEST_SUPERADMIN_EMAIL/TEST_SUPERADMIN_PASSWORD not set', 'yellow');
   }
 
-  // Principal Login
-  result = await testAPI('POST', '/auth/login', {
-    email: 'sultana@vis.edu',
-    password: 'Sultana@123'
-  });
-  recordResult('POST /auth/login (Principal)', result, 200);
-  if (result.success && result.data.token) {
-    tokens.principal = result.data.token;
-    log('   Token obtained ✓', 'green');
+  // Principal Login (requires TEST_PRINCIPAL_EMAIL and TEST_PRINCIPAL_PASSWORD)
+  if (TEST_USERS.principal.email && TEST_USERS.principal.password) {
+    result = await testAPI('POST', '/auth/login', {
+      email: TEST_USERS.principal.email,
+      password: TEST_USERS.principal.password
+    });
+    recordResult('POST /auth/login (Principal)', result, 200);
+    if (result.success && result.data.token) {
+      tokens.principal = result.data.token;
+      log('   Token obtained ✓', 'green');
+    }
+  } else {
+    log('Skipping Principal login: TEST_PRINCIPAL_EMAIL/TEST_PRINCIPAL_PASSWORD not set', 'yellow');
   }
 
-  // Teacher Login
-  result = await testAPI('POST', '/auth/login', {
-    email: 'khan@vis.edu',
-    password: 'Teacher@123'
-  });
-  recordResult('POST /auth/login (Teacher)', result, 200);
-  if (result.success && result.data.token) {
-    tokens.teacher = result.data.token;
-    log('   Token obtained ✓', 'green');
+  // Teacher Login (requires TEST_TEACHER_EMAIL and TEST_TEACHER_PASSWORD)
+  if (TEST_USERS.teacher.email && TEST_USERS.teacher.password) {
+    result = await testAPI('POST', '/auth/login', {
+      email: TEST_USERS.teacher.email,
+      password: TEST_USERS.teacher.password
+    });
+    recordResult('POST /auth/login (Teacher)', result, 200);
+    if (result.success && result.data.token) {
+      tokens.teacher = result.data.token;
+      log('   Token obtained ✓', 'green');
+    }
+  } else {
+    log('Skipping Teacher login: TEST_TEACHER_EMAIL/TEST_TEACHER_PASSWORD not set', 'yellow');
   }
 
-  // Student Login
-  result = await testAPI('POST', '/auth/login', {
-    email: 'mahmud@student.vis.edu',
-    password: 'Student@123'
-  });
-  recordResult('POST /auth/login (Student)', result, 200);
-  if (result.success && result.data.token) {
-    tokens.student = result.data.token;
-    log('   Token obtained ✓', 'green');
+  // Student Login (requires TEST_STUDENT_EMAIL and TEST_STUDENT_PASSWORD)
+  if (TEST_USERS.student.email && TEST_USERS.student.password) {
+    result = await testAPI('POST', '/auth/login', {
+      email: TEST_USERS.student.email,
+      password: TEST_USERS.student.password
+    });
+    recordResult('POST /auth/login (Student)', result, 200);
+    if (result.success && result.data.token) {
+      tokens.student = result.data.token;
+      log('   Token obtained ✓', 'green');
+    }
+  } else {
+    log('Skipping Student login: TEST_STUDENT_EMAIL/TEST_STUDENT_PASSWORD not set', 'yellow');
   }
 
-  // Parent Login
-  result = await testAPI('POST', '/auth/login', {
-    email: 'rahman@parent.vis.edu',
-    password: 'Parent@123'
-  });
-  recordResult('POST /auth/login (Parent)', result, 200);
-  if (result.success && result.data.token) {
-    tokens.parent = result.data.token;
-    log('   Token obtained ✓', 'green');
+  // Parent Login (requires TEST_PARENT_EMAIL and TEST_PARENT_PASSWORD)
+  if (TEST_USERS.parent.email && TEST_USERS.parent.password) {
+    result = await testAPI('POST', '/auth/login', {
+      email: TEST_USERS.parent.email,
+      password: TEST_USERS.parent.password
+    });
+    recordResult('POST /auth/login (Parent)', result, 200);
+    if (result.success && result.data.token) {
+      tokens.parent = result.data.token;
+      log('   Token obtained ✓', 'green');
+    }
+  } else {
+    log('Skipping Parent login: TEST_PARENT_EMAIL/TEST_PARENT_PASSWORD not set', 'yellow');
   }
 
-  // Accountant Login
-  result = await testAPI('POST', '/auth/login', {
-    email: 'ahmed@accountant.vis.edu',
-    password: 'Accountant@123'
-  });
-  recordResult('POST /auth/login (Accountant)', result, 200);
-  if (result.success && result.data.token) {
-    tokens.accountant = result.data.token;
-    log('   Token obtained ✓', 'green');
+  // Accountant Login (requires TEST_ACCOUNTANT_EMAIL and TEST_ACCOUNTANT_PASSWORD)
+  if (TEST_USERS.accountant.email && TEST_USERS.accountant.password) {
+    result = await testAPI('POST', '/auth/login', {
+      email: TEST_USERS.accountant.email,
+      password: TEST_USERS.accountant.password
+    });
+    recordResult('POST /auth/login (Accountant)', result, 200);
+    if (result.success && result.data.token) {
+      tokens.accountant = result.data.token;
+      log('   Token obtained ✓', 'green');
+    }
+  } else {
+    log('Skipping Accountant login: TEST_ACCOUNTANT_EMAIL/TEST_ACCOUNTANT_PASSWORD not set', 'yellow');
   }
 
   // ============================================

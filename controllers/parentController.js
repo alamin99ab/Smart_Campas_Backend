@@ -12,6 +12,54 @@ const Attendance = require('../models/AdvancedAttendance');
 const Result = require('../models/Result');
 const Fee = require('../models/Fee');
 const Notice = require('../models/Notice');
+const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
+
+function guardianEmailRegex(email) {
+    const e = String(email || '').trim();
+    if (!e) return null;
+    const safe = e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${safe}$`, 'i');
+}
+
+/**
+ * Parent may pick a child that is either a Student doc or a User (student login).
+ * Returns { studentObjectId } for Result/Fee queries (Student collection id), or null.
+ */
+async function assertParentCanAccessChild(req, childId) {
+    const schoolCode = req.user.schoolCode;
+    const parentId = req.user._id || req.user.id;
+    const parentEmail = String(req.user.email || '').trim().toLowerCase();
+    const gRe = guardianEmailRegex(req.user.email);
+
+    const byStudent = await Student.findOne({
+        _id: childId,
+        schoolCode,
+        isActive: true,
+        $or: [{ parentId }, ...(gRe ? [{ 'guardian.email': gRe }] : [])]
+    }).select('_id');
+
+    if (byStudent) {
+        return { studentObjectId: byStudent._id };
+    }
+
+    const childUser = await User.findOne({
+        _id: childId,
+        role: 'student',
+        schoolCode
+    }).select('parentInfo email classId section rollNumber schoolCode');
+
+    if (!childUser) {
+        return null;
+    }
+
+    const childParentEmail = String(childUser.parentInfo?.email || '').trim().toLowerCase();
+    if (childParentEmail !== parentEmail) {
+        return null;
+    }
+
+    const oid = await resolveStudentObjectIdFromUser(childUser);
+    return { studentObjectId: oid, childUser };
+}
 
 /**
  * @desc    Get parent dashboard
@@ -20,8 +68,9 @@ const Notice = require('../models/Notice');
  */
 exports.getParentDashboard = async (req, res) => {
     try {
-        const parentId = req.user.id;
+        const parentId = req.user._id || req.user.id;
         const schoolCode = req.user.schoolCode;
+        const gRe = guardianEmailRegex(req.user.email);
 
         let children = [];
         let attendanceSummary = [];
@@ -30,10 +79,10 @@ exports.getParentDashboard = async (req, res) => {
 
         // MongoDB with populate
         try {
-            children = await Student.find({ 
-                parentId, 
+            children = await Student.find({
                 schoolCode,
-                isActive: true 
+                isActive: true,
+                $or: [{ parentId }, ...(gRe ? [{ 'guardian.email': gRe }] : [])]
             }).populate('classId', 'className')
               .populate('sectionId', 'sectionName');
 
@@ -153,21 +202,43 @@ exports.getParentDashboard = async (req, res) => {
  */
 exports.getChildren = async (req, res) => {
     try {
-        const parentId = req.user.id;
+        const parentId = req.user._id || req.user.id;
         const schoolCode = req.user.schoolCode;
+        const gRe = guardianEmailRegex(req.user.email);
 
-        const children = await Student.find({ 
-            parentId, 
+        const fromStudents = await Student.find({
             schoolCode,
-            isActive: true 
+            isActive: true,
+            $or: [{ parentId }, ...(gRe ? [{ 'guardian.email': gRe }] : [])]
         })
-        .populate('classId', 'className')
-        .populate('sectionId', 'sectionName')
-        .populate('subjects.subjectId', 'subjectName');
+            .populate('classId', 'className')
+            .populate('sectionId', 'sectionName')
+            .populate('subjects.subjectId', 'subjectName');
+
+        const parentEmailNorm = String(req.user.email || '').trim().toLowerCase();
+        const fromUsers = parentEmailNorm
+            ? await User.find({
+                  schoolCode,
+                  role: 'student',
+                  'parentInfo.email': new RegExp(
+                      `^${parentEmailNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+                      'i'
+                  )
+              }).select('name email rollNumber section classId')
+            : [];
+
+        const seen = new Set(fromStudents.map((s) => String(s._id)));
+        const merged = [...fromStudents];
+        for (const u of fromUsers) {
+            if (!seen.has(String(u._id))) {
+                merged.push(u);
+                seen.add(String(u._id));
+            }
+        }
 
         res.status(200).json({
             success: true,
-            data: children
+            data: merged
         });
     } catch (error) {
         res.status(500).json({
@@ -186,20 +257,20 @@ exports.getChildren = async (req, res) => {
 exports.getChildAttendance = async (req, res) => {
     try {
         const { studentId } = req.params;
-        const parentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        // Verify parent owns this child
-        const student = await Student.findOne({ _id: studentId, parentId, schoolCode });
-        if (!student) {
+        const access = await assertParentCanAccessChild(req, studentId);
+        if (!access) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
             });
         }
 
+        const attendanceStudentId = access.studentObjectId || studentId;
+
         const attendance = await Attendance.find({
-            studentId,
+            studentId: attendanceStudentId,
             schoolCode
         }).sort({ date: -1 }).limit(100);
 
@@ -240,28 +311,60 @@ exports.getChildAttendance = async (req, res) => {
 exports.getChildResults = async (req, res) => {
     try {
         const { studentId } = req.params;
-        const parentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        // Verify parent owns this child
-        const student = await Student.findOne({ _id: studentId, parentId, schoolCode });
-        if (!student) {
+        const access = await assertParentCanAccessChild(req, studentId);
+        if (!access) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
             });
         }
 
+        if (!access.studentObjectId) {
+            return res.status(200).json({
+                success: true,
+                data: [],
+                message: 'Child has no linked Student record yet; results will appear after enrollment is synced.'
+            });
+        }
+
         const results = await Result.find({
-            studentId,
-            schoolCode
+            studentId: access.studentObjectId,
+            schoolCode,
+            isPublished: true
         })
-        .populate('examId', 'examName examType')
-        .sort({ createdAt: -1 });
+            .sort({ examDate: -1 })
+            .lean();
+
+        const rows = [];
+        for (const doc of results) {
+            if (doc.subjects && doc.subjects.length > 0) {
+                for (const sub of doc.subjects) {
+                    rows.push({
+                        examName: doc.examName,
+                        examDate: doc.examDate,
+                        subjectName: sub.subjectName,
+                        marks: sub.marks,
+                        grade: sub.grade,
+                        resultId: doc._id
+                    });
+                }
+            } else {
+                rows.push({
+                    examName: doc.examName,
+                    examDate: doc.examDate,
+                    subjectName: 'Overall',
+                    marks: doc.totalMarks,
+                    grade: doc.gpa != null ? String(doc.gpa) : '—',
+                    resultId: doc._id
+                });
+            }
+        }
 
         res.status(200).json({
             success: true,
-            data: results
+            data: rows
         });
     } catch (error) {
         res.status(500).json({
@@ -280,35 +383,62 @@ exports.getChildResults = async (req, res) => {
 exports.getChildFees = async (req, res) => {
     try {
         const { studentId } = req.params;
-        const parentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        // Verify parent owns this child
-        const student = await Student.findOne({ _id: studentId, parentId, schoolCode });
-        if (!student) {
+        const access = await assertParentCanAccessChild(req, studentId);
+        if (!access) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
             });
         }
 
-        const fees = await Fee.find({
-            studentId,
-            schoolCode
-        }).sort({ dueDate: -1 });
+        if (!access.studentObjectId) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    fees: [],
+                    summary: {
+                        totalFees: 0,
+                        totalPaid: 0,
+                        totalDue: 0,
+                        unpaidCount: 0
+                    }
+                },
+                message: 'No fee ledger for this child until a Student record is linked.'
+            });
+        }
 
-        const totalDue = fees.reduce((sum, fee) => sum + (fee.amount - fee.paidAmount), 0);
-        const paidAmount = fees.reduce((sum, fee) => sum + fee.paidAmount, 0);
+        const fees = await Fee.find({
+            studentId: access.studentObjectId,
+            schoolCode
+        }).sort({ createdAt: -1 });
+
+        const totalDue = fees.reduce(
+            (sum, fee) =>
+                sum +
+                Math.max(
+                    0,
+                    (fee.amountDue != null ? fee.amountDue : fee.amount || 0) -
+                        (fee.amountPaid != null ? fee.amountPaid : 0)
+                ),
+            0
+        );
+        const paidAmount = fees.reduce((sum, fee) => sum + (fee.amountPaid != null ? fee.amountPaid : 0), 0);
+        const totalAssessed = fees.reduce(
+            (sum, fee) => sum + (fee.amountDue != null ? fee.amountDue : fee.amount || 0),
+            0
+        );
 
         res.status(200).json({
             success: true,
             data: {
                 fees,
                 summary: {
-                    totalFees: fees.reduce((sum, fee) => sum + fee.amount, 0),
+                    totalFees: totalAssessed,
                     totalPaid: paidAmount,
                     totalDue,
-                    unpaidCount: fees.filter(f => f.status === 'unpaid').length
+                    unpaidCount: fees.filter((f) => f.status === 'Unpaid' || f.status === 'unpaid').length
                 }
             }
         });

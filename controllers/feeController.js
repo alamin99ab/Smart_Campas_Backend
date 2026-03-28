@@ -975,15 +975,15 @@ exports.getFeeCollections = async (req, res) => {
 
         const query = { schoolCode };
         if (startDate && endDate) {
-            query.date = {
+            query.createdAt = {
                 $gte: new Date(startDate),
                 $lte: new Date(endDate)
             };
         }
 
         const collections = await PaymentHistory.find(query)
-            .populate('student', 'name rollNumber')
-            .sort({ date: -1 });
+            .populate('studentId', 'name roll studentClass section')
+            .sort({ createdAt: -1 });
 
         res.status(200).json({
             success: true,

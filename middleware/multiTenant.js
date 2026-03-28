@@ -4,6 +4,7 @@
  */
 
 const mongoose = require('mongoose');
+const User = require('../models/User');
 
 /**
  * Middleware to ensure proper tenant isolation
@@ -19,11 +20,21 @@ exports.ensureTenantIsolation = async (req, res, next) => {
         }
 
         // Get schoolCode from authenticated user (JWT contains schoolCode)
-        const schoolCode = req.user?.schoolCode;
-        
+        let schoolCode = req.user?.schoolCode;
+
+        // Normalize schoolCode if present
+        if (schoolCode && typeof schoolCode === 'string') {
+            schoolCode = schoolCode.toUpperCase();
+        }
+
         if (!schoolCode) {
-            console.log('No schoolCode in user:', req.user?.email, req.user?.role, '- allowing access for testing');
-            // For testing purposes, allow access if no schoolCode (but log it)
+            // In production, require a schoolCode for tenant-scoped routes
+            if (process.env.NODE_ENV === 'production') {
+                console.warn('Access denied: Missing schoolCode in authenticated user in production');
+                return res.status(403).json({ success: false, message: 'Access denied: Tenant context missing' });
+            }
+            // For non-production, allow but log for debugging
+            console.log('No schoolCode in user (non-production):', req.user?.email, req.user?.role, '- allowing access for testing');
             return next();
         }
 
@@ -91,11 +102,14 @@ exports.checkFeatureAccess = (feature) => {
                 return next();
             }
 
-            // If no tenant context, skip feature check (let it fail at tenant isolation)
-            if (!req.tenant) {
-                console.log('No tenant context, skipping feature check for:', feature);
-                return next();
-            }
+                    // If no tenant context, deny in production, allow in non-production for backwards compatibility
+                    if (!req.tenant) {
+                        if (process.env.NODE_ENV === 'production') {
+                            return res.status(403).json({ success: false, message: 'Access denied: Tenant context missing' });
+                        }
+                        console.log('No tenant context, skipping feature check for:', feature);
+                        return next();
+                    }
 
             const tenantFeatures = req.tenant?.features;
             

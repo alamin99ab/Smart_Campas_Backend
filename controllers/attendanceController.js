@@ -188,7 +188,16 @@ exports.getAttendanceReport = async (req, res) => {
         const total = await Attendance.countDocuments(query);
 
         if (!attendance || attendance.length === 0) {
-            return res.status(404).json({ success: false, message: 'No attendance records found' });
+            return res.json({
+                success: true,
+                data: {
+                    attendance: [],
+                    summary: { total: 0, present: 0, absent: 0, late: 0, attendancePercentage: 0 },
+                    totalPages: 0,
+                    currentPage: parseInt(page, 10),
+                    total: 0
+                }
+            });
         }
 
         // Student-specific report

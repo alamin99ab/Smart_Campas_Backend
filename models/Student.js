@@ -30,6 +30,7 @@ const studentSchema = new mongoose.Schema({
     forceAdmitGrantedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     forceAdmitGrantedAt: Date,
     schoolCode: { type: String, required: true, index: true },
+    parentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
     addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     isActive: { type: Boolean, default: true },

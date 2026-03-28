@@ -16,141 +16,30 @@ const passwordMgmtMiddleware = require('../middleware/passwordManagementMiddlewa
  * Super Admin account should be created manually in database
  */
 
-// Setup endpoint - Create Super Admin if not exists (for initial deployment)
+// Setup endpoint - READ-ONLY: Super Admin must be configured via environment variables
 router.post('/setup', async (req, res) => {
     try {
-        const User = require('../models/User');
-        const bcrypt = require('bcryptjs');
-        
-        // Check if super admin already exists
-        const existingAdmin = await User.findOne({ role: 'super_admin' });
-        if (existingAdmin) {
-            return res.status(400).json({ 
-                success: false,
-                message: 'Super Admin already exists. Please login with existing credentials.'
-            });
+        const adminEmail = process.env.SUPER_ADMIN_EMAIL;
+        const adminConfigured = !!adminEmail && !!process.env.SUPER_ADMIN_PASSWORD;
+        if (!adminConfigured) {
+            return res.status(400).json({ success: false, message: 'SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD are not configured. Please set them in environment.' });
         }
-        
-        // Get credentials from environment or request body
-        const adminEmail = process.env.SUPER_ADMIN_EMAIL || req.body.email;
-        const adminPassword = process.env.SUPER_ADMIN_PASSWORD || req.body.password;
-        const adminName = process.env.SUPER_ADMIN_NAME || req.body.name || 'Super Administrator';
-        
-        if (!adminEmail || !adminPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD must be set in environment variables'
-            });
-        }
-        
-        const hashedPassword = await bcrypt.hash(adminPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
-        const superAdmin = new User({
-            name: adminName,
-            email: adminEmail,
-            password: hashedPassword,
-            phone: process.env.SUPER_ADMIN_PHONE || '',
-            role: 'super_admin',
-            isApproved: true,
-            emailVerified: true,
-            isActive: true
-        });
-        
-        await superAdmin.save();
-        
-        res.status(201).json({
-            success: true,
-            message: 'Super Admin created successfully',
-            data: {
-                email: adminEmail,
-                name: adminName
-            }
-        });
+
+        return res.json({ success: true, message: 'Super Admin is managed via environment. No DB record is created.', data: { email: adminEmail, name: process.env.SUPER_ADMIN_NAME || 'Super Admin' }, login_url: '/api/auth/super-admin/login' });
     } catch (error) {
-        console.error('Setup error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
+        console.error('Setup check error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// Emergency recovery endpoint - Reset super admin password and unblock account
-// WARNING: This should only be used in development or emergency situations
+// Emergency reset - DISABLED for env-based Super Admin. Credentials are managed via environment variables.
 router.post('/emergency-reset', async (req, res) => {
     try {
-        // Check for emergency secret key (should match environment variable)
-        const EMERGENCY_SECRET = process.env.EMERGENCY_SECRET || 'emergency_reset_2024';
-        const providedSecret = req.body.secret;
-        
-        if (providedSecret !== EMERGENCY_SECRET) {
-            return res.status(403).json({
-                success: false,
-                message: 'Invalid emergency secret'
-            });
-        }
-        
-        const User = require('../models/User');
-        const bcrypt = require('bcryptjs');
-        
-        // Find and update super admin
-        const admin = await User.findOne({ role: 'super_admin' });
-        
-        if (!admin) {
-            // Create new super admin if doesn't exist
-            const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@smartcampus.com';
-            const adminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Admin@123';
-            const adminName = process.env.SUPER_ADMIN_NAME || 'Super Admin';
-            
-            const hashedPassword = await bcrypt.hash(adminPassword, 12);
-            const newAdmin = new User({
-                name: adminName,
-                email: adminEmail,
-                password: hashedPassword,
-                phone: process.env.SUPER_ADMIN_PHONE || '',
-                role: 'super_admin',
-                isApproved: true,
-                emailVerified: true,
-                isActive: true,
-                isBlocked: false,
-                loginAttempts: 0
-            });
-            
-            await newAdmin.save();
-            
-            return res.status(201).json({
-                success: true,
-                message: 'Super Admin created and unblocked',
-                data: {
-                    email: adminEmail,
-                    password: adminPassword
-                }
-            });
-        }
-        
-        // Reset password and unblock
-        const newPassword = req.body.newPassword || 'Admin@123456';
-        const hashedPassword = await bcrypt.hash(newPassword, 12);
-        
-        admin.password = hashedPassword;
-        admin.isBlocked = false;
-        admin.loginAttempts = 0;
-        admin.isActive = true;
-        await admin.save();
-        
-        res.json({
-            success: true,
-            message: 'Super Admin unblocked and password reset',
-            data: {
-                email: admin.email,
-                newPassword: newPassword
-            }
-        });
+        // Do not attempt to mutate or create Super Admin records in DB.
+        return res.status(403).json({ success: false, message: 'Emergency reset is disabled for env-based Super Admin accounts. Update SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in your hosting environment.' });
     } catch (error) {
-        console.error('Emergency reset error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
+        console.error('Emergency reset handler error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
@@ -198,7 +87,9 @@ router.put('/profile', authMiddleware.protect, authController.updateUserProfile)
  * 🔐 Password Management
  */
 router.post('/forgot-password', authController.forgotPassword);
+router.put('/reset-password/:token', authController.resetPassword);
 router.post('/reset-password', authController.resetPassword);
+router.get('/verify-email/:token', authController.verifyEmail);
 router.post('/verify-email', authController.verifyEmail);
 router.put('/change-password', 
     authMiddleware.protect,

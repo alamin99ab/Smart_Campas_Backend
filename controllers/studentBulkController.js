@@ -38,9 +38,13 @@ exports.parseStudentFile = async (req, res) => {
                 trim: true
             });
         } else if (format === 'json' || req.file.originalname.endsWith('.json')) {
-            students = JSON.parse(req.file.buffer.toString('utf-8'));
+            const raw = JSON.parse(req.file.buffer.toString('utf-8'));
+            students = Array.isArray(raw) ? raw : raw.students || [];
         } else if (format === 'xlsx' || req.file.originalname.endsWith('.xlsx') || req.file.originalname.endsWith('.xls')) {
-            students = xlstojson({}).on('data', (data) => students.push(data)).end(req.file.buffer);
+            return res.status(400).json({
+                success: false,
+                message: 'Excel files are not parsed on the server yet. Please export your sheet as CSV and upload again.'
+            });
         }
 
         if (!Array.isArray(students) || students.length === 0) {
@@ -120,13 +124,13 @@ exports.parseStudentFile = async (req, res) => {
 
         res.json({
             success: true,
-            message: `Parsed ${students.length} rows: ${validRows.length} valid, ${errors.length} with errors`,
+            message: `Parsed ${students.length} rows: ${validRows.length} valid, ${errors.length} with issues`,
             data: {
                 total: students.length,
                 valid: validRows.length,
-                errors: errors.length,
-                validRows: validRows.slice(0, 10), // Preview first 10
-                errorRows: errors.slice(0, 10) // Show first 10 errors
+                invalid: errors.length,
+                students: validRows,
+                validationErrors: errors
             }
         });
     } catch (error) {
