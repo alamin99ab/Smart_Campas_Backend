@@ -180,6 +180,7 @@ exports.registerUser = async (req, res) => {
         if (existingSchoolUser) {
             return res.status(400).json({ message: `${role} account already exists for this email in the specified school` });
         }
+    }
 
         const emailVerificationToken = crypto.randomBytes(32).toString('hex');
         const emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
