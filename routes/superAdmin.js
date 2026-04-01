@@ -6,6 +6,8 @@
 const express = require('express');
 const router = express.Router();
 
+console.log('✅ Super Admin routes loaded');
+
 // Import controllers
 const authController = require('../controllers/authController');
 const {

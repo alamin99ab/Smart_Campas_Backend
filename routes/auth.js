@@ -7,6 +7,8 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
 
+console.log('✅ Auth routes loaded');
+
 const loginRateLimiter = rateLimit({
     windowMs: 5 * 60 * 1000, // 5 minutes
     max: 10,
