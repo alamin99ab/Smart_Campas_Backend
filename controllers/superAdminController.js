@@ -35,7 +35,7 @@ exports.createSchool = async (req, res) => {
     session.startTransaction();
 
     try {
-        const { schoolName, schoolCode, principalName, principalEmail, principalPassword } = req.body;
+        const { schoolName, schoolCode, principalName, principalEmail, principalPassword, schoolType, currentSession } = req.body;
         if (!schoolName || !schoolCode || !principalEmail || !principalName) {
             await session.abortTransaction();
             session.endSession();
@@ -51,18 +51,25 @@ exports.createSchool = async (req, res) => {
             return res.status(400).json({ success: false, message: 'School code already exists' });
         }
 
+        const schoolTypeValue = schoolType || 'secondary';
+        const academicCurrentSession = currentSession || process.env.DEFAULT_ACADEMIC_SESSION || '2025-2026';
+
+        const creatorId = (req.user && mongoose.Types.ObjectId.isValid(req.user._id)) ? req.user._id : null;
+
+        const school = await School.create([{
+            schoolName: schoolName.trim(),
+            schoolCode: normalizedCode,
+            schoolType: schoolTypeValue,
+            academicSettings: { currentSession: academicCurrentSession },
+            createdBy: creatorId
+        }], { session });
+
         const existingUser = await User.findOne({ email: principalEmail.trim().toLowerCase() }).session(session);
         if (existingUser) {
             await session.abortTransaction();
             session.endSession();
             return res.status(400).json({ success: false, message: 'Principal email already exists' });
         }
-
-        const school = await School.create([{
-            schoolName: schoolName.trim(),
-            schoolCode: normalizedCode,
-            createdBy: req.user?._id
-        }], { session });
 
         const createdSchool = school[0];
 
@@ -165,12 +172,26 @@ exports.getAllUsers = async (req, res) => {
 exports.createUser = async (req, res) => {
     try {
         const { name, email, role, schoolCode, password } = req.body;
-        if (!name || !email || !role) return res.status(400).json({ success: false, message: 'name, email and role required' });
+        if (!name || !email || !role || !schoolCode) return res.status(400).json({ success: false, message: 'name, email, role and schoolCode required' });
 
         if (role === 'super_admin') return res.status(403).json({ success: false, message: 'Creating super_admin via API is not allowed. Manage Super Admin via environment variables.' });
 
+        const school = await School.findOne({ schoolCode: schoolCode.trim().toUpperCase() });
+        if (!school) return res.status(404).json({ success: false, message: 'School not found for the provided schoolCode' });
+
         const pwd = password || generateSecurePassword();
-        const user = new User({ name, email, role, schoolCode, password: pwd });
+        const userData = {
+            name,
+            email: email.trim().toLowerCase(),
+            role,
+            schoolId: school._id,
+            schoolCode: school.schoolCode,
+            schoolName: school.schoolName,
+            password: pwd,
+            isApproved: role !== 'student' ? true : false
+        };
+
+        const user = new User(userData);
         await user.save();
 
         // Send notification email (do not include password in response)
