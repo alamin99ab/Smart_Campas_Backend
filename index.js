@@ -252,17 +252,21 @@ Role: super_admin
     res.status(200).send(html);
     };
 
-    app.get('/setup', setupPage);
-    app.post('/api/auto-setup-admin', createSuperAdmin);
-    const emergencyReset = async (req, res) => {
-        return res.status(403).json({
-            success: false,
-            message: 'Emergency reset disabled. Super Admin is managed via environment variables. Update credentials via your hosting provider.'
-        });
-    };
+    if (process.env.ENABLE_AUTO_SETUP === 'true') {
+        app.get('/setup', setupPage);
+        app.post('/api/auto-setup-admin', createSuperAdmin);
+        const emergencyReset = async (req, res) => {
+            return res.status(403).json({
+                success: false,
+                message: 'Emergency reset disabled. Super Admin is managed via environment variables. Update credentials via your hosting provider.'
+            });
+        };
 
-    app.post('/api/emergency-reset', emergencyReset);
-    console.log('✅ Auto Admin Setup routes loaded - /setup, /api/auto-setup-admin, /api/emergency-reset');
+        app.post('/api/emergency-reset', emergencyReset);
+        console.log('✅ Auto Admin Setup routes loaded - /setup, /api/auto-setup-admin, /api/emergency-reset (enabled)');
+    } else {
+        console.log('ℹ️ Auto Admin Setup routes disabled (ENABLE_AUTO_SETUP !== true)');
+    }
 } catch (error) {
     console.error('❌ Failed to load auto admin setup routes:', error.message);
 }
@@ -433,7 +437,7 @@ try {
 try {
     const routineRoutes = require('./routes/routineRoutes');
     app.use('/api/routines', routineRoutes);
-    app.use('/api/routine', routineRoutes); // legacy alias
+    // Legacy alias '/api/routine' removed for clarity and to avoid redundancy
     console.log('✅ Routine routes loaded');
 } catch (error) {
     console.error('❌ Failed to load routine routes:', error.message);
@@ -629,8 +633,13 @@ const startServer = async () => {
             console.log(`📍 Database: ${mongoose.connection.name}`);
             console.log(`📍 Host: ${mongoose.connection.host}`);
         } catch (dbError) {
-            console.warn('⚠️  MongoDB connection failed:', dbError.message);
-            console.warn('⚠️  Server starting without database - some features may not work');
+            console.error('❌ MongoDB connection failed:', dbError.message);
+            if (process.env.NODE_ENV === 'production') {
+                console.error('❌ Production DB failure: aborting startup to prevent running in a malfunctioning state.');
+                process.exit(1);
+            }
+
+            console.warn('⚠️  Non-production environment: continuing startup without database (some features may not work).');
         }
     }
         
@@ -639,9 +648,13 @@ const startServer = async () => {
             console.log('\n✅ Super Admin is environment-only (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD). No DB bootstrap.');
         } else {
             console.log('\n⚠️  Database not connected — school features unavailable; Super Admin still logs in via environment credentials.');
+            if (process.env.NODE_ENV === 'production') {
+                console.error('❌ Production abort: MongoDB connection required in production. Exiting.');
+                process.exit(1);
+            }
         }
         
-        // Start server regardless of DB connection
+        // Start server
         app.listen(PORT, '0.0.0.0', () => {
             console.log(`\n🚀 SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING`);
             console.log(`📍 Server: http://localhost:${PORT}`);

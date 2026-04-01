@@ -56,8 +56,7 @@ router.use(addSchoolScope);
  * 🔹 PHASE 3: PRINCIPAL FLOW
  */
 
-// 👑 Step 3: Principal Login (handled in auth routes)
-router.post('/login', require('../controllers/authController').loginUser);
+// 👑 Step 3: Principal Login is handled by /api/auth/login (public endpoint), not by tenant-protected internal route
 
 // All other routes require principal authentication
 router.use(protect);

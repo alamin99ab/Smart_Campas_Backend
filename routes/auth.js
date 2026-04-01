@@ -4,7 +4,19 @@
  */
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
+
+const loginRateLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 10,
+    message: {
+        success: false,
+        message: 'Too many login attempts from this IP, please try again after 5 minutes.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+});
 
 // Import controllers
 const authController = require('../controllers/authController');
@@ -47,29 +59,35 @@ router.post('/emergency-reset', async (req, res) => {
  * 🔹 PHASE 2: SUPER ADMIN FLOW
  * 👑 Step 1: Super Admin Login
  */
-router.post('/super-admin/login', authController.loginUser);
+router.post('/super-admin/login', loginRateLimiter, authController.loginUser);
 
 /**
  * 🔹 PHASE 3: PRINCIPAL FLOW
  * 🏫 Step 3: Principal Login
  */
-router.post('/principal/login', authController.loginUser);
+router.post('/principal/login', loginRateLimiter, authController.loginUser);
 
 /**
  * 🔹 PHASE 5: DAILY OPERATION FLOW
  * 👨‍🏫 Step 8: Teacher Login
  */
-router.post('/teacher/login', authController.loginUser);
+router.post('/teacher/login', loginRateLimiter, authController.loginUser);
 
 /**
  * 🎓 Student Login
  */
-router.post('/student/login', authController.loginUser);
+router.post('/student/login', loginRateLimiter, authController.loginUser);
+
+/**
+ * 🔐 User Registration
+ * Public endpoint for teacher/student/parent/accountant accounts only
+ */
+router.post('/register', loginRateLimiter, authController.registerUser);
 
 /**
  * 🔐 Universal Login (detects role automatically)
  */
-router.post('/login', authController.loginUser);
+router.post('/login', loginRateLimiter, authController.loginUser);
 
 /**
  * 🔄 Token Management

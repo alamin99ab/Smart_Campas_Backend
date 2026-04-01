@@ -3,13 +3,14 @@ const School = require('../models/School');
 // Check if school is active and subscription valid
 exports.checkSchoolStatus = async (req, res, next) => {
     try {
-        const schoolCode = req.user?.schoolCode || req.body.schoolCode || req.params.schoolCode || req.query.schoolCode;
-        
-        if (!schoolCode) {
-            return next(); // No school code needed for super admin routes
+// Trust tenant context from authenticated user/tenant context only; do not trust client-provided schoolCode
+    const schoolCode = req.user?.schoolCode || req.tenant?.schoolCode;
+
+    if (!schoolCode) {
+        return next(); // No school code needed for super admin routes or non-tenant flows
         }
 
-        const school = await School.findOne({ schoolCode });
+        const school = await School.findOne({ schoolCode: schoolCode.toUpperCase() });
         
         if (!school) {
             return res.status(404).json({ message: 'School not found' });

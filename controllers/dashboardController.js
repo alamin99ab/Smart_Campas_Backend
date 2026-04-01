@@ -50,10 +50,13 @@ exports.getPrincipalDashboard = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
         
-        const totalTeachers = await User.countDocuments({ schoolCode, role: 'teacher' });
-        const totalStudents = await User.countDocuments({ schoolCode, role: 'student' });
-        const totalClasses = await Class.countDocuments({ schoolCode });
-        const totalSubjects = await Subject.countDocuments({ schoolCode });
+        const schoolId = req.user.schoolId;
+        const normalizedSchoolCode = req.user.schoolCode ? req.user.schoolCode.toUpperCase() : null;
+
+        const totalTeachers = await User.countDocuments({ schoolId, role: 'teacher' });
+        const totalStudents = await User.countDocuments({ schoolId, role: 'student' });
+        const totalClasses = await Class.countDocuments({ schoolCode: normalizedSchoolCode });
+        const totalSubjects = await Subject.countDocuments({ schoolCode: normalizedSchoolCode });
         
         // Get today's attendance
         const today = new Date();
@@ -72,8 +75,8 @@ exports.getPrincipalDashboard = async (req, res) => {
             isPublished: true
         });
         
-        // Get notices count
-        const totalNotices = await Notice.countDocuments({ schoolCode });
+        // Get notices count (tenant-scoped by schoolId and global notices)
+        const totalNotices = await Notice.countDocuments({ $or: [{ schoolId }, { isGlobal: true }] });
         
         // Get fee collected (this month)
         const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -379,8 +382,9 @@ exports.getDashboard = async (req, res) => {
     try {
         const user = req.user;
         const schoolCode = user.schoolCode;
+        const schoolId = user.schoolId;
 
-        if (!schoolCode) {
+        if (!schoolCode || !schoolId) {
             return res.status(400).json({ success: false, message: 'No school associated' });
         }
 
@@ -410,8 +414,8 @@ exports.getDashboard = async (req, res) => {
             User.countDocuments({ schoolCode, role: 'student' }),
             User.countDocuments({ schoolCode, role: 'teacher', isApproved: false }),
             Attendance.countDocuments({ schoolCode, date: { $gte: today, $lt: tomorrow } }),
-            Notice.find({ schoolCode }).sort({ createdAt: -1 }).limit(5).select('title category priority createdAt').lean(),
-            Notice.find({ schoolCode, createdAt: { $gte: today } }).sort({ createdAt: 1 }).limit(5).select('title category priority createdAt').lean(),
+            Notice.find({ $or: [{ schoolId }, { isGlobal: true }] }).sort({ createdAt: -1 }).limit(5).select('title category priority createdAt').lean(),
+            Notice.find({ $or: [{ schoolId }, { isGlobal: true }], createdAt: { $gte: today } }).sort({ createdAt: 1 }).limit(5).select('title category priority createdAt').lean(),
             SchoolEvent.find({ schoolCode, isActive: true, startDate: { $gte: today, $lte: nextWeek } }).sort({ startDate: 1 }).limit(5).select('title type startDate endDate').lean(),
             getBirthdaysToday(schoolCode, today)
         ]);

@@ -35,8 +35,7 @@ router.use(addSchoolScope);
  * 🔹 PHASE 5: DAILY OPERATION FLOW
  */
 
-// 👨‍🏫 Step 8: Teacher Login (handled in auth routes)
-router.post('/login', require('../controllers/authController').loginUser);
+// 👨‍🏫 Step 8: Teacher Login is handled by /api/auth/login (public endpoint), not by tenant-protected internal route
 
 // All other routes require teacher authentication
 router.use(protect);

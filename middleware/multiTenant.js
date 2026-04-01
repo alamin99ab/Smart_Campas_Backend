@@ -3,7 +3,6 @@
  * Enterprise-level data isolation for SaaS architecture
  */
 
-const mongoose = require('mongoose');
 const User = require('../models/User');
 
 /**
@@ -33,8 +32,7 @@ exports.ensureTenantIsolation = async (req, res, next) => {
                 console.warn('Access denied: Missing schoolCode in authenticated user in production');
                 return res.status(403).json({ success: false, message: 'Access denied: Tenant context missing' });
             }
-            // For non-production, allow but log for debugging
-            console.log('No schoolCode in user (non-production):', req.user?.email, req.user?.role, '- allowing access for testing');
+            // For non-production, allow without verbose logs
             return next();
         }
 
@@ -45,7 +43,10 @@ exports.ensureTenantIsolation = async (req, res, next) => {
         });
 
         if (!school) {
-            console.log('School not found or inactive:', schoolCode);
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied: School not found or inactive'
+            });
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: School not found or inactive'
@@ -55,7 +56,6 @@ exports.ensureTenantIsolation = async (req, res, next) => {
         // Check subscription status (handle both formats)
         const subscriptionStatus = school.subscription?.status || school.status;
         if (subscriptionStatus !== 'active') {
-            console.log('School subscription not active:', schoolCode, subscriptionStatus);
             return res.status(403).json({
                 success: false,
                 message: 'Access denied: School subscription not active'
@@ -77,8 +77,8 @@ exports.ensureTenantIsolation = async (req, res, next) => {
             }
         };
 
-        // Add schoolCode filter to all queries (more reliable than schoolId)
-        req.queryFilter = { schoolCode };
+        // Add tenant filters to all queries
+        req.queryFilter = { schoolId: school._id, schoolCode: school.schoolCode };
 
         next();
     } catch (error) {
@@ -107,7 +107,6 @@ exports.checkFeatureAccess = (feature) => {
                         if (process.env.NODE_ENV === 'production') {
                             return res.status(403).json({ success: false, message: 'Access denied: Tenant context missing' });
                         }
-                        console.log('No tenant context, skipping feature check for:', feature);
                         return next();
                     }
 
@@ -115,7 +114,6 @@ exports.checkFeatureAccess = (feature) => {
             
             // If no features object, allow access (default behavior for older schools)
             if (!tenantFeatures) {
-                console.log('No features object found, allowing access to:', feature);
                 return next();
             }
             
@@ -250,16 +248,23 @@ exports.addSchoolScope = (req, res, next) => {
     }
 
     const schoolId = req.tenant?.schoolId;
-    
+
     if (schoolId) {
-        // Add schoolId to request body for POST/PUT operations
-        if (req.method === 'POST' && req.body) {
+        // Force tenant context into request body for mutation operations.
+        // Remove any client-provided tenant fields to prevent tampering.
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body) {
+            delete req.body.schoolId;
+            delete req.body.schoolCode;
             req.body.schoolId = schoolId;
+            req.body.schoolCode = req.tenant?.schoolCode;
         }
-        
-        // Add schoolId to query parameters for GET operations
-        if (req.method === 'GET' && req.query) {
+
+        // Force tenant context into query parameters as canonical filters.
+        if (req.query) {
+            delete req.query.schoolId;
+            delete req.query.schoolCode;
             req.query.schoolId = schoolId;
+            req.query.schoolCode = req.tenant?.schoolCode;
         }
     }
 

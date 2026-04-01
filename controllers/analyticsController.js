@@ -49,7 +49,7 @@ exports.getOverview = async (req, res) => {
                     }
                 }
             ]),
-            Notice.countDocuments({ schoolCode, createdAt: { $gte: monthStart } }),
+            Notice.countDocuments({ $or: [{ schoolId: req.user.schoolId }, { isGlobal: true }], createdAt: { $gte: monthStart } }),
             Student.find({
                 schoolCode,
                 isActive: true,

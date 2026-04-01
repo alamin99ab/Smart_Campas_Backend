@@ -273,7 +273,7 @@ exports.getSchoolStats = async (req, res) => {
             User.countDocuments({ schoolCode, role: 'teacher', isApproved: false }),
             // Assuming you have a Class model; if not, you can calculate from students distinct classes
             Student.distinct('studentClass', { schoolCode }).then(classes => classes.length),
-            Notice.countDocuments({ schoolCode, isActive: true }),
+            Notice.countDocuments({ $or: [{ schoolId: req.user.schoolId }, { isGlobal: true }], status: 'active', isDeleted: false }),
             Result.find({ schoolCode })
                 .sort({ createdAt: -1 })
                 .limit(5)

@@ -138,80 +138,65 @@ exports.registerUser = async (req, res) => {
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
 
     try {
-        if (!name || !email || !password || !role) {
+        const normalizedEmail = email.trim().toLowerCase();
+        const normalizedName = name.trim();
+        const normalizedSchoolCode = schoolCode ? schoolCode.trim().toUpperCase() : undefined;
+
+        if (!normalizedName || !normalizedEmail || !password || !role) {
             return res.status(400).json({ message: 'All fields are required' });
         }
-        if (password.length < 6) {
-            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+
+        const passwordPolicy = /^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).*$/;
+        if (!passwordPolicy.test(password)) {
+            return res.status(400).json({ message: 'Password must be 8-128 chars and include uppercase, lowercase, number, and symbol' });
         }
+
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
+        if (!emailRegex.test(normalizedEmail)) {
             return res.status(400).json({ message: 'Invalid email format' });
         }
 
-        const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ email: normalizedEmail });
         if (existingUser) {
             return res.status(400).json({ message: 'Email already registered' });
         }
 
-        if (role === 'super_admin') {
-            return res.status(403).json({ message: 'Registration of super_admin via API is not allowed. Super Admin is managed via environment variables.' });
-        }
-
-        if (role === 'principal') {
-            if (!schoolName || !schoolCode) {
-                return res.status(400).json({ message: 'School name and code required for principal' });
-            }
-            const existingSchool = await School.findOne({ schoolCode });
-            if (existingSchool) {
-                return res.status(400).json({ message: 'School code already exists' });
-            }
-            const existingPrincipal = await User.findOne({ schoolCode, role: 'principal' });
-            if (existingPrincipal) {
-                return res.status(400).json({ message: 'Principal already exists for this school' });
-            }
-        }
-
-        if (role === 'teacher' || role === 'student') {
-            if (!schoolCode) {
-                return res.status(400).json({ message: 'School code required' });
-            }
-            const school = await School.findOne({ schoolCode, isActive: true });
-            if (!school) {
-                return res.status(400).json({ message: 'Invalid or inactive school code' });
-            }
+        if (role === 'super_admin' || role === 'principal') {
+            return res.status(403).json({ message: 'Registration of this role via public API is not allowed. Use Super Admin flow or invitation workflow.' });
         }
 
         let school = null;
-        if (role === 'principal') {
-            school = await School.create({
-                schoolName,
-                schoolCode,
-                principalEmail: email,
-                subscription: {
-                    plan: 'trial',
-                    status: 'active',
-                    startDate: new Date(),
-                    endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-                }
-            });
+        if (['teacher', 'student', 'parent', 'accountant'].includes(role)) {
+            if (!normalizedSchoolCode) {
+                return res.status(400).json({ message: 'School code required' });
+            }
+
+            school = await School.findOne({ schoolCode: normalizedSchoolCode, isActive: true });
+            if (!school) {
+                return res.status(400).json({ message: 'Invalid or inactive school code' });
+            }
+
+            const existingSchoolUser = await User.findOne({ schoolCode: normalizedSchoolCode, role, email: normalizedEmail });
+        if (existingSchoolUser) {
+            return res.status(400).json({ message: `${role} account already exists for this email in the specified school` });
         }
 
         const emailVerificationToken = crypto.randomBytes(32).toString('hex');
         const emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
 
         const user = await User.create({
-            name,
-            email,
-            password, // plain password
+            name: normalizedName,
+            email: normalizedEmail,
+            password,
             role,
-            schoolName: school?.schoolName || schoolName,
-            schoolCode,
+            schoolId: school ? school._id : undefined,
+            schoolName: school ? school.schoolName : schoolName,
+            schoolCode: school ? school.schoolCode : normalizedSchoolCode,
             phone,
-            isApproved: role === 'principal' ? true : false,
+            isApproved: false,
             emailVerificationToken,
             emailVerificationExpire,
-            permissions: role === 'principal' ? ['manage_all'] : [],
+            permissions: [],
             devices: [{
                 deviceId,
                 name: req.headers['user-agent']?.substring(0, 100) || 'Unknown device',
@@ -914,39 +899,35 @@ exports.forgotPassword = async (req, res) => {
 
     try {
         const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+
+        if (user) {
+            const resetToken = crypto.randomBytes(32).toString('hex');
+            user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+            user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+            await user.save();
+
+            const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+            
+            if (process.env.NODE_ENV === 'development') {
+                // In development, perform no-op email path and record bypassed status
+                await createAuditLog(user._id, 'PASSWORD_RESET_REQUESTED', {
+                    email,
+                    bypassed: true
+                }, req);
+            } else {
+                sendEmail({
+                    to: email,
+                    subject: 'Password Reset',
+                    template: 'password-reset',
+                    data: { name: user.name, resetUrl }
+                }).catch(err => console.error('Email error:', err));
+            }
+
+            await createAuditLog(user._id, 'PASSWORD_RESET_REQUESTED', {}, req);
         }
-
-        const resetToken = crypto.randomBytes(32).toString('hex');
-        user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-        user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
-        await user.save();
-
-        const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
-        
-        // Bypass email sending for testing
-        if (process.env.NODE_ENV === 'development') {
-            console.log(`📧 Email bypassed in development: ${resetUrl}`);
-            await createAuditLog(user._id, 'PASSWORD_RESET_REQUESTED', { 
-                email, 
-                resetToken,
-                bypassed: true 
-            }, req);
-        } else {
-            sendEmail({
-                to: email,
-                subject: 'Password Reset',
-                template: 'password-reset',
-                data: { name: user.name, resetUrl }
-            }).catch(err => console.error('Email error:', err));
-        }
-
-        await createAuditLog(user._id, 'PASSWORD_RESET_REQUESTED', {}, req);
 
         res.json({
-            message: 'Password reset email sent',
-            resetToken: process.env.NODE_ENV === 'development' ? resetToken : undefined
+            message: 'If an account with this email exists, a password reset link has been sent.'
         });
 
     } catch (error) {

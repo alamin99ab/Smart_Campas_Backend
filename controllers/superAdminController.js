@@ -31,51 +31,77 @@ const createAudit = async (userId, action, details, req) => {
 };
 
 exports.createSchool = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
         const { schoolName, schoolCode, principalName, principalEmail, principalPassword } = req.body;
         if (!schoolName || !schoolCode || !principalEmail || !principalName) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ success: false, message: 'schoolName, schoolCode, principalName and principalEmail are required' });
         }
 
-        const existing = await School.findOne({ schoolCode: schoolCode.toUpperCase() });
-        if (existing) return res.status(400).json({ success: false, message: 'School code already exists' });
+        const normalizedCode = schoolCode.trim().toUpperCase();
 
-        const school = await School.create({ schoolName, schoolCode: schoolCode.toUpperCase(), createdBy: req.user?._id });
+        const existing = await School.findOne({ schoolCode: normalizedCode }).session(session);
+        if (existing) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: 'School code already exists' });
+        }
 
-        // Create principal user
+        const existingUser = await User.findOne({ email: principalEmail.trim().toLowerCase() }).session(session);
+        if (existingUser) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({ success: false, message: 'Principal email already exists' });
+        }
+
+        const school = await School.create([{
+            schoolName: schoolName.trim(),
+            schoolCode: normalizedCode,
+            createdBy: req.user?._id
+        }], { session });
+
+        const createdSchool = school[0];
+
         const passwordToUse = principalPassword || generateSecurePassword();
+
         const principal = new User({
-            name: principalName,
-            email: principalEmail,
+            name: principalName.trim(),
+            email: principalEmail.trim().toLowerCase(),
             password: passwordToUse,
             role: 'principal',
-            schoolCode: school.schoolCode,
-            schoolName: school.schoolName,
+            schoolId: createdSchool._id,
+            schoolCode: createdSchool.schoolCode,
+            schoolName: createdSchool.schoolName,
             isApproved: true,
             emailVerified: false
         });
-        await principal.save();
 
-        // Link principal to school
-        school.principalId = principal._id;
-        await school.save();
+        await principal.save({ session });
 
-        // Send onboarding email (do not return password in API)
-        try {
-            sendEmail({
-                to: principalEmail,
-                subject: 'Welcome to Smart Campus',
-                template: 'principal-welcome',
-                data: { name: principalName, temporaryPassword: passwordToUse, schoolName: school.schoolName }
-            }).catch(e => console.error('Email send error:', e));
-        } catch (e) {
-            console.error('Onboarding email failed:', e.message);
-        }
+        createdSchool.principalId = principal._id;
+        await createdSchool.save({ session });
 
-        await createAudit(req.user?._id || null, 'CREATE_SCHOOL', { schoolId: school._id, principal: principal._id }, req);
+        await session.commitTransaction();
+        session.endSession();
 
-        return res.status(201).json({ success: true, data: { schoolId: school._id, schoolName: school.schoolName, schoolCode: school.schoolCode, principalId: principal._id, principalEmail } });
+        // Send onboarding email (fire and forget)
+        sendEmail({
+            to: principalEmail,
+            subject: 'Welcome to Smart Campus',
+            template: 'principal-welcome',
+            data: { name: principalName, temporaryPassword: passwordToUse, schoolName: createdSchool.schoolName }
+        }).catch(e => console.error('Email send error:', e));
+
+        await createAudit(req.user?._id || null, 'CREATE_SCHOOL', { schoolId: createdSchool._id, principal: principal._id }, req);
+
+        return res.status(201).json({ success: true, data: { schoolId: createdSchool._id, schoolName: createdSchool.schoolName, schoolCode: createdSchool.schoolCode, principalId: principal._id, principalEmail } });
     } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
         console.error('createSchool error:', error);
         res.status(500).json({ success: false, message: error.message });
     }

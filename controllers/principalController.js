@@ -1023,22 +1023,36 @@ exports.createTeacher = async (req, res) => {
         const schoolId = req.user.schoolId;
         const schoolName = req.user.schoolName;
 
-        const teacher = new User({
-            name,
-            email,
+        if (!name || !email || !password) {
+            return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const passwordPolicy = /^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).*$/;
+        if (!passwordPolicy.test(password)) {
+            return res.status(400).json({ success: false, message: 'Password must be 8-128 chars and include uppercase, lowercase, number, and symbol.' });
+        }
+
+        const existingTeacher = await User.findOne({ email: normalizedEmail, schoolId, role: 'teacher' });
+        if (existingTeacher) {
+            return res.status(409).json({ success: false, message: 'Teacher with this email already exists in your school.' });
+        }
+
+        const teacher = await User.create({
+            name: name.trim(),
+            email: normalizedEmail,
             password,
             role: 'teacher',
-            subjects,
-            classes,
+            subjects: subjects || [],
+            classes: classes || [],
             phone,
             address,
             schoolId,
             schoolCode,
             schoolName,
+            isApproved: true,
             createdBy: req.user.id
         });
-
-        await teacher.save();
 
         res.status(201).json({
             success: true,
@@ -1296,9 +1310,24 @@ exports.createStudent = async (req, res) => {
         const schoolId = req.user.schoolId;
         const schoolName = req.user.schoolName;
 
-        const student = new User({
-            name,
-            email,
+        if (!name || !email || !password) {
+            return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const passwordPolicy = /^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).*$/;
+        if (!passwordPolicy.test(password)) {
+            return res.status(400).json({ success: false, message: 'Password must be 8-128 chars and include uppercase, lowercase, number, and symbol.' });
+        }
+
+        const existingStudent = await User.findOne({ email: normalizedEmail, schoolId, role: 'student' });
+        if (existingStudent) {
+            return res.status(409).json({ success: false, message: 'Student with this email already exists in your school.' });
+        }
+
+        const student = await User.create({
+            name: name.trim(),
+            email: normalizedEmail,
             password,
             role: 'student',
             classId,
@@ -1308,10 +1337,9 @@ exports.createStudent = async (req, res) => {
             schoolId,
             schoolCode,
             schoolName,
+            isApproved: false,
             createdBy: req.user.id
         });
-
-        await student.save();
 
         res.status(201).json({
             success: true,
