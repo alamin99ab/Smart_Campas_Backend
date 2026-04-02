@@ -170,6 +170,18 @@ exports.checkSubscriptionLimits = (limitType) => {
                     maxStudents: 200,
                     maxTeachers: 20
                 },
+                monthly: {
+                    maxUsers: 500,
+                    maxClasses: 30,
+                    maxStudents: 300,
+                    maxTeachers: 50
+                },
+                yearly: {
+                    maxUsers: 2000,
+                    maxClasses: 100,
+                    maxStudents: 1500,
+                    maxTeachers: 200
+                },
                 basic: {
                     maxUsers: 200,
                     maxClasses: 25,

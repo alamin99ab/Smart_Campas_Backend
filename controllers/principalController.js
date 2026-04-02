@@ -359,13 +359,20 @@ exports.createClass = async (req, res) => {
         } = req.body;
 
         const schoolCode = req.user.schoolCode;
+        const normalizedSection = section?.trim()?.toUpperCase();
+
+        let effectiveAcademicYear = academicYear;
+        if (!effectiveAcademicYear) {
+            const school = await School.findOne({ schoolCode }).select('academicSettings.currentSession');
+            effectiveAcademicYear = school?.academicSettings?.currentSession || `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`;
+        }
 
         // Check if class already exists
         const existingClass = await Class.findOne({
             schoolCode,
             className,
-            section,
-            academicYear
+            section: normalizedSection,
+            academicYear: effectiveAcademicYear
         });
 
         if (existingClass) {
@@ -378,12 +385,12 @@ exports.createClass = async (req, res) => {
         const newClass = new Class({
             schoolCode,
             className,
-            section,
+            section: normalizedSection,
             classLevel,
             capacity,
             roomNumber,
             floor,
-            academicYear,
+            academicYear: effectiveAcademicYear,
             createdBy: req.user.id
         });
 
@@ -1054,10 +1061,13 @@ exports.createTeacher = async (req, res) => {
             createdBy: req.user.id
         });
 
+        const teacherData = teacher.toObject();
+        delete teacherData.password;
+
         res.status(201).json({
             success: true,
             message: 'Teacher created successfully',
-            data: teacher
+            data: teacherData
         });
     } catch (error) {
         res.status(500).json({
@@ -1341,10 +1351,13 @@ exports.createStudent = async (req, res) => {
             createdBy: req.user.id
         });
 
+        const studentData = student.toObject();
+        delete studentData.password;
+
         res.status(201).json({
             success: true,
             message: 'Student created successfully',
-            data: student
+            data: studentData
         });
     } catch (error) {
         res.status(500).json({
@@ -1366,16 +1379,27 @@ exports.getStudents = async (req, res) => {
         const { classId, section } = req.query;
         
         const query = { schoolCode, role: 'student' };
-        if (classId) query.class = classId;
+        if (classId) query.classId = classId;
         if (section) query.section = section;
         
         const students = await User.find(query)
+            .populate('classId', 'className section classLevel')
             .select('-password')
             .sort({ createdAt: -1 });
 
+        const normalizedStudents = students.map((student) => {
+            const studentData = student.toObject();
+            if (studentData.classId?.className && !studentData.studentClass) {
+                studentData.studentClass = studentData.classId.section
+                    ? `${studentData.classId.className} - ${studentData.classId.section}`
+                    : studentData.classId.className;
+            }
+            return studentData;
+        });
+
         res.status(200).json({
             success: true,
-            data: students
+            data: normalizedStudents
         });
     } catch (error) {
         res.status(500).json({
@@ -1399,7 +1423,7 @@ exports.updateStudent = async (req, res) => {
 
         const student = await User.findOneAndUpdate(
             { _id: id, schoolCode, role: 'student' },
-            { name, email, class: classId, section, rollNumber, parentInfo },
+            { name, email, classId, section, rollNumber, parentInfo },
             { new: true, runValidators: true }
         ).select('-password');
 

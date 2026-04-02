@@ -6,14 +6,19 @@
 const validateEnv = () => {
     const errors = [];
     const warnings = [];
+    const useMemoryDb = process.env.USE_MEMORY_DB === 'true';
+    const useMockDb = process.env.USE_MOCK_DB === 'true';
 
     // Required variables for basic operation
     const required = {
-        'MONGO_URI': 'MongoDB connection string is required',
         'JWT_SECRET': 'JWT secret is required for authentication',
         'SUPER_ADMIN_EMAIL': 'Super admin email is required',
         'SUPER_ADMIN_PASSWORD': 'Super admin password is required'
     };
+
+    if (!useMemoryDb && !useMockDb) {
+        required.MONGO_URI = 'MongoDB connection string is required';
+    }
 
     // Check required variables
     for (const [key, message] of Object.entries(required)) {
@@ -24,6 +29,9 @@ const validateEnv = () => {
 
     // Validate JWT_SECRET length in production
     if (process.env.NODE_ENV === 'production') {
+        if (useMemoryDb || useMockDb) {
+            errors.push('❌ USE_MEMORY_DB and USE_MOCK_DB are not allowed in production');
+        }
         if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32) {
             errors.push('❌ JWT_SECRET must be at least 32 characters in production');
         }
@@ -61,6 +69,14 @@ const validateEnv = () => {
         }
     }
 
+    if (useMemoryDb) {
+        warnings.push('⚠️  USE_MEMORY_DB is enabled: an ephemeral in-memory MongoDB instance will be used for local development');
+    }
+
+    if (useMockDb) {
+        warnings.push('⚠️  USE_MOCK_DB is enabled: database-backed features may be unavailable');
+    }
+
     // Print results
     if (errors.length > 0) {
         console.error('\n' + '='.repeat(80));
@@ -88,7 +104,7 @@ const validateEnv = () => {
     console.log('✅ ENVIRONMENT VARIABLE VALIDATION PASSED');
     console.log('='.repeat(80));
     console.log('✓ All required environment variables are set');
-    console.log('✓ MongoDB URI format is valid');
+    console.log(useMemoryDb || useMockDb ? '✓ Development database mode is configured' : '✓ MongoDB URI format is valid');
     console.log('✓ JWT secrets are configured');
     console.log('✓ Super admin credentials are set');
     console.log('='.repeat(80) + '\n');

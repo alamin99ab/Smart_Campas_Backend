@@ -24,7 +24,7 @@ const noticeSchema = new mongoose.Schema({
     },
     targetSubscriptionPlans: [{
         type: String,
-        enum: ['trial', 'basic', 'standard', 'premium', 'enterprise']
+        enum: ['trial', 'monthly', 'yearly', 'basic', 'standard', 'premium', 'enterprise']
     }],
     
     // Notice details

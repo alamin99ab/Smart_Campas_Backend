@@ -9,6 +9,8 @@ const requestId = require('./middleware/requestId');
 const { validateEnv } = require('./utils/validateEnv');
 require('dotenv').config();
 
+let memoryMongoServer = null;
+
 // Validate environment variables before starting
 if (!validateEnv()) {
     console.error('\n❌ Server startup aborted due to missing environment variables');
@@ -609,10 +611,39 @@ const startServer = async () => {
     
     // Check if we should use mock database for testing
     const useMockDB = process.env.USE_MOCK_DB === 'true' || process.env.NODE_ENV === 'test';
+    const useMemoryDB = process.env.USE_MEMORY_DB === 'true';
     
-    if (useMockDB) {
-        console.log('\n🔄 Using Mock Database for Testing...');
-        dbConnected = true;
+    if (useMemoryDB) {
+        try {
+            console.log('\n🔄 Starting in-memory MongoDB replica set for local development...');
+            const { MongoMemoryReplSet } = require('mongodb-memory-server');
+            memoryMongoServer = await MongoMemoryReplSet.create({
+                replSet: { count: 1 },
+                instanceOpts: [{
+                    dbName: process.env.MEMORY_DB_NAME || 'smart-campus-dev'
+                }]
+            });
+
+            const memoryMongoUri = memoryMongoServer.getUri();
+            await mongoose.connect(memoryMongoUri, {
+                serverSelectionTimeoutMS: 10000,
+                socketTimeoutMS: 30000,
+                connectTimeoutMS: 10000,
+                maxPoolSize: 5,
+                minPoolSize: 1,
+                retryWrites: false
+            });
+
+            dbConnected = true;
+            console.log('✅ In-memory MongoDB replica set started successfully');
+            console.log(`📍 Database: ${mongoose.connection.name}`);
+        } catch (memoryError) {
+            console.error('❌ Failed to start in-memory MongoDB:', memoryError.message);
+            process.exit(1);
+        }
+    } else if (useMockDB) {
+        console.log('\n🔄 Using Mock Database mode...');
+        console.warn('⚠️  Database-backed features are disabled in mock mode.');
     } else {
         // Try to connect to MongoDB but allow server to start anyway
         try {
@@ -680,6 +711,9 @@ process.on('SIGTERM', async () => {
     console.log('\nSIGTERM received, shutting down gracefully...');
     try {
         await mongoose.connection.close();
+        if (memoryMongoServer) {
+            await memoryMongoServer.stop();
+        }
         console.log('MongoDB connection closed');
         process.exit(0);
     } catch (err) {
@@ -692,6 +726,9 @@ process.on('SIGINT', async () => {
     console.log('\nSIGINT received, shutting down gracefully...');
     try {
         await mongoose.connection.close();
+        if (memoryMongoServer) {
+            await memoryMongoServer.stop();
+        }
         console.log('MongoDB connection closed');
         process.exit(0);
     } catch (err) {

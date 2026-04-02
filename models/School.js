@@ -62,7 +62,8 @@ const schoolSchema = new mongoose.Schema({
     
     // Subscription (reference to Subscription model)
     subscription: {
-        plan: { type: String, enum: ['trial', 'basic', 'standard', 'premium', 'enterprise'], default: 'trial' },
+        plan: { type: String, enum: ['trial', 'monthly', 'yearly', 'basic', 'standard', 'premium', 'enterprise'], default: 'trial' },
+        billingCycle: { type: String, enum: ['trial', 'monthly', 'yearly'], default: 'trial' },
         status: { type: String, enum: ['active', 'inactive', 'expired', 'suspended'], default: 'active' },
         startDate: { type: Date, default: Date.now },
         endDate: { type: Date }

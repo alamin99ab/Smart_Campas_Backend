@@ -12,6 +12,58 @@ const Subscription = require('../models/Subscription');
 const AuditLog = require('../models/AuditLog');
 const passwordService = require('../services/passwordResetService');
 
+const SUBSCRIPTION_PRESETS = {
+    trial: {
+        durationDays: 14,
+        amount: 0,
+        billingCycle: 'trial',
+        limits: { maxUsers: 100, maxStudents: 50, maxTeachers: 10, maxClasses: 10, maxStorage: 500, maxApiCalls: 1000 },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: false, assignment: false, sms: false, bulkImport: false, mobileApp: false, apiAccess: false, advancedAnalytics: false, customBranding: false, prioritySupport: false, backup: false, integration: false }
+    },
+    monthly: {
+        durationDays: 30,
+        amount: 49.99,
+        billingCycle: 'monthly',
+        limits: { maxUsers: 500, maxStudents: 300, maxTeachers: 50, maxClasses: 30, maxStorage: 5000, maxApiCalls: 10000 },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: true, assignment: true, sms: false, bulkImport: true, mobileApp: false, apiAccess: false, advancedAnalytics: false, customBranding: false, prioritySupport: false, backup: false, integration: false }
+    },
+    yearly: {
+        durationDays: 365,
+        amount: 499.99,
+        billingCycle: 'yearly',
+        limits: { maxUsers: 2000, maxStudents: 1500, maxTeachers: 200, maxClasses: 100, maxStorage: 50000, maxApiCalls: 100000 },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: true, assignment: true, sms: true, bulkImport: true, mobileApp: true, apiAccess: true, advancedAnalytics: true, customBranding: true, prioritySupport: true, backup: true, integration: true }
+    },
+    basic: {
+        durationDays: 30,
+        amount: 29.99,
+        billingCycle: 'monthly',
+        limits: { maxUsers: 200, maxStudents: 1000, maxTeachers: 50, maxClasses: 25, maxStorage: 5000, maxApiCalls: 10000 },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: false, assignment: false, sms: false, bulkImport: true, mobileApp: false, apiAccess: false, advancedAnalytics: false, customBranding: false, prioritySupport: false, backup: false, integration: false }
+    },
+    standard: {
+        durationDays: 365,
+        amount: 199.99,
+        billingCycle: 'yearly',
+        limits: { maxUsers: 1000, maxStudents: 5000, maxTeachers: 200, maxClasses: 100, maxStorage: 25000, maxApiCalls: 50000 },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: true, assignment: true, sms: true, bulkImport: true, mobileApp: true, apiAccess: true, advancedAnalytics: true, customBranding: false, prioritySupport: false, backup: true, integration: true }
+    },
+    premium: {
+        durationDays: 365,
+        amount: 399.99,
+        billingCycle: 'yearly',
+        limits: { maxUsers: 5000, maxStudents: 20000, maxTeachers: 1000, maxClasses: 500, maxStorage: 100000, maxApiCalls: 250000 },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: true, assignment: true, sms: true, bulkImport: true, mobileApp: true, apiAccess: true, advancedAnalytics: true, customBranding: true, prioritySupport: true, backup: true, integration: true }
+    },
+    enterprise: {
+        durationDays: 365,
+        amount: 999.99,
+        billingCycle: 'yearly',
+        limits: { maxUsers: Infinity, maxStudents: Infinity, maxTeachers: Infinity, maxClasses: Infinity, maxStorage: Infinity, maxApiCalls: Infinity },
+        features: { routine: true, attendance: true, exam: true, fee: true, notice: true, library: true, assignment: true, sms: true, bulkImport: true, mobileApp: true, apiAccess: true, advancedAnalytics: true, customBranding: true, prioritySupport: true, backup: true, integration: true }
+    }
+};
+
 const generateSecurePassword = (length = 16) => {
     const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+';
     let password = '';
@@ -35,7 +87,7 @@ exports.createSchool = async (req, res) => {
     session.startTransaction();
 
     try {
-        const { schoolName, schoolCode, principalName, principalEmail, principalPassword, schoolType, currentSession } = req.body;
+        const { schoolName, schoolCode, principalName, principalEmail, principalPassword, schoolType, currentSession, address, phone, email, principalPhone, plan = 'trial' } = req.body;
         if (!schoolName || !schoolCode || !principalEmail || !principalName) {
             await session.abortTransaction();
             session.endSession();
@@ -43,6 +95,11 @@ exports.createSchool = async (req, res) => {
         }
 
         const normalizedCode = schoolCode.trim().toUpperCase();
+        const normalizedPlan = SUBSCRIPTION_PRESETS[plan] ? plan : 'trial';
+        const planConfig = SUBSCRIPTION_PRESETS[normalizedPlan];
+        const subscriptionStartDate = new Date();
+        const subscriptionEndDate = new Date(subscriptionStartDate);
+        subscriptionEndDate.setDate(subscriptionEndDate.getDate() + planConfig.durationDays);
 
         const existing = await School.findOne({ schoolCode: normalizedCode }).session(session);
         if (existing) {
@@ -60,7 +117,18 @@ exports.createSchool = async (req, res) => {
             schoolName: schoolName.trim(),
             schoolCode: normalizedCode,
             schoolType: schoolTypeValue,
+            address: address?.trim() || undefined,
+            phone: phone?.trim() || undefined,
+            email: email?.trim().toLowerCase() || undefined,
             academicSettings: { currentSession: academicCurrentSession },
+            subscription: {
+                plan: normalizedPlan,
+                billingCycle: planConfig.billingCycle,
+                status: 'active',
+                startDate: subscriptionStartDate,
+                endDate: subscriptionEndDate
+            },
+            features: planConfig.features,
             createdBy: creatorId
         }], { session });
 
@@ -83,14 +151,51 @@ exports.createSchool = async (req, res) => {
             schoolId: createdSchool._id,
             schoolCode: createdSchool.schoolCode,
             schoolName: createdSchool.schoolName,
+            phone: principalPhone?.trim() || undefined,
             isApproved: true,
             emailVerified: false
         });
 
         await principal.save({ session });
 
-        createdSchool.principalId = principal._id;
+        createdSchool.principal = principal._id;
         await createdSchool.save({ session });
+
+        await Subscription.create([{
+            schoolId: createdSchool._id,
+            plan: normalizedPlan,
+            status: 'active',
+            billingCycle: planConfig.billingCycle,
+            startDate: subscriptionStartDate,
+            endDate: subscriptionEndDate,
+            trialEndDate: normalizedPlan === 'trial' ? subscriptionEndDate : null,
+            amount: {
+                currency: 'USD',
+                amount: Number.isFinite(planConfig.amount) ? planConfig.amount : 0,
+                discount: 0,
+                tax: 0,
+                total: Number.isFinite(planConfig.amount) ? planConfig.amount : 0
+            },
+            paymentMethod: 'card',
+            autoRenew: normalizedPlan !== 'trial',
+            usage: {
+                users: 0,
+                students: 0,
+                teachers: 0,
+                classes: 0,
+                storage: 0,
+                apiCalls: 0
+            },
+            limits: {
+                maxUsers: Number.isFinite(planConfig.limits.maxUsers) ? planConfig.limits.maxUsers : 999999999,
+                maxStudents: Number.isFinite(planConfig.limits.maxStudents) ? planConfig.limits.maxStudents : 999999999,
+                maxTeachers: Number.isFinite(planConfig.limits.maxTeachers) ? planConfig.limits.maxTeachers : 999999999,
+                maxClasses: Number.isFinite(planConfig.limits.maxClasses) ? planConfig.limits.maxClasses : 999999999,
+                maxStorage: Number.isFinite(planConfig.limits.maxStorage) ? planConfig.limits.maxStorage : 999999999,
+                maxApiCalls: Number.isFinite(planConfig.limits.maxApiCalls) ? planConfig.limits.maxApiCalls : 999999999
+            },
+            features: planConfig.features
+        }], { session });
 
         await session.commitTransaction();
         session.endSession();
@@ -105,7 +210,36 @@ exports.createSchool = async (req, res) => {
 
         await createAudit(req.user?._id || null, 'CREATE_SCHOOL', { schoolId: createdSchool._id, principal: principal._id }, req);
 
-        return res.status(201).json({ success: true, data: { schoolId: createdSchool._id, schoolName: createdSchool.schoolName, schoolCode: createdSchool.schoolCode, principalId: principal._id, principalEmail } });
+        return res.status(201).json({
+            success: true,
+            message: 'School created successfully',
+            data: {
+                school: {
+                    _id: createdSchool._id,
+                    schoolName: createdSchool.schoolName,
+                    schoolCode: createdSchool.schoolCode,
+                    address: createdSchool.address,
+                    phone: createdSchool.phone,
+                    email: createdSchool.email,
+                    subscription: {
+                        ...createdSchool.subscription.toObject(),
+                        expiryDate: createdSchool.subscription.endDate
+                    }
+                },
+                principal: {
+                    _id: principal._id,
+                    name: principal.name,
+                    email: principal.email,
+                    phone: principal.phone,
+                    role: principal.role
+                },
+                schoolId: createdSchool._id,
+                schoolName: createdSchool.schoolName,
+                schoolCode: createdSchool.schoolCode,
+                principalId: principal._id,
+                principalEmail: principal.email
+            }
+        });
     } catch (error) {
         await session.abortTransaction();
         session.endSession();
@@ -116,7 +250,9 @@ exports.createSchool = async (req, res) => {
 
 exports.getAllSchools = async (req, res) => {
     try {
-        const schools = await School.find().select('-__v');
+        const schools = await School.find()
+            .select('-__v')
+            .populate('principal', 'name email phone role');
         res.json({ success: true, data: schools });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
@@ -125,9 +261,19 @@ exports.getAllSchools = async (req, res) => {
 
 exports.getSchool = async (req, res) => {
     try {
-        const school = await School.findById(req.params.id).select('-__v');
+        const school = await School.findById(req.params.id)
+            .select('-__v')
+            .populate('principal', 'name email phone role');
         if (!school) return res.status(404).json({ success: false, message: 'School not found' });
-        res.json({ success: true, data: school });
+        const [studentCount, teacherCount] = await Promise.all([
+            User.countDocuments({ schoolCode: school.schoolCode, role: 'student' }),
+            User.countDocuments({ schoolCode: school.schoolCode, role: 'teacher' })
+        ]);
+        const schoolData = school.toObject();
+        if (schoolData.subscription?.endDate) {
+            schoolData.subscription.expiryDate = schoolData.subscription.endDate;
+        }
+        res.json({ success: true, data: { ...schoolData, studentCount, teacherCount } });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
