@@ -1,7 +1,7 @@
 # 🚀 SMART CAMPUS API - PRODUCTION READY
 # Single-stage build for simplicity and reliability
 
-FROM node:18-alpine
+FROM node:20-alpine
 
 # Install security updates and dependencies
 RUN apk update && apk upgrade && \

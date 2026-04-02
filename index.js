@@ -625,7 +625,19 @@ const startServer = async () => {
     if (useMemoryDB) {
         try {
             console.log('\n🔄 Starting in-memory MongoDB replica set for local development...');
-            const { MongoMemoryReplSet } = require('mongodb-memory-server');
+            let MongoMemoryReplSet;
+            try {
+                MongoMemoryReplSet = require('mongodb-memory-server').MongoMemoryReplSet;
+            } catch (importError) {
+                console.error('⚠️ mongodb-memory-server package is not installed. Falling back to mock DB mode.');
+                console.warn(importError.message);
+                console.warn('⚠️ Set USE_MOCK_DB=true in .env for non-persistent mock mode.');
+                dbConnected = false;
+                // Avoid hard crash when memory server is intentionally removed for production.
+                console.warn('⚠️ Skipping in-memory DB startup due to missing dependency.');
+                return;
+            }
+
             memoryMongoServer = await MongoMemoryReplSet.create({
                 replSet: { count: 1 },
                 instanceOpts: [{
