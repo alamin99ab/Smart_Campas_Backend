@@ -13,8 +13,9 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies only for production
-RUN npm install --only=production && npm cache clean --force
+# Ensure production mode and install only runtime dependencies
+ENV NODE_ENV=production
+RUN npm install --omit=dev && npm cache clean --force
 
 # Copy source code
 COPY . .
