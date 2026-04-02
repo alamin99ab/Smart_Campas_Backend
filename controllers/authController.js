@@ -1,7 +1,3 @@
-// controllers/authController.js
-const mongoose = require('mongoose');
-
-// MongoDB Models
 const User = require('../models/User');
 const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
@@ -20,23 +16,15 @@ const { sendSMS } = require('../utils/smsService');
 // Validate JWT configuration at startup
 const getJwtSecret = () => {
     const secret = process.env.JWT_SECRET;
-    
-    // In production, JWT_SECRET is required and validated before server starts
-    if (process.env.NODE_ENV === 'production') {
-        if (!secret) {
-            throw new Error('JWT_SECRET environment variable is required in production');
-        }
-        if (secret.includes('your_') || secret.length < 32) {
-            throw new Error('JWT_SECRET must be a strong value (min 32 characters, no placeholder values) in production');
-        }
-    }
-    
-    // Development fallback - only used when NODE_ENV is not production
+
     if (!secret) {
-        console.warn('⚠️  WARNING: Using development JWT_SECRET. Set JWT_SECRET in .env for production.');
-        return 'dev_secret_key_32_chars_minimum_for_development_only';
+        throw new Error('JWT_SECRET environment variable is required');
     }
-    
+
+    if (process.env.NODE_ENV === 'production' && (secret.includes('your_') || secret.length < 32)) {
+        throw new Error('JWT_SECRET must be a strong value (min 32 characters, no placeholder values) in production');
+    }
+
     return secret;
 };
 
@@ -49,24 +37,16 @@ const generateToken = (id, role, schoolCode, permissions = [], deviceId = null) 
 };
 
 const getRefreshSecret = () => {
-    const secret = process.env.JWT_REFRESH_SECRET;
-    
-    // In production, JWT_REFRESH_SECRET is required
-    if (process.env.NODE_ENV === 'production') {
-        if (!secret) {
-            throw new Error('JWT_REFRESH_SECRET environment variable is required in production');
-        }
-        if (secret.includes('your_') || secret.length < 32) {
-            throw new Error('JWT_REFRESH_SECRET must be a strong value (min 32 characters, no placeholder values) in production');
-        }
-    }
-    
-    // Development fallback
+    const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+
     if (!secret) {
-        console.warn('⚠️  WARNING: Using development JWT_REFRESH_SECRET. Set JWT_REFRESH_SECRET in .env for production.');
-        return 'dev_refresh_secret_32_chars_minimum_for_development_only';
+        throw new Error('JWT_REFRESH_SECRET or JWT_SECRET environment variable is required');
     }
-    
+
+    if (process.env.NODE_ENV === 'production' && (secret.includes('your_') || secret.length < 32)) {
+        throw new Error('JWT_REFRESH_SECRET must be a strong value (min 32 characters, no placeholder values) in production');
+    }
+
     return secret;
 };
 
@@ -116,7 +96,7 @@ const createAuditLog = async (userId, action, details, req) => {
         if (isEnvUser) {
             // For env-based super admin
             logData.isEnvUser = true;
-            logData.envUserEmail = process.env.SUPER_ADMIN_EMAIL || 'super_admin@env';
+            logData.envUserEmail = process.env.SUPER_ADMIN_EMAIL;
         } else {
             // For regular database users
             logData.user = userId;
@@ -253,7 +233,7 @@ exports.registerUser = async (req, res) => {
         console.error('Register error:', error);
         res.status(500).json({ message: 'Registration failed' });
     }
-} // Added closing bracket here
+}
 
 // @desc    Login User (Super Admin and School Users)
 // @route   POST /api/auth/login
@@ -1337,3 +1317,4 @@ exports.getAuditLogs = async (req, res) => {
         res.status(500).json({ message: 'Failed to fetch audit logs' });
     }
 };
+

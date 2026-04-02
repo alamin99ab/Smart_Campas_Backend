@@ -6,8 +6,17 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
 const requestId = require('./middleware/requestId');
+const { ensureMongoIndexes } = require('./utils/ensureMongoIndexes');
 const { validateEnv } = require('./utils/validateEnv');
 require('dotenv').config();
+
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction) {
+    console.debug = () => {};
+    console.log = () => {};
+    console.info = () => {};
+    // Keep warning/error visible in production for issues
+}
 
 let memoryMongoServer = null;
 
@@ -194,7 +203,7 @@ try {
         <div class="info">
             <p><strong>📋 This will create the Super Admin account using environment variables:</strong></p>
             <pre>
-Email: ${process.env.SUPER_ADMIN_EMAIL || 'admin@example.com'}
+Email: ${process.env.SUPER_ADMIN_EMAIL || 'Not configured'}
 Password: [Set in environment variables]
 Phone: ${process.env.SUPER_ADMIN_PHONE || '+1234567890'}
 Role: super_admin
@@ -637,6 +646,7 @@ const startServer = async () => {
             dbConnected = true;
             console.log('✅ In-memory MongoDB replica set started successfully');
             console.log(`📍 Database: ${mongoose.connection.name}`);
+            await ensureMongoIndexes();
         } catch (memoryError) {
             console.error('❌ Failed to start in-memory MongoDB:', memoryError.message);
             process.exit(1);
@@ -662,6 +672,7 @@ const startServer = async () => {
             dbConnected = true;
             console.log('✅ MongoDB Connected Successfully!');
             console.log(`📍 Database: ${mongoose.connection.name}`);
+            await ensureMongoIndexes();
             console.log(`📍 Host: ${mongoose.connection.host}`);
         } catch (dbError) {
             console.error('❌ MongoDB connection failed:', dbError.message);

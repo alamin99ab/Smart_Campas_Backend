@@ -126,7 +126,7 @@ const subscriptionSchema = new mongoose.Schema({
     
     // Invoices
     invoices: [{
-        invoiceNumber: { type: String, required: true, unique: true },
+        invoiceNumber: { type: String, required: true },
         date: { type: Date, default: Date.now },
         dueDate: { type: Date, required: true },
         amount: { type: Number, required: true },
