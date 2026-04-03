@@ -76,6 +76,7 @@ router.post('/classes', principalController.createClass);
 router.get('/classes', principalController.getAllClasses);
 router.put('/classes/:id', principalController.updateClass);
 router.delete('/classes/:id', principalController.deleteClass);
+router.post('/classes/:classId/subjects/assign', principalController.assignTeacherToSubject);
 
 // Section Management
 router.post('/sections', principalController.createSection);
@@ -112,6 +113,10 @@ router.put('/students/:id', principalController.updateStudent);
 router.delete('/students/:id', principalController.deleteStudent);
 router.post('/students/bulk-import', principalController.bulkImportStudents);
 router.post('/students/:id/reset-password', principalController.resetStudentPassword);
+
+// Parent Management
+router.post('/parents', principalController.createParent);
+router.get('/parents', principalController.getParents);
 
 /**
  * � PASSWORD MANAGEMENT

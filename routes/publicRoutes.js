@@ -15,6 +15,7 @@ const {
 
 // Public Notice Routes (No Login Required)
 router.get('/notices', getPublicNotices);
+router.get('/notices/latest', getPublicNotices);
 
 // Public Result Routes (No Login Required)
 router.get('/results', getPublicResults);

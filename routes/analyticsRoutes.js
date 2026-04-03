@@ -4,6 +4,7 @@ const { getOverview } = require('../controllers/analyticsController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.use(protect);
+router.get('/', getOverview);
 router.get('/overview', getOverview);
 
 module.exports = router;

@@ -12,6 +12,12 @@ const noticeSchema = new mongoose.Schema({
         ref: 'School',
         required: function() { return !this.isGlobal; }
     },
+    schoolCode: {
+        type: String,
+        uppercase: true,
+        trim: true,
+        index: true
+    },
     academicSessionId: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'AcademicSession'
@@ -208,6 +214,7 @@ const noticeSchema = new mongoose.Schema({
 noticeSchema.index({ schoolId: 1, publishDate: -1 });
 noticeSchema.index({ schoolId: 1, noticeType: 1, publishDate: -1 });
 noticeSchema.index({ schoolId: 1, priority: -1, publishDate: -1 });
+noticeSchema.index({ schoolCode: 1, status: 1, publishDate: -1 });
 noticeSchema.index({ createdBy: 1, publishDate: -1 });
 noticeSchema.index({ isGlobal: 1, publishDate: -1 });
 noticeSchema.index({ status: 1, publishDate: -1 });

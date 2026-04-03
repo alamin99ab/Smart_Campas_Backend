@@ -16,6 +16,25 @@ const { checkSchoolStatus } = require('../middleware/schoolMiddleware');
 router.use(protect);
 router.use(checkSchoolStatus);
 
+// Discovery endpoint
+router.get('/', (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: 'Attendance API',
+        data: {
+            endpoints: [
+                'POST /api/attendance/take',
+                'GET /api/attendance/report',
+                'GET /api/attendance/today',
+                'GET /api/attendance/monthly',
+                'GET /api/attendance/alerts',
+                'GET /api/attendance/export',
+                'DELETE /api/attendance/:id'
+            ]
+        }
+    });
+});
+
 // Teacher/Principal can take attendance
 router.post('/take', authorize('teacher', 'principal', 'accountant'), takeAttendance);
 router.get('/report', getAttendanceReport);

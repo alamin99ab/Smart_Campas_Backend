@@ -53,6 +53,7 @@ exports.createNotice = async (req, res) => {
         }
 
         let schoolId = null;
+        let schoolCode = null;
         let isGlobal = false;
 
         // Check if user is Super Admin creating global notice
@@ -70,6 +71,12 @@ exports.createNotice = async (req, res) => {
         } else {
             // For other roles, use tenant schoolId
             schoolId = req.tenant.schoolId;
+        }
+
+        // Resolve schoolCode for tenant isolation and public API filtering
+        if (schoolId) {
+            const school = await School.findById(schoolId).select('schoolCode');
+            schoolCode = school?.schoolCode?.toUpperCase() || null;
         }
 
         // Validate target configuration
@@ -93,6 +100,7 @@ exports.createNotice = async (req, res) => {
         // Create notice
         const notice = new Notice({
             schoolId,
+            schoolCode,
             isGlobal,
             title,
             description,
@@ -231,17 +239,24 @@ exports.getNotices = async (req, res) => {
             ]
         });
 
-        res.json({
+        const payload = {
             notices,
             total,
             activeCount,
             totalPages: Math.ceil(total / limit),
             currentPage: parseInt(page)
+        };
+
+        res.json({
+            success: true,
+            message: 'Notices fetched successfully',
+            data: payload,
+            ...payload // keep legacy shape
         });
 
     } catch (error) {
         console.error('Get notices error:', error);
-        res.status(500).json({ message: 'Failed to fetch notices' });
+        res.status(500).json({ success: false, message: 'Failed to fetch notices' });
     }
 };
 
@@ -852,7 +867,7 @@ exports.publishNotice = async (req, res) => {
         const schoolId = req.tenant?.schoolId || req.user.schoolId;
         const notice = await Notice.findOneAndUpdate(
             { _id: id, $or: [{ schoolId }, { isGlobal: true }] },
-            { status: 'active', publishedAt: new Date() },
+            { status: 'active', publishedAt: new Date(), schoolCode },
             { new: true }
         );
 

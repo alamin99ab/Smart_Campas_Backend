@@ -334,7 +334,8 @@ exports.createUser = async (req, res) => {
             schoolCode: school.schoolCode,
             schoolName: school.schoolName,
             password: pwd,
-            isApproved: role !== 'student' ? true : false
+            // Super admin-created users should be ready to log in; approve students too
+            isApproved: true
         };
 
         const user = new User(userData);

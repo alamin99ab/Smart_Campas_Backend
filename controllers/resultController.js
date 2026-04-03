@@ -280,16 +280,23 @@ exports.getResults = async (req, res) => {
 
         const total = await Result.countDocuments(query);
 
-        res.json({
+        const payload = {
             results,
             total,
             totalPages: Math.ceil(total / limit),
             currentPage: parseInt(page)
+        };
+
+        res.json({
+            success: true,
+            message: 'Results fetched successfully',
+            data: payload,
+            ...payload // backward-compatible shape
         });
 
     } catch (error) {
         console.error('Get results error:', error);
-        res.status(500).json({ message: 'Failed to fetch results' });
+        res.status(500).json({ success: false, message: 'Failed to fetch results' });
     }
 };
 

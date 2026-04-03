@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 
 const studentSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true },
-    roll: { type: Number, required: true },
+    // Use string roll to support alphanumeric roll numbers from existing schools
+    roll: { type: String, required: true, trim: true },
     studentClass: { type: String, required: true },
     section: { type: String },
     fatherName: { type: String },

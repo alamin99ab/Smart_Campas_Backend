@@ -24,10 +24,32 @@ exports.getPublicNotices = async (req, res) => {
             });
         }
 
+        const normalizedCode = schoolCode.trim().toUpperCase();
+
+        // Validate school
+        const School = require('../models/School');
+        const school = await School.findOne({ schoolCode: normalizedCode, isActive: true });
+        if (!school) {
+            return res.status(404).json({
+                success: false,
+                message: 'School not found or inactive'
+            });
+        }
+
+        const now = new Date();
         const query = {
-            schoolCode,
-            targetAudience: { $in: ['student', 'all', 'public'] },
-            isActive: true
+            $and: [
+                {
+                    $or: [
+                        { schoolCode: normalizedCode },
+                        { schoolId: school._id }
+                    ]
+                },
+                { isDeleted: false },
+                { status: 'active' },
+                { publishDate: { $lte: now } },
+                { $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] }
+            ]
         };
 
         if (priority) {
@@ -35,23 +57,22 @@ exports.getPublicNotices = async (req, res) => {
         }
 
         const notices = await Notice.find(query)
-            .sort({ createdAt: -1, priority: -1 })
+            .sort({ isPinned: -1, pinOrder: -1, priority: -1, publishDate: -1 })
             .skip((page - 1) * limit)
             .limit(parseInt(limit))
-            .select('title content priority attachments createdAt authorName authorRole');
+            .select('title description noticeType publishDate expiryDate priority isPinned pinOrder attachments');
 
         const total = await Notice.countDocuments(query);
 
         res.status(200).json({
             success: true,
-            data: {
-                notices,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total,
-                    pages: Math.ceil(total / limit)
-                }
+            message: 'Notices fetched successfully',
+            data: notices,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / limit)
             }
         });
 
@@ -72,7 +93,7 @@ exports.getPublicNotices = async (req, res) => {
  */
 exports.getPublicResults = async (req, res) => {
     try {
-        const { schoolCode, classId, examType, rollNumber, academicYear } = req.query;
+        const { schoolCode, class: className, section, exam, academicYear, rollNumber, studentId } = req.query;
 
         if (!schoolCode) {
             return res.status(400).json({
@@ -81,88 +102,63 @@ exports.getPublicResults = async (req, res) => {
             });
         }
 
+        const normalizedCode = schoolCode.trim().toUpperCase();
+
+        const School = require('../models/School');
+        const school = await School.findOne({ schoolCode: normalizedCode, isActive: true });
+        if (!school) {
+            return res.status(404).json({ success: false, message: 'School not found or inactive' });
+        }
+
         const query = {
-            schoolCode,
-            isActive: true
+            schoolCode: normalizedCode,
+            isPublished: true,
+            isActive: { $ne: false }
         };
 
-        // Filter by class if provided
-        if (classId) {
-            query.classId = classId;
+        if (className) {
+            query.studentClass = className;
         }
-
-        // Filter by exam type if provided
-        if (examType) {
-            query.examType = examType;
+        if (section) {
+            query.section = section;
         }
-
-        // Filter by academic year if provided
         if (academicYear) {
             query.academicYear = academicYear;
         }
 
-        // If roll number is provided, get specific student results
+        if (exam) {
+            query.examName = { $regex: exam, $options: 'i' };
+        }
+
+        // Student-specific lookup
         if (rollNumber) {
-            const student = await User.findOne({
-                schoolCode,
-                role: 'student',
-                rollNumber: rollNumber,
-                isActive: true
-            });
-
-            if (!student) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Student not found'
-                });
-            }
-
-            query.studentId = student._id;
+            query.roll = rollNumber;
+        }
+        if (studentId) {
+            query.studentId = studentId;
         }
 
         const results = await Result.find(query)
-            .populate('classId', 'className section')
-            .populate('subjectId', 'subjectName subjectCode')
-            .populate('studentId', 'name rollNumber')
-            .populate('teacherId', 'name')
-            .sort({ examDate: -1 });
+            .sort({ examDate: -1 })
+            .select('examName examDate studentClass section roll subjects totalMarks gpa isPublished publishedAt studentId schoolCode');
 
-        // Group results by student for better display
-        const groupedResults = results.reduce((acc, result) => {
-            const studentKey = result.studentId._id.toString();
-            if (!acc[studentKey]) {
-                acc[studentKey] = {
-                    student: {
-                        name: result.studentId.name,
-                        rollNumber: result.studentId.rollNumber
-                    },
-                    class: result.classId,
-                    results: []
-                };
-            }
-            acc[studentKey].results.push({
-                subject: result.subjectId.subjectName,
-                examType: result.examType,
-                examDate: result.examDate,
-                marksObtained: result.marksObtained,
-                totalMarks: result.totalMarks,
-                grade: result.grade,
-                remarks: result.remarks
-            });
-            return acc;
-        }, {});
+        // Build public-friendly payload
+        const summary = results.map(r => ({
+            examName: r.examName,
+            examDate: r.examDate,
+            class: r.studentClass,
+            section: r.section,
+            roll: r.roll,
+            publishedAt: r.publishedAt,
+            totalMarks: r.totalMarks,
+            gpa: r.gpa
+        }));
 
         res.status(200).json({
             success: true,
-            data: {
-                results: Object.values(groupedResults),
-                summary: {
-                    totalResults: results.length,
-                    totalStudents: Object.keys(groupedResults).length,
-                    examTypes: [...new Set(results.map(r => r.examType))],
-                    classes: [...new Set(results.map(r => r.classId.className))]
-                }
-            }
+            message: 'Results fetched successfully',
+            data: summary,
+            total: results.length
         });
 
     } catch (error) {
@@ -183,7 +179,7 @@ exports.getPublicResults = async (req, res) => {
 exports.getResultByRollNumber = async (req, res) => {
     try {
         const { rollNumber } = req.params;
-        const { schoolCode, examType } = req.query;
+        const { schoolCode, examType, exam, academicYear, studentId } = req.query;
 
         if (!schoolCode) {
             return res.status(400).json({
@@ -192,9 +188,11 @@ exports.getResultByRollNumber = async (req, res) => {
             });
         }
 
+        const normalizedCode = schoolCode.trim().toUpperCase();
+
         // Find student by roll number
         const student = await User.findOne({
-            schoolCode,
+            schoolCode: normalizedCode,
             role: 'student',
             rollNumber: rollNumber,
             isActive: true
@@ -209,24 +207,36 @@ exports.getResultByRollNumber = async (req, res) => {
 
         // Get student's results
         const query = {
-            schoolCode,
-            studentId: student._id,
-            isActive: true
+            schoolCode: normalizedCode,
+            studentId: studentId || student._id,
+            isActive: true,
+            isPublished: true
         };
 
         if (examType) {
             query.examType = examType;
         }
+        if (exam) query.examName = { $regex: exam, $options: 'i' };
+        if (academicYear) query.academicYear = academicYear;
 
         const results = await Result.find(query)
-            .populate('classId', 'className section')
-            .populate('subjectId', 'subjectName subjectCode')
-            .populate('teacherId', 'name')
-            .sort({ examDate: -1 });
+            .sort({ examDate: -1 })
+            .select('examName examDate studentClass section roll subjects totalMarks gpa isPublished publishedAt');
 
-        // Calculate overall performance
-        const totalMarks = results.reduce((sum, result) => sum + result.marksObtained, 0);
-        const maxMarks = results.reduce((sum, result) => sum + result.totalMarks, 0);
+        // Calculate overall performance (aggregate on subjects array if present)
+        let totalMarks = 0;
+        let maxMarks = 0;
+        results.forEach(r => {
+            if (Array.isArray(r.subjects) && r.subjects.length) {
+                r.subjects.forEach(s => {
+                    totalMarks += s.marks || s.marksObtained || 0;
+                    maxMarks += s.totalMarks || 100;
+                });
+            } else {
+                totalMarks += r.totalMarks || 0;
+                maxMarks += r.totalMarks || 0;
+            }
+        });
         const overallPercentage = maxMarks > 0 ? Math.round((totalMarks / maxMarks) * 100) : 0;
 
         res.status(200).json({
@@ -411,3 +421,13 @@ function calculateGrade(percentage) {
     if (percentage >= 33) return 'P'; // Pass
     return 'F'; // Fail
 }
+
+/**
+ * @desc    Get latest published notices (shortcut)
+ * @route   GET /api/public/notices/latest
+ * @access  Public
+ */
+exports.getLatestPublicNotices = async (req, res) => {
+    req.query.limit = req.query.limit || 5;
+    return exports.getPublicNotices(req, res);
+};

@@ -8,6 +8,7 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const Routine = require('../models/Routine');
 const School = require('../models/School');
+const Student = require('../models/Student');
 const AuditLog = require('../models/AuditLog');
 const AcademicSession = require('../models/AcademicSession');
 const Section = require('../models/Section');
@@ -358,6 +359,13 @@ exports.createClass = async (req, res) => {
             academicYear
         } = req.body;
 
+        if (!className || !section || classLevel === undefined || capacity === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: 'className, section, classLevel and capacity are required'
+            });
+        }
+
         const schoolCode = req.user.schoolCode;
         const normalizedSection = section?.trim()?.toUpperCase();
 
@@ -412,6 +420,15 @@ exports.createClass = async (req, res) => {
 
     } catch (error) {
         console.error('Error creating class:', error);
+        if (error.name === 'ValidationError' || error.code === 11000) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed for class',
+                errors: error.errors
+                    ? Object.values(error.errors).map(e => e.message)
+                    : ['Duplicate class for this school/section/year']
+            });
+        }
         res.status(500).json({
             success: false,
             message: 'Error creating class',
@@ -456,6 +473,71 @@ exports.getAllClasses = async (req, res) => {
 };
 
 /**
+ * @desc    Assign teacher to subject within a class (class ⇄ subject ⇄ teacher mapping)
+ * @route   POST /api/principal/classes/:classId/subjects/assign
+ * @access  Principal only
+ */
+exports.assignTeacherToSubject = async (req, res) => {
+    try {
+        const { classId } = req.params;
+        const { subjectId, teacherId, periodsPerWeek = 5 } = req.body;
+        const schoolCode = req.user.schoolCode;
+
+        if (!classId || !subjectId || !teacherId) {
+            return res.status(400).json({
+                success: false,
+                message: 'classId, subjectId and teacherId are required'
+            });
+        }
+
+        const [classDoc, subjectDoc, teacherDoc] = await Promise.all([
+            Class.findOne({ _id: classId, schoolCode }),
+            Subject.findOne({ _id: subjectId, schoolCode }),
+            User.findOne({ _id: teacherId, schoolCode, role: 'teacher' })
+        ]);
+
+        if (!classDoc) return res.status(404).json({ success: false, message: 'Class not found' });
+        if (!subjectDoc) return res.status(404).json({ success: false, message: 'Subject not found' });
+        if (!teacherDoc) return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
+
+        // Upsert assignment inside class.subjects
+        const idx = classDoc.subjects.findIndex(
+            s => String(s.subjectId) === String(subjectId)
+        );
+        const payload = {
+            subjectId,
+            subjectName: subjectDoc.subjectName,
+            subjectCode: subjectDoc.subjectCode,
+            teacherId,
+            teacherName: teacherDoc.name,
+            periodsPerWeek,
+            isActive: true
+        };
+
+        if (idx >= 0) {
+            classDoc.subjects[idx] = { ...classDoc.subjects[idx].toObject?.() ?? {}, ...payload };
+        } else {
+            classDoc.subjects.push(payload);
+        }
+
+        await classDoc.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Teacher assigned to subject for class',
+            data: classDoc
+        });
+    } catch (error) {
+        console.error('assignTeacherToSubject error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to assign teacher to subject',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Create new subject
  * @route   POST /api/principal/subjects
  * @access  Principal only
@@ -475,6 +557,13 @@ exports.createSubject = async (req, res) => {
         } = req.body;
 
         const schoolCode = req.user.schoolCode;
+
+        if (!subjectName || !subjectCode) {
+            return res.status(400).json({
+                success: false,
+                message: 'subjectName and subjectCode are required'
+            });
+        }
 
         // Check if subject already exists
         const existingSubject = await Subject.findOne({
@@ -521,6 +610,13 @@ exports.createSubject = async (req, res) => {
 
     } catch (error) {
         console.error('Error creating subject:', error);
+        if (error.name === 'ValidationError' || error.code === 11000) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed for subject',
+                errors: error.errors ? Object.values(error.errors).map(e => e.message) : ['Duplicate subject code']
+            });
+        }
         res.status(500).json({
             success: false,
             message: 'Error creating subject',
@@ -1347,12 +1443,46 @@ exports.createStudent = async (req, res) => {
             schoolId,
             schoolCode,
             schoolName,
-            isApproved: false,
+            isApproved: true, // auto-approve students created by principal
             createdBy: req.user.id
         });
 
         const studentData = student.toObject();
         delete studentData.password;
+
+        // Mirror to Student collection for analytics/parent dashboards
+        try {
+            let className = 'Unassigned';
+            if (classId) {
+                const classDoc = await Class.findById(classId).select('className section');
+                if (classDoc) {
+                    className = classDoc.className;
+                }
+            }
+
+            await Student.create({
+                _id: student._id,
+                name: name.trim(),
+                roll: rollNumber || student._id.toString().slice(-6),
+                studentClass: className,
+                section,
+                guardian: parentInfo
+                    ? {
+                          name: parentInfo.name,
+                          phone: parentInfo.phone,
+                          email: parentInfo.email
+                      }
+                    : undefined,
+                schoolCode,
+                parentId: undefined,
+                addedBy: req.user.id,
+                updatedBy: req.user.id,
+                isActive: true
+            });
+        } catch (mirrorErr) {
+            console.error('Student mirror creation warning:', mirrorErr.message);
+            studentData.mirrorWarning = 'Student created but legacy Student document could not be stored';
+        }
 
         res.status(201).json({
             success: true,
@@ -1543,6 +1673,113 @@ exports.resetStudentPassword = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Student password reset successfully'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Create Parent and optionally link to students
+ * @route   POST /api/principal/parents
+ * @access  Principal only
+ */
+exports.createParent = async (req, res) => {
+    try {
+        const { name, email, password, phone, address, studentIds = [] } = req.body;
+        const schoolCode = req.user.schoolCode;
+        const schoolId = req.user.schoolId;
+        const schoolName = req.user.schoolName;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const passwordPolicy = /^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).*$/;
+        if (!passwordPolicy.test(password)) {
+            return res.status(400).json({ success: false, message: 'Password must be 8-128 chars and include uppercase, lowercase, number, and symbol.' });
+        }
+
+        const existingParent = await User.findOne({ email: normalizedEmail, schoolId, role: 'parent' });
+        if (existingParent) {
+            return res.status(409).json({ success: false, message: 'Parent with this email already exists in your school.' });
+        }
+
+        const parent = await User.create({
+            name: name.trim(),
+            email: normalizedEmail,
+            password,
+            role: 'parent',
+            phone,
+            address,
+            schoolId,
+            schoolCode,
+            schoolName,
+            isApproved: true,
+            createdBy: req.user.id
+        });
+
+        // Link parent info to provided students (User + legacy Student)
+        let linked = 0;
+        for (const sid of studentIds) {
+            const studentUser = await User.findOne({ _id: sid, schoolCode, role: 'student' });
+            if (studentUser) {
+                studentUser.parentInfo = {
+                    name: parent.name,
+                    email: parent.email,
+                    phone: parent.phone
+                };
+                await studentUser.save();
+                linked += 1;
+            }
+            await Student.findOneAndUpdate(
+                { _id: sid, schoolCode },
+                {
+                    parentId: parent._id,
+                    'guardian.name': parent.name,
+                    'guardian.email': parent.email,
+                    'guardian.phone': parent.phone
+                }
+            );
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Parent created successfully',
+            data: {
+                parentId: parent._id,
+                linkedStudents: linked
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * @desc    List parents in the principal's school
+ * @route   GET /api/principal/parents
+ * @access  Principal only
+ */
+exports.getParents = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        const parents = await User.find({ schoolCode, role: 'parent' })
+            .select('-password')
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            data: parents
         });
     } catch (error) {
         res.status(500).json({
