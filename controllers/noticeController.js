@@ -69,12 +69,22 @@ exports.createNotice = async (req, res) => {
                 }
             }
         } else {
-            // For other roles, use tenant schoolId
-            schoolId = req.tenant.schoolId;
+            // For other roles, pull from tenant context or user payload safely
+            const tenantSchoolId = req.tenant?.schoolId || req.user?.schoolId;
+            const tenantSchoolCode = req.tenant?.schoolCode || req.user?.schoolCode;
+            schoolId = tenantSchoolId;
+            schoolCode = tenantSchoolCode ? tenantSchoolCode.toUpperCase() : null;
+        }
+
+        if (!isGlobal && !schoolId) {
+            return res.status(400).json({
+                success: false,
+                message: 'School context missing. Please include schoolId or ensure tenant context is set.'
+            });
         }
 
         // Resolve schoolCode for tenant isolation and public API filtering
-        if (schoolId) {
+        if (!isGlobal && schoolId && !schoolCode) {
             const school = await School.findById(schoolId).select('schoolCode');
             schoolCode = school?.schoolCode?.toUpperCase() || null;
         }
@@ -163,7 +173,17 @@ exports.createNotice = async (req, res) => {
 
     } catch (error) {
         console.error('Create notice error:', error);
-        res.status(500).json({ message: 'Failed to create notice' });
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed for notice',
+                errors: Object.values(error.errors || {}).map(e => e.message)
+            });
+        }
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to create notice'
+        });
     }
 };
 

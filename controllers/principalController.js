@@ -1700,7 +1700,8 @@ exports.createParent = async (req, res) => {
         }
 
         const normalizedEmail = email.trim().toLowerCase();
-        const passwordPolicy = /^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).*$/;
+        // Require 8-128 chars, at least 1 lower, 1 upper, 1 digit, 1 symbol
+        const passwordPolicy = /^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).*$/;
         if (!passwordPolicy.test(password)) {
             return res.status(400).json({ success: false, message: 'Password must be 8-128 chars and include uppercase, lowercase, number, and symbol.' });
         }
