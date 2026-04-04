@@ -109,6 +109,7 @@ exports.createNotice = async (req, res) => {
         const publishNow = status === 'active';
 
         // Create notice
+        const creatorId = req.user.id || req.user._id;
         const notice = new Notice({
             schoolId,
             schoolCode,
@@ -137,7 +138,7 @@ exports.createNotice = async (req, res) => {
             status,
             isPublished: publishNow,
             publishedAt: publishNow ? new Date() : null,
-            createdBy: req.user.id
+            createdBy: creatorId
         });
 
         await notice.save();
