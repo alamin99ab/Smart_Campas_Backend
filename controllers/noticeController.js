@@ -96,6 +96,7 @@ exports.createNotice = async (req, res) => {
 
         // Set status based on publish date
         const status = publishDate && new Date(publishDate) > new Date() ? 'scheduled' : 'active';
+        const publishNow = status === 'active';
 
         // Create notice
         const notice = new Notice({
@@ -124,6 +125,8 @@ exports.createNotice = async (req, res) => {
             isPinned: isPinned || false,
             pinOrder: pinOrder || 0,
             status,
+            isPublished: publishNow,
+            publishedAt: publishNow ? new Date() : null,
             createdBy: req.user.id
         });
 
@@ -865,9 +868,10 @@ exports.publishNotice = async (req, res) => {
         const schoolCode = req.user.schoolCode;
 
         const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const normalizedCode = schoolCode?.trim()?.toUpperCase();
         const notice = await Notice.findOneAndUpdate(
             { _id: id, $or: [{ schoolId }, { isGlobal: true }] },
-            { status: 'active', publishedAt: new Date(), schoolCode },
+            { status: 'active', isPublished: true, publishedAt: new Date(), schoolCode: normalizedCode },
             { new: true }
         );
 

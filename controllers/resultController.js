@@ -52,14 +52,21 @@ exports.uploadResult = async (req, res) => {
             return res.status(400).json({ message: 'Student ID, exam name, and subjects array are required' });
         }
 
+        const normalizedSchoolCode = (req.user.schoolCode || '').toUpperCase();
+
         // Check if student exists and belongs to this school
         const student = await Student.findOne({ 
             _id: studentId, 
-            schoolCode: req.user.schoolCode 
+            schoolCode: normalizedSchoolCode 
         });
         if (!student) {
             return res.status(404).json({ message: 'Student not found in your school' });
         }
+
+        const school = await School.findOne({ schoolCode: normalizedSchoolCode }).select('academicSettings.currentSession');
+        const derivedAcademicYear = req.body.academicYear || student.academicYear || school?.academicSettings?.currentSession;
+        const isPublished = req.body.isPublished !== undefined ? !!req.body.isPublished : true;
+        const publishedAt = isPublished ? new Date() : null;
 
         // Validate each subject
         for (let sub of subjects) {
@@ -75,7 +82,7 @@ exports.uploadResult = async (req, res) => {
         const existing = await Result.findOne({
             studentId,
             examName: { $regex: new RegExp(`^${examName}$`, 'i') },
-            schoolCode: req.user.schoolCode
+            schoolCode: normalizedSchoolCode
         });
         if (existing) {
             return res.status(400).json({ message: 'Result already exists for this student and exam. Use update instead.' });
@@ -93,18 +100,21 @@ exports.uploadResult = async (req, res) => {
         // Create result
         const result = await Result.create({
             studentId,
-            schoolCode: req.user.schoolCode,
+            schoolCode: normalizedSchoolCode,
             studentClass: student.studentClass,
             section: student.section,
             roll: student.roll,
             examName,
             examDate: examDate || Date.now(),
+            academicYear: derivedAcademicYear,
             subjects: updatedSubjects,
             totalMarks,
             gpa,
             remarks,
-            publishedBy: req.user._id,
-            isPublished: true
+            publishedBy: isPublished ? req.user._id : undefined,
+            isPublished,
+            publishedAt,
+            isActive: true
         });
 
         // Optionally send notification to student/parent
@@ -173,6 +183,14 @@ exports.updateResult = async (req, res) => {
         if (examDate) result.examDate = examDate;
         if (remarks !== undefined) result.remarks = remarks;
         if (gradingSystem) result.gradingSystem = gradingSystem;
+        if (req.body.academicYear) result.academicYear = req.body.academicYear;
+        if (req.body.isPublished !== undefined) {
+            result.isPublished = !!req.body.isPublished;
+            result.publishedAt = result.isPublished ? (result.publishedAt || new Date()) : null;
+            if (result.isPublished && !result.publishedBy) {
+                result.publishedBy = req.user._id;
+            }
+        }
 
         result.updatedBy = req.user._id;
         result.updatedAt = Date.now();
@@ -347,6 +365,8 @@ exports.deleteResult = async (req, res) => {
 
         // Soft delete (set isPublished false) or hard delete
         result.isPublished = false;
+        result.isActive = false;
+        result.publishedAt = null;
         await result.save();
 
         // Audit log
@@ -381,6 +401,7 @@ exports.publishResult = async (req, res) => {
 
         result.isPublished = true;
         result.publishedAt = new Date();
+        result.isActive = true;
         result.publishedBy = req.user._id;
         await result.save();
 
@@ -409,9 +430,11 @@ exports.bulkPublishResults = async (req, res) => {
             return res.status(400).json({ success: false, message: 'resultIds array is required' });
         }
 
+        const normalizedSchoolCode = (req.user.schoolCode || '').toUpperCase();
+
         const update = await Result.updateMany(
-            { _id: { $in: resultIds }, schoolCode: req.user.schoolCode },
-            { isPublished: true, publishedAt: new Date(), publishedBy: req.user._id }
+            { _id: { $in: resultIds }, schoolCode: normalizedSchoolCode },
+            { isPublished: true, publishedAt: new Date(), publishedBy: req.user._id, isActive: true }
         );
 
         await AuditLog.create({

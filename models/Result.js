@@ -27,6 +27,9 @@ const resultSchema = new mongoose.Schema({
         type: String, 
         required: true 
     },
+    academicYear: {
+        type: String
+    },
     examDate: { 
         type: Date, 
         default: Date.now 
@@ -52,9 +55,16 @@ const resultSchema = new mongoose.Schema({
     remarks: { 
         type: String 
     },
+    publishedAt: {
+        type: Date
+    },
     isPublished: { 
         type: Boolean, 
         default: true 
+    },
+    isActive: {
+        type: Boolean,
+        default: true
     },
     publishedBy: { 
         type: mongoose.Schema.Types.ObjectId, 
@@ -82,5 +92,6 @@ resultSchema.index({ studentId: 1, examName: 1, schoolCode: 1 }, { unique: true 
 
 // Indexes for search
 resultSchema.index({ schoolCode: 1, studentClass: 1, section: 1, examName: 1 });
+resultSchema.index({ schoolCode: 1, academicYear: 1, examName: 1 });
 
 module.exports = mongoose.model('Result', resultSchema);

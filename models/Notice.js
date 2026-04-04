@@ -100,6 +100,13 @@ const noticeSchema = new mongoose.Schema({
         type: Date, 
         default: Date.now 
     },
+    publishedAt: {
+        type: Date
+    },
+    isPublished: {
+        type: Boolean,
+        default: false
+    },
     expiryDate: { 
         type: Date,
         default: null 
@@ -215,6 +222,7 @@ noticeSchema.index({ schoolId: 1, publishDate: -1 });
 noticeSchema.index({ schoolId: 1, noticeType: 1, publishDate: -1 });
 noticeSchema.index({ schoolId: 1, priority: -1, publishDate: -1 });
 noticeSchema.index({ schoolCode: 1, status: 1, publishDate: -1 });
+noticeSchema.index({ schoolCode: 1, isPublished: 1, publishDate: -1 });
 noticeSchema.index({ createdBy: 1, publishDate: -1 });
 noticeSchema.index({ isGlobal: 1, publishDate: -1 });
 noticeSchema.index({ status: 1, publishDate: -1 });
@@ -434,6 +442,8 @@ noticeSchema.statics.publishScheduledNotices = async function() {
     const publishedNotices = [];
     for (const notice of scheduledNotices) {
         notice.status = 'active';
+        notice.isPublished = true;
+        notice.publishedAt = notice.publishedAt || new Date();
         notice.publishedBy = notice.createdBy;
         await notice.save();
         publishedNotices.push(notice);
@@ -505,11 +515,29 @@ noticeSchema.statics.createNotificationsForNotice = async function(notice) {
 // Pre-save middleware
 noticeSchema.pre('save', function(next) {
     if (this.isModified()) {
-        this.updatedAt = Date.now();
+        const now = new Date();
+        this.updatedAt = now;
         
         // Auto-expire notices
-        if (this.expiryDate && this.expiryDate < new Date()) {
+        if (this.expiryDate && this.expiryDate < now) {
             this.status = 'expired';
+        }
+
+        // Compute publish flag
+        const isActiveWindow = 
+            this.status === 'active' &&
+            !this.isDeleted &&
+            this.publishDate <= now &&
+            (!this.expiryDate || this.expiryDate > now);
+
+        if (isActiveWindow) {
+            this.isPublished = true;
+            if (!this.publishedAt) {
+                this.publishedAt = now;
+            }
+        } else if (this.status !== 'scheduled') {
+            // Keep scheduled notices as not published until the scheduler runs
+            this.isPublished = false;
         }
     }
     next();
