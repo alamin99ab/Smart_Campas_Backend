@@ -563,14 +563,37 @@ exports.getMyClasses = async (req, res) => {
         const teacherId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        const classes = {
-            classes: [],
-            totalClasses: 0
-        };
+        const assignments = await require('../models/TeacherAssignment')
+            .find({ teacher: teacherId, schoolCode, isActive: true })
+            .lean();
+
+        const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
+        const Class = require('../models/Class');
+        const classDocs = classIds.length > 0
+            ? await Class.find({ _id: { $in: classIds } }).lean()
+            : [];
+
+        const classes = assignments.map((a) => {
+            const classId = (a.classes && a.classes[0]) || null;
+            const classDoc = classDocs.find(c => String(c._id) === String(classId));
+            return {
+                assignmentId: a._id,
+                classId: classId || classDoc?._id,
+                className: classDoc?.className || a.classes?.[0] || 'Class',
+                section: classDoc?.section || (a.sections && a.sections[0]) || undefined,
+                subject: a.subject,
+                subjectName: a.subjectName,
+                periodsPerWeek: a.periodsPerWeek || 0,
+                academicYear: a.academicYear,
+            };
+        });
 
         res.status(200).json({
             success: true,
-            data: classes
+            data: {
+                classes,
+                totalClasses: classes.length
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -591,14 +614,26 @@ exports.getMySubjects = async (req, res) => {
         const teacherId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        const subjects = {
-            subjects: [],
-            totalSubjects: 0
-        };
+        const assignments = await require('../models/TeacherAssignment')
+            .find({ teacher: teacherId, schoolCode, isActive: true })
+            .lean();
+
+        const subjects = assignments.map(a => ({
+            assignmentId: a._id,
+            subject: a.subject,
+            subjectName: a.subjectName,
+            classes: a.classes || [],
+            sections: a.sections || [],
+            periodsPerWeek: a.periodsPerWeek || 0,
+            academicYear: a.academicYear,
+        }));
 
         res.status(200).json({
             success: true,
-            data: subjects
+            data: {
+                subjects,
+                totalSubjects: subjects.length
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -647,14 +682,34 @@ exports.getMyStudents = async (req, res) => {
         const teacherId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        const students = {
-            students: [],
-            totalStudents: 0
-        };
+        const assignments = await require('../models/TeacherAssignment')
+            .find({ teacher: teacherId, schoolCode, isActive: true })
+            .lean();
+
+        const queryClassIds = [];
+        if (req.query.classId) {
+            queryClassIds.push(req.query.classId);
+        } else {
+            queryClassIds.push(...new Set(assignments.flatMap(a => a.classes || [])));
+        }
+
+        const classIds = [...new Set(queryClassIds)];
+        const User = require('../models/User');
+        let students = [];
+        if (classIds.length > 0) {
+            students = await User.find({
+                role: 'student',
+                schoolCode,
+                classId: { $in: classIds }
+            }).select('-password').lean();
+        }
 
         res.status(200).json({
             success: true,
-            data: students
+            data: {
+                students,
+                totalStudents: students.length
+            }
         });
     } catch (error) {
         res.status(500).json({

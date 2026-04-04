@@ -522,6 +522,35 @@ exports.assignTeacherToSubject = async (req, res) => {
 
         await classDoc.save();
 
+        // Mirror to TeacherAssignment collection for teacher-facing flows
+        try {
+            const TeacherAssignment = require('../models/TeacherAssignment');
+            await TeacherAssignment.findOneAndUpdate(
+                {
+                    teacher: teacherId,
+                    subject: String(subjectDoc._id),
+                    schoolCode,
+                    classes: classId,
+                    academicYear: classDoc.academicYear
+                },
+                {
+                    schoolCode,
+                    teacher: teacherId,
+                    subject: String(subjectDoc._id),
+                    subjectName: subjectDoc.subjectName,
+                    classes: [String(classId)],
+                    sections: [classDoc.section],
+                    periodsPerWeek,
+                    academicYear: classDoc.academicYear,
+                    assignedBy: req.user._id,
+                    isActive: true
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+        } catch (assignErr) {
+            console.warn('TeacherAssignment mirror warning:', assignErr.message);
+        }
+
         res.status(200).json({
             success: true,
             message: 'Teacher assigned to subject for class',

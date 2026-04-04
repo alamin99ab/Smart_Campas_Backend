@@ -3,11 +3,13 @@
  * Industry-level attendance system with auto-calculation and alerts
  */
 
+const mongoose = require('mongoose');
 const AdvancedAttendance = require('../models/AdvancedAttendance');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const AcademicSession = require('../models/AcademicSession');
+const TeacherAssignment = require('../models/TeacherAssignment');
 const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
 
@@ -28,8 +30,8 @@ exports.markStudentAttendance = async (req, res) => {
         } = req.body;
 
         // Core validation
-        if (!classId || !sectionId || !subjectId || !date || !attendanceData || !Array.isArray(attendanceData) || attendanceData.length === 0) {
-            return res.status(400).json({ success: false, message: 'Invalid data' });
+        if (!classId || !subjectId || !date || !attendanceData || !Array.isArray(attendanceData) || attendanceData.length === 0) {
+            return res.status(400).json({ success: false, message: 'classId, subjectId, date and attendanceData are required' });
         }
 
         const hasInvalidStudent = attendanceData.some(item => !item.studentId || !item.status);
@@ -38,36 +40,38 @@ exports.markStudentAttendance = async (req, res) => {
         }
 
         const schoolId = req.tenant.schoolId;
+        const schoolCode = req.user.schoolCode;
         const teacherId = req.user.id;
 
-        // Validate class and subject
-        const classInfo = await Class.findOne({ _id: classId, schoolId });
+        // Validate class and subject within tenant
+        const classInfo = await Class.findOne({ _id: classId, schoolCode });
         if (!classInfo) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid class'
-            });
+            return res.status(400).json({ success: false, message: 'Invalid class for this school' });
         }
 
-        const subjectInfo = await Subject.findOne({ _id: subjectId, schoolId });
+        const subjectInfo = await Subject.findOne({ _id: subjectId, schoolCode });
         if (!subjectInfo) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid subject'
-            });
+            return res.status(400).json({ success: false, message: 'Invalid subject for this school' });
         }
 
-        // Get current academic session
-        const academicSession = await AcademicSession.findOne({
-            schoolId,
+        // Verify teacher assignment to this class+subject
+        const hasAssignment = await TeacherAssignment.findOne({
+            teacher: teacherId,
+            subject: String(subjectId),
+            classes: String(classId),
+            schoolCode,
             isActive: true
         });
 
+        if (!hasAssignment) {
+            return res.status(403).json({ success: false, message: 'You are not assigned to this class/subject' });
+        }
+
+        // Get current academic session
+        const academicSession = await AcademicSession.findOne({ schoolId, isActive: true });
+
         if (!academicSession) {
-            return res.status(400).json({
-                success: false,
-                message: 'No active academic session found'
-            });
+            return res.status(400).json({ success: false, message: 'No active academic session found' });
         }
 
         const markedAttendances = [];
@@ -105,7 +109,7 @@ exports.markStudentAttendance = async (req, res) => {
                     attendanceType: 'student',
                     studentId,
                     classId,
-                    sectionId,
+                    sectionId: mongoose.Types.ObjectId.isValid(sectionId) ? sectionId : undefined,
                     subjectId,
                     periodNumber,
                     date: new Date(date),

@@ -4,6 +4,7 @@ const teacherAssignmentSchema = new mongoose.Schema({
     schoolCode: { type: String, required: true, index: true },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     subject: { type: String, required: true },
+    subjectName: { type: String },
     classes: [{ type: String }],
     sections: [{ type: String }],
     periodsPerWeek: { type: Number, default: 0 },

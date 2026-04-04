@@ -72,6 +72,26 @@ exports.getStudentDashboard = async (req, res) => {
             })
             .populate('schedule.periods.subjectId', 'subjectName')
             .populate('schedule.periods.teacherId', 'name');
+
+            // Fallback to ClassRoutine (new model) if legacy routine not found
+            if (!todayRoutine && student?.classId?._id) {
+                const ClassRoutine = require('../models/ClassRoutine');
+                const classRoutine = await ClassRoutine.findOne({
+                    schoolCode,
+                    studentClass: student.classId.className,
+                    section: student.classId.section,
+                    day: today,
+                    isActive: true
+                }).lean();
+                if (classRoutine) {
+                    todayRoutine = {
+                        schedule: [{
+                            day: today,
+                            periods: classRoutine.periods || []
+                        }]
+                    };
+                }
+            }
         } catch (dbError) {
             console.error('Student dashboard data fetch error:', dbError.message);
         }

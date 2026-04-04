@@ -114,44 +114,52 @@ exports.getPrincipalDashboard = async (req, res) => {
  */
 exports.getTeacherDashboard = async (req, res) => {
     try {
-        // Use req.user directly - it's already populated by protect middleware
         const teacher = req.user;
         const schoolCode = req.user.schoolCode;
         const teacherId = req.user._id;
-        
-        // Get assigned classes count
-        const assignedClasses = await require('../models/TeacherAssignment').countDocuments({
-            teacher: teacherId,
-            academicSession: req.user.currentSession
+
+        const TeacherAssignment = require('../models/TeacherAssignment');
+        const assignments = await TeacherAssignment.find({ teacher: teacherId, schoolCode, isActive: true }).lean();
+        const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
+        const classDocs = classIds.length
+            ? await require('../models/Class').find({ _id: { $in: classIds } }).lean()
+            : [];
+        const classMap = new Map(classDocs.map(c => [c._id.toString(), c]));
+        const enrichedAssignments = assignments.map(a => {
+            const classId = (a.classes && a.classes[0]) || null;
+            const cls = classId ? classMap.get(String(classId)) : null;
+            return {
+                ...a,
+                className: cls?.className,
+                section: cls?.section
+            };
         });
-        
-        // Get attendance marked today
+
+        const assignedClasses = [...new Set(assignments.flatMap(a => a.classes || []))].length || assignments.length;
+        const subjects = [...new Set(assignments.map(a => a.subjectName || a.subject))];
+
+        // Attendance marked today (advanced attendance collection)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        
-        const attendanceMarked = await require('../models/Attendance').countDocuments({
-            schoolCode,
+        const AdvancedAttendance = require('../models/AdvancedAttendance');
+        const attendanceMarked = await AdvancedAttendance.countDocuments({
+            schoolId: req.tenant?.schoolId,
             markedBy: teacherId,
-            date: { $gte: today, $lt: tomorrow }
+            date: { $gte: today, $lt: tomorrow },
+            attendanceType: 'student'
         });
-        
-        // Get assignments count (placeholder - would need Assignment model)
-        const assignments = 0;
-        
-        // Get pending marks (placeholder)
-        const pendingMarks = 0;
-        
+
         res.status(200).json({
             success: true,
             data: {
-                assignedClasses: assignedClasses || 0,
+                assignedClasses,
+                subjects,
                 attendanceMarked: attendanceMarked || 0,
-                assignments: assignments || 0,
-                pendingMarks: pendingMarks || 0,
                 name: teacher.name,
-                email: teacher.email
+                email: teacher.email,
+                assignments: enrichedAssignments
             }
         });
     } catch (error) {

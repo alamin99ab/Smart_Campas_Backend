@@ -393,7 +393,7 @@ exports.autoGenerateRoutine = async (req, res) => {
         // Generate routine for each day
         const generatedRoutines = [];
         const usedSlots = {}; // Track used time slots to avoid conflicts
-n        // Initialize used slots
+        // Initialize used slots
         for (const day of workingDays) {
             usedSlots[day] = {};
             for (let p = 1; p <= periodsPerDay; p++) {
