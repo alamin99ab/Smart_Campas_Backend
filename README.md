@@ -219,6 +219,23 @@ Upload: 5 requests per minute
 npm test
 ```
 
+### Seed Test Data
+```bash
+npm run seed:test
+```
+
+The seed script:
+- Loads environment from `.env` when present, otherwise falls back to `.env.test`
+- Removes only the previous automated seed dataset
+- Inserts 5 schools, 500 students, classes 6-10, sections, subjects, teachers, parents, accountants, routines, attendance, fees, results, notices, events, and related records
+
+Default seeded login password:
+```bash
+TestPass123!
+```
+
+The script prints sample login emails for each seeded school after it finishes. Super Admin is still environment-based and is not created by the seed script.
+
 ### Test Coverage
 - Authentication endpoints
 - All user role endpoints

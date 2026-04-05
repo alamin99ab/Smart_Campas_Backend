@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "seed:test": "node scripts/seed-test-data.js",
     "verify:routes": "node scripts/verify-routes.js",
     "verify:startup": "node scripts/verify-routes.js && npm run start",
     "smoke": "node scripts/smoke-test.js"
