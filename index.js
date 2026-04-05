@@ -80,9 +80,14 @@ function parseAllowedOrigins() {
 }
 
 const allowedOrigins = parseAllowedOrigins();
+const allowAllOrigins = isTruthyEnv(process.env.ALLOW_ALL_ORIGINS);
 
 const corsOptions = {
     origin: (origin, callback) => {
+        if (allowAllOrigins) {
+            return callback(null, true);
+        }
+
         if (!origin) return callback(null, true); // allow curl / server-to-server
 
         if (!allowedOrigins.length) {
@@ -102,7 +107,7 @@ const corsOptions = {
     allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id']
 };
 
-console.log('CORS allowed origins:', allowedOrigins.length ? allowedOrigins : '[none set]');
+console.log('CORS allowed origins:', allowAllOrigins ? '[ALLOW_ALL_ORIGINS enabled]' : (allowedOrigins.length ? allowedOrigins : '[none set]'));
 
 // Validate environment variables before starting
 if (!validateEnv()) {
