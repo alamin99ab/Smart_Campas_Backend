@@ -246,6 +246,7 @@ Set these environment variables in your deploy environment:
 - `SEED_TEST_PASSWORD=YourSharedPassword` to override the default seeded login password
 
 Behavior:
+- If `AUTO_SEED_TEST_DATA` is not set, production startup now seeds automatically when the tagged dataset is missing
 - With `AUTO_SEED_TEST_DATA=true` and `AUTO_SEED_RESET_DATA=false`, the app seeds only when the tagged seed dataset is missing
 - With both set to `true`, the app deletes the previous tagged seed dataset and recreates it on every deploy
 

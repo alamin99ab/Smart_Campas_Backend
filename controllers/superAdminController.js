@@ -10,6 +10,7 @@ const School = require('../models/School');
 const User = require('../models/User');
 const Subscription = require('../models/Subscription');
 const AuditLog = require('../models/AuditLog');
+const Student = require('../models/Student');
 const passwordService = require('../services/passwordResetService');
 
 const SUBSCRIPTION_PRESETS = {
@@ -434,17 +435,182 @@ exports.updateSystemSettings = async (req, res) => {
     }
 };
 
+function getMonthWindow(baseDate = new Date()) {
+    const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+    const end = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 1);
+    return { start, end };
+}
+
+function getRecentMonthWindows(monthCount = 12) {
+    const now = new Date();
+
+    return Array.from({ length: monthCount }, (_, index) => {
+        const date = new Date(now.getFullYear(), now.getMonth() - (monthCount - 1 - index), 1);
+        return {
+            start: new Date(date.getFullYear(), date.getMonth(), 1),
+            end: new Date(date.getFullYear(), date.getMonth() + 1, 1)
+        };
+    });
+}
+
+async function countStudents(match = {}) {
+    const [studentRecords, studentUsers] = await Promise.all([
+        Student.countDocuments(match),
+        User.countDocuments({ role: 'student', ...match })
+    ]);
+
+    return Math.max(studentRecords, studentUsers);
+}
+
+async function buildMonthlyCounts(model, match = {}, dateField = 'createdAt', monthCount = 12) {
+    const windows = getRecentMonthWindows(monthCount);
+
+    return Promise.all(windows.map(({ start, end }) => (
+        model.countDocuments({
+            ...match,
+            [dateField]: { $gte: start, $lt: end }
+        })
+    )));
+}
+
+async function buildMonthlyStudentCounts(monthCount = 12) {
+    const windows = getRecentMonthWindows(monthCount);
+
+    return Promise.all(windows.map(({ start, end }) => countStudents({
+        createdAt: { $gte: start, $lt: end }
+    })));
+}
+
+async function buildMonthlyRevenue(monthCount = 12) {
+    const windows = getRecentMonthWindows(monthCount);
+
+    return Promise.all(windows.map(async ({ start, end }) => {
+        const revenue = await Subscription.aggregate([
+            {
+                $match: {
+                    startDate: { $gte: start, $lt: end }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$amount.total' }
+                }
+            }
+        ]);
+
+        return revenue[0]?.total || 0;
+    }));
+}
+
+async function buildSuperAdminMetrics() {
+    const { start: startOfMonth, end: endOfMonth } = getMonthWindow();
+
+    const [
+        totalSchools,
+        activeSchools,
+        totalUsers,
+        activeUsers,
+        totalPrincipals,
+        totalTeachers,
+        totalStudents,
+        activeStudents,
+        newSchoolsThisMonth,
+        newTeachersThisMonth,
+        newStudentsThisMonth,
+        activeSubscriptions,
+        totalRevenueAggregate,
+        monthlyIncomeAggregate,
+        monthlyRevenue,
+        monthlyStudents,
+        monthlyNewSchools
+    ] = await Promise.all([
+        School.countDocuments(),
+        School.countDocuments({ isActive: { $ne: false } }),
+        User.countDocuments(),
+        User.countDocuments({ isActive: { $ne: false }, isBlocked: { $ne: true } }),
+        User.countDocuments({ role: 'principal' }),
+        User.countDocuments({ role: 'teacher' }),
+        countStudents(),
+        countStudents({ isActive: { $ne: false } }),
+        School.countDocuments({ createdAt: { $gte: startOfMonth, $lt: endOfMonth } }),
+        User.countDocuments({ role: 'teacher', createdAt: { $gte: startOfMonth, $lt: endOfMonth } }),
+        countStudents({ createdAt: { $gte: startOfMonth, $lt: endOfMonth } }),
+        Subscription.countDocuments({ status: 'active' }),
+        Subscription.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$amount.total' }
+                }
+            }
+        ]),
+        Subscription.aggregate([
+            {
+                $match: {
+                    startDate: { $gte: startOfMonth, $lt: endOfMonth }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$amount.total' }
+                }
+            }
+        ]),
+        buildMonthlyRevenue(),
+        buildMonthlyStudentCounts(),
+        buildMonthlyCounts(School)
+    ]);
+
+    const inactiveSchools = Math.max(totalSchools - activeSchools, 0);
+    const totalRevenue = totalRevenueAggregate[0]?.total || 0;
+    const monthlyIncome = monthlyIncomeAggregate[0]?.total || 0;
+
+    return {
+        totalSchools,
+        activeSchools,
+        inactiveSchools,
+        totalUsers,
+        activeUsers,
+        totalPrincipals,
+        totalTeachers,
+        totalStudents,
+        activeStudents,
+        newStudentsThisMonth,
+        totalRevenue,
+        monthlyIncome,
+        activeSubscriptions,
+        recentActivity: {
+            newSchoolsThisMonth,
+            newStudentsThisMonth,
+            newTeachersThisMonth
+        },
+        monthlyRevenue,
+        monthlyStudents,
+        monthlyNewSchools,
+        // Backward-compatible aliases for older clients
+        schools: totalSchools,
+        users: totalUsers
+    };
+}
+
 exports.getSystemAnalytics = async (req, res) => {
     try {
-        const schools = await School.countDocuments();
-        const users = await User.countDocuments();
-        const activeSubscriptions = await Subscription.countDocuments({ status: 'active' });
-        res.json({ success: true, data: { schools, users, activeSubscriptions } });
+        const metrics = await buildSuperAdminMetrics();
+        res.json({ success: true, data: metrics });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
 };
 
-exports.getSuperAdminDashboard = exports.getSystemAnalytics;
+exports.getSuperAdminDashboard = async (req, res) => {
+    try {
+        const metrics = await buildSuperAdminMetrics();
+        res.json({ success: true, data: metrics });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
 
 module.exports = exports;

@@ -24,14 +24,31 @@ function isTruthyEnv(value) {
     return typeof value === 'string' && value.toLowerCase() === 'true';
 }
 
+function shouldAutoSeedTestData() {
+    if (typeof process.env.AUTO_SEED_TEST_DATA === 'string') {
+        return isTruthyEnv(process.env.AUTO_SEED_TEST_DATA);
+    }
+
+    return process.env.NODE_ENV === 'production';
+}
+
+function shouldResetAutoSeedData() {
+    if (typeof process.env.AUTO_SEED_RESET_DATA === 'string') {
+        return isTruthyEnv(process.env.AUTO_SEED_RESET_DATA);
+    }
+
+    return false;
+}
+
 async function runAutomaticDeploySeed() {
-    if (!isTruthyEnv(process.env.AUTO_SEED_TEST_DATA)) {
+    if (!shouldAutoSeedTestData()) {
         return;
     }
 
     const { ensureSeedData } = require('./scripts/seed-test-data');
-    const resetExisting = isTruthyEnv(process.env.AUTO_SEED_RESET_DATA);
-    console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}.`);
+    const resetExisting = shouldResetAutoSeedData();
+    const usingProductionDefault = typeof process.env.AUTO_SEED_TEST_DATA !== 'string' && process.env.NODE_ENV === 'production';
+    console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}${usingProductionDefault ? ' (production default)' : ''}.`);
 
     const result = await ensureSeedData({ resetExisting });
     if (result.skipped) {

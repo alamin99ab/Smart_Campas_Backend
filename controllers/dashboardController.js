@@ -6,6 +6,7 @@ const SchoolEvent = require('../models/SchoolEvent');
 const Student = require('../models/Student');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
+const superAdminController = require('./superAdminController');
 
 /**
  * @desc    Get Super Admin Dashboard
@@ -13,32 +14,7 @@ const Subject = require('../models/Subject');
  * @access  Super Admin only
  */
 exports.getSuperAdminDashboard = async (req, res) => {
-    try {
-        const totalSchools = await School.countDocuments();
-        const activeSchools = await School.countDocuments({ status: 'active' });
-        const totalUsers = await User.countDocuments();
-        const totalPrincipals = await User.countDocuments({ role: 'principal' });
-        const totalTeachers = await User.countDocuments({ role: 'teacher' });
-        const totalStudents = await User.countDocuments({ role: 'student' });
-
-        res.status(200).json({
-            success: true,
-            data: {
-                totalSchools,
-                activeSchools,
-                totalUsers,
-                totalPrincipals,
-                totalTeachers,
-                totalStudents
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
+    return superAdminController.getSuperAdminDashboard(req, res);
 };
 
 /**
