@@ -573,19 +573,32 @@ exports.getMyClasses = async (req, res) => {
             ? await Class.find({ _id: { $in: classIds } }).lean()
             : [];
 
-        const classes = assignments.map((a) => {
-            const classId = (a.classes && a.classes[0]) || null;
-            const classDoc = classDocs.find(c => String(c._id) === String(classId));
-            return {
-                assignmentId: a._id,
-                classId: classId || classDoc?._id,
-                className: classDoc?.className || a.classes?.[0] || 'Class',
-                section: classDoc?.section || (a.sections && a.sections[0]) || undefined,
-                subject: a.subject,
-                subjectName: a.subjectName,
-                periodsPerWeek: a.periodsPerWeek || 0,
-                academicYear: a.academicYear,
-            };
+        const classMap = new Map(classDocs.map((c) => [String(c._id), c]));
+        const subjectIds = [...new Set(assignments.map((a) => a.subject).filter(Boolean))];
+        const subjects = subjectIds.length > 0
+            ? await Subject.find({ _id: { $in: subjectIds } }).lean()
+            : [];
+        const subjectMap = new Map(subjects.map((s) => [String(s._id), s]));
+
+        const classes = assignments.flatMap((a) => {
+            const classList = Array.isArray(a.classes) && a.classes.length ? a.classes : [null];
+
+            return classList.map((classId, index) => {
+                const classDoc = classId ? classMap.get(String(classId)) : null;
+                const section = classDoc?.section || (Array.isArray(a.sections) ? a.sections[index] || a.sections[0] : undefined);
+                const subjectName = a.subjectName || (String(a.subject) && subjectMap.get(String(a.subject))?.subjectName) || a.subject;
+
+                return {
+                    assignmentId: a._id,
+                    classId: classId || undefined,
+                    className: classDoc?.className || (classId ? undefined : a.classes?.[0]) || 'Class',
+                    section,
+                    subjectId: a.subject,
+                    subjectName,
+                    periodsPerWeek: a.periodsPerWeek || 0,
+                    academicYear: a.academicYear,
+                };
+            });
         });
 
         res.status(200).json({
@@ -618,23 +631,29 @@ exports.getMySubjects = async (req, res) => {
             .find({ teacher: teacherId, schoolCode, isActive: true })
             .lean();
 
-        const subjects = assignments.map(a => ({
-            assignmentId: a._id,
-            subject: a.subject,
-            subjectName: a.subjectName,
-            classes: a.classes || [],
-            sections: a.sections || [],
-            periodsPerWeek: a.periodsPerWeek || 0,
-            academicYear: a.academicYear,
-        }));
+            const subjectIds = [...new Set(assignments.map((a) => a.subject).filter(Boolean))];
+            const subjects = subjectIds.length > 0
+                ? await Subject.find({ _id: { $in: subjectIds } }).lean()
+                : [];
+            const subjectMap = new Map(subjects.map((s) => [String(s._id), s]));
 
-        res.status(200).json({
-            success: true,
-            data: {
-                subjects,
-                totalSubjects: subjects.length
-            }
-        });
+            const subjectsPayload = assignments.map(a => ({
+                assignmentId: a._id,
+                subjectId: a.subject,
+                subjectName: a.subjectName || (String(a.subject) && subjectMap.get(String(a.subject))?.subjectName) || a.subject,
+                classes: a.classes || [],
+                sections: a.sections || [],
+                periodsPerWeek: a.periodsPerWeek || 0,
+                academicYear: a.academicYear,
+            }));
+
+            res.status(200).json({
+                success: true,
+                data: {
+                    subjects: subjectsPayload,
+                    totalSubjects: subjectsPayload.length
+                }
+            });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -681,27 +700,40 @@ exports.getMyStudents = async (req, res) => {
     try {
         const teacherId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const requestedClassId = req.query.classId;
+        const requestedSection = req.query.sectionId;
 
         const assignments = await require('../models/TeacherAssignment')
             .find({ teacher: teacherId, schoolCode, isActive: true })
             .lean();
 
-        const queryClassIds = [];
-        if (req.query.classId) {
-            queryClassIds.push(req.query.classId);
-        } else {
-            queryClassIds.push(...new Set(assignments.flatMap(a => a.classes || [])));
+        if (requestedClassId && !assignments.some(a => a.classes?.some(c => String(c) === String(requestedClassId)))) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to view students for this class'
+            });
         }
 
-        const classIds = [...new Set(queryClassIds)];
+        const queryClassIds = requestedClassId
+            ? [requestedClassId]
+            : [...new Set(assignments.flatMap(a => a.classes || []))];
+
+        const classIds = [...new Set(queryClassIds.filter(Boolean))];
         const User = require('../models/User');
         let students = [];
         if (classIds.length > 0) {
-            students = await User.find({
+            const studentQuery = {
                 role: 'student',
                 schoolCode,
                 classId: { $in: classIds }
-            }).select('-password').lean();
+            };
+            if (requestedSection) {
+                studentQuery.section = requestedSection;
+            }
+
+            students = await User.find(studentQuery)
+                .select('-password')
+                .lean();
         }
 
         res.status(200).json({
