@@ -86,8 +86,8 @@ exports.markStudentAttendance = async (req, res) => {
         // Verify teacher assignment to this class+subject
         const hasAssignment = await TeacherAssignment.findOne({
             teacher: teacherId,
-            subject: String(subjectId),
-            classes: String(classId),
+            subject: mongoose.Types.ObjectId(subjectId),
+            classes: { $in: [mongoose.Types.ObjectId(classId)] },
             schoolCode,
             isActive: true
         });

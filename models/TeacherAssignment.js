@@ -3,9 +3,9 @@ const mongoose = require('mongoose');
 const teacherAssignmentSchema = new mongoose.Schema({
     schoolCode: { type: String, required: true, index: true },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    subject: { type: String, required: true },
+    subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
     subjectName: { type: String },
-    classes: [{ type: String }],
+    classes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Class' }],
     sections: [{ type: String }],
     periodsPerWeek: { type: Number, default: 0 },
     academicYear: { type: String, required: true },

@@ -528,17 +528,17 @@ exports.assignTeacherToSubject = async (req, res) => {
             await TeacherAssignment.findOneAndUpdate(
                 {
                     teacher: teacherId,
-                    subject: String(subjectDoc._id),
+                    subject: subjectDoc._id,
                     schoolCode,
-                    classes: classId,
+                    classes: { $in: [classId] },
                     academicYear: classDoc.academicYear
                 },
                 {
                     schoolCode,
                     teacher: teacherId,
-                    subject: String(subjectDoc._id),
+                    subject: subjectDoc._id,
                     subjectName: subjectDoc.subjectName,
-                    classes: [String(classId)],
+                    classes: [classId],
                     sections: [classDoc.section],
                     periodsPerWeek,
                     academicYear: classDoc.academicYear,
