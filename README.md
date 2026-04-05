@@ -236,6 +236,21 @@ TestPass123!
 
 The script prints sample login emails for each seeded school after it finishes. Super Admin is still environment-based and is not created by the seed script.
 
+### Automatic Seed On Deploy
+
+The backend can seed the same dataset automatically during startup after MongoDB connects.
+
+Set these environment variables in your deploy environment:
+- `AUTO_SEED_TEST_DATA=true` to enable automatic seeding on deploy/startup
+- `AUTO_SEED_RESET_DATA=true` to rebuild the seed dataset on every deploy
+- `SEED_TEST_PASSWORD=YourSharedPassword` to override the default seeded login password
+
+Behavior:
+- With `AUTO_SEED_TEST_DATA=true` and `AUTO_SEED_RESET_DATA=false`, the app seeds only when the tagged seed dataset is missing
+- With both set to `true`, the app deletes the previous tagged seed dataset and recreates it on every deploy
+
+The included `render.yaml` now enables automatic deploy seeding by default for blueprint-based Render deployments.
+
 ### Test Coverage
 - Authentication endpoints
 - All user role endpoints

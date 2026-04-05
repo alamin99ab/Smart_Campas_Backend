@@ -8,6 +8,7 @@ const { enhancedSecurity } = require('./middleware/enhancedSecurity');
 const requestId = require('./middleware/requestId');
 const { ensureMongoIndexes } = require('./utils/ensureMongoIndexes');
 const { validateEnv } = require('./utils/validateEnv');
+const { ensureSeedData } = require('./scripts/seed-test-data');
 require('dotenv').config();
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -19,6 +20,27 @@ if (isProduction) {
 }
 
 let memoryMongoServer = null;
+
+function isTruthyEnv(value) {
+    return typeof value === 'string' && value.toLowerCase() === 'true';
+}
+
+async function runAutomaticDeploySeed() {
+    if (!isTruthyEnv(process.env.AUTO_SEED_TEST_DATA)) {
+        return;
+    }
+
+    const resetExisting = isTruthyEnv(process.env.AUTO_SEED_RESET_DATA);
+    console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}.`);
+
+    const result = await ensureSeedData({ resetExisting });
+    if (result.skipped) {
+        console.warn(`ℹ️ Automatic deploy seed skipped: ${result.reason}`);
+        return;
+    }
+
+    console.warn(`✅ Automatic deploy seed finished: ${result.counts.schools} schools, ${result.counts.students} students, ${result.counts.teachers} teachers.`);
+}
 
 // Validate environment variables before starting
 if (!validateEnv()) {
@@ -699,6 +721,15 @@ const startServer = async () => {
         
         // Initialize Super Admin only if DB is connected
         if (dbConnected) {
+            try {
+                await runAutomaticDeploySeed();
+            } catch (seedError) {
+                console.error('Automatic deploy seed failed:', seedError.message);
+                if (process.env.NODE_ENV === 'production') {
+                    console.error('Production abort: automatic deploy seed failed. Exiting.');
+                    process.exit(1);
+                }
+            }
             console.log('\n✅ Super Admin is environment-only (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD). No DB bootstrap.');
         } else {
             console.log('\n⚠️  Database not connected — school features unavailable; Super Admin still logs in via environment credentials.');

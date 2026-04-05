@@ -57,6 +57,12 @@ services:
         sync: false
       - key: MONGO_DB_NAME
         value: smartcampus
+      - key: AUTO_SEED_TEST_DATA
+        value: true
+      - key: AUTO_SEED_RESET_DATA
+        value: true
+      - key: SEED_TEST_PASSWORD
+        sync: false
       
       # Email Service (Optional - Configure in dashboard)
       - key: EMAIL_HOST

@@ -297,6 +297,11 @@ async function deleteExistingSeedData() {
     );
 }
 
+async function hasExistingSeedData() {
+    const existingSeededSchool = await School.exists({ seedTag: SEED_TAG });
+    return Boolean(existingSeededSchool);
+}
+
 async function insertMany(model, docs) {
     if (!docs.length) {
         return;
@@ -1553,6 +1558,61 @@ async function seedTestData() {
     };
 }
 
+async function ensureSeedData({ resetExisting = false } = {}) {
+    await ensureMongoIndexes();
+
+    const existingSeedData = await hasExistingSeedData();
+    if (existingSeedData && !resetExisting) {
+        return {
+            skipped: true,
+            reason: `Seed data with tag ${SEED_TAG} already exists. Set AUTO_SEED_RESET_DATA=true or rerun the manual seed command to rebuild it.`
+        };
+    }
+
+    if (existingSeedData && resetExisting) {
+        console.log(`Cleaning previous ${SEED_TAG} data...`);
+        await deleteExistingSeedData();
+    }
+
+    console.log(existingSeedData ? 'Recreating fresh seed data...' : 'Creating fresh seed data...');
+    const result = await seedTestData();
+
+    return {
+        skipped: false,
+        ...result
+    };
+}
+
+function logSeedSummary(result) {
+    if (result.skipped) {
+        console.log('\nSeed skipped');
+        console.log('------------');
+        console.log(result.reason);
+        return;
+    }
+
+    console.log('\nSeed complete');
+    console.log('-------------');
+    Object.entries(result.counts).forEach(([key, value]) => {
+        console.log(`${key}: ${value}`);
+    });
+
+    console.log('\nShared login password');
+    console.log('---------------------');
+    console.log(DEFAULT_PASSWORD);
+
+    console.log('\nSeeded school logins');
+    console.log('--------------------');
+    result.loginSummary.forEach((entry, index) => {
+        console.log(`${index + 1}. ${entry.schoolName} (${entry.schoolCode})`);
+        console.log(`   principal:  ${entry.principalEmail}`);
+        console.log(`   accountant: ${entry.accountantEmail}`);
+        console.log(`   teacher:    ${entry.teacherEmail}`);
+        console.log(`   parent:     ${entry.parentEmail}`);
+        console.log(`   student:    ${entry.studentEmail}`);
+    });
+}
+
 async function main() {
     console.log(`Loading environment from ${envPath || 'default dotenv resolution'}`);
     console.log(`Connecting to MongoDB: ${process.env.MONGO_URI}`);
@@ -1567,34 +1627,8 @@ async function main() {
     });
 
     try {
-        await ensureMongoIndexes();
-        console.log(`Cleaning previous ${SEED_TAG} data...`);
-        await deleteExistingSeedData();
-
-        console.log('Creating fresh seed data...');
-        const result = await seedTestData();
-
-        console.log('\nSeed complete');
-        console.log('-------------');
-        Object.entries(result.counts).forEach(([key, value]) => {
-            console.log(`${key}: ${value}`);
-        });
-
-        console.log('\nShared login password');
-        console.log('---------------------');
-        console.log(DEFAULT_PASSWORD);
-
-        console.log('\nSeeded school logins');
-        console.log('--------------------');
-        result.loginSummary.forEach((entry, index) => {
-            console.log(`${index + 1}. ${entry.schoolName} (${entry.schoolCode})`);
-            console.log(`   principal:  ${entry.principalEmail}`);
-            console.log(`   accountant: ${entry.accountantEmail}`);
-            console.log(`   teacher:    ${entry.teacherEmail}`);
-            console.log(`   parent:     ${entry.parentEmail}`);
-            console.log(`   student:    ${entry.studentEmail}`);
-        });
-
+        const result = await ensureSeedData({ resetExisting: true });
+        logSeedSummary(result);
         console.log('\nNote: Super Admin login is still environment-based and is not created by this seed script.');
     } finally {
         await mongoose.disconnect();
@@ -1612,6 +1646,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+    DEFAULT_PASSWORD,
+    SEED_TAG,
+    ensureSeedData,
+    hasExistingSeedData,
     seedTestData,
     deleteExistingSeedData
 };
