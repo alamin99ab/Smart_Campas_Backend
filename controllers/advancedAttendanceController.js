@@ -10,8 +10,37 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const AcademicSession = require('../models/AcademicSession');
 const TeacherAssignment = require('../models/TeacherAssignment');
+const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
+
+/**
+ * Ensure there is an active academic session for the current school.
+ * If none exists, create a sensible default for the current calendar year.
+ */
+const ensureActiveAcademicSession = async (schoolId, schoolCode, creatorId) => {
+    let session = await AcademicSession.findOne({ schoolId, isActive: true });
+    if (session) return session;
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const startDate = new Date(Date.UTC(year, 0, 1));
+    const endDate = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
+
+    session = await AcademicSession.create({
+        schoolId,
+        schoolCode,
+        name: `${year}-${year + 1} Session`,
+        academicYear: `${year}-${year + 1}`,
+        startDate,
+        endDate,
+        isCurrent: true,
+        isActive: true,
+        createdBy: creatorId
+    });
+
+    return session;
+};
 
 /**
  * @desc    Mark Student Attendance (Teacher)
@@ -67,12 +96,8 @@ exports.markStudentAttendance = async (req, res) => {
             return res.status(403).json({ success: false, message: 'You are not assigned to this class/subject' });
         }
 
-        // Get current academic session
-        const academicSession = await AcademicSession.findOne({ schoolId, isActive: true });
-
-        if (!academicSession) {
-            return res.status(400).json({ success: false, message: 'No active academic session found' });
-        }
+        // Get or create current academic session to satisfy schema requirement
+        const academicSession = await ensureActiveAcademicSession(schoolId, schoolCode, teacherId);
 
         const markedAttendances = [];
         const alerts = [];
@@ -207,6 +232,9 @@ exports.teacherAttendance = async (req, res) => {
             }
         }
 
+        // Academic session is required by the schema; auto-create if missing
+        const academicSession = await ensureActiveAcademicSession(schoolId, req.user.schoolCode, teacherId);
+
         const today = new Date().toISOString().split('T')[0];
 
         // Find existing attendance for today
@@ -221,6 +249,7 @@ exports.teacherAttendance = async (req, res) => {
             // Create new attendance record
             attendance = new AdvancedAttendance({
                 schoolId,
+                academicSessionId: academicSession._id,
                 attendanceType: 'teacher',
                 teacherId,
                 date: new Date(today),
@@ -231,6 +260,9 @@ exports.teacherAttendance = async (req, res) => {
                 location,
                 notes
             });
+        } else if (!attendance.academicSessionId) {
+            // Backfill academic session for existing record created before fix
+            attendance.academicSessionId = academicSession._id;
         }
 
         if (type === 'check-in') {
@@ -400,9 +432,16 @@ exports.getClassAttendanceReport = async (req, res) => {
  */
 exports.getTeacherAttendanceReport = async (req, res) => {
     try {
-        const { teacherId } = req.params;
+        const teacherId = req.params.teacherId || req.user.id;
         const { academicSessionId } = req.query;
         const schoolId = req.tenant.schoolId;
+
+        if (!mongoose.Types.ObjectId.isValid(teacherId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid teacherId'
+            });
+        }
 
         // Check authorization
         if (req.user.role === 'teacher' && req.user.id !== teacherId) {
