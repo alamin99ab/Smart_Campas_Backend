@@ -1,15 +1,15 @@
 /**
- * 🎓 STUDENT BULK IMPORT CONTROLLER
+ * STUDENT BULK IMPORT CONTROLLER
  * Bulk student upload with validation
  * Supports: CSV, JSON formats
  */
-
 const Student = require('../models/Student');
 const User = require('../models/User');
 const School = require('../models/School');
 const Class = require('../models/Class');
 const { createNotification } = require('../utils/createNotification');
 const { parse } = require('csv-parse/sync');
+const fs = require('fs');
 
 // @desc    Upload and parse student file
 // @route   POST /api/students/parse-file
@@ -29,16 +29,24 @@ exports.parseStudentFile = async (req, res) => {
         let students = [];
         const errors = [];
         const validRows = [];
+        const fileBuffer = req.file.buffer || (req.file.path ? fs.readFileSync(req.file.path) : null);
+
+        if (!fileBuffer) {
+            return res.status(400).json({
+                success: false,
+                message: 'Unable to read uploaded file'
+            });
+        }
 
         // Parse file based on format
         if (format === 'csv' || req.file.originalname.endsWith('.csv')) {
-            students = parse(req.file.buffer.toString('utf-8'), {
+            students = parse(fileBuffer.toString('utf-8'), {
                 columns: true,
                 skip_empty_lines: true,
                 trim: true
             });
         } else if (format === 'json' || req.file.originalname.endsWith('.json')) {
-            const raw = JSON.parse(req.file.buffer.toString('utf-8'));
+            const raw = JSON.parse(fileBuffer.toString('utf-8'));
             students = Array.isArray(raw) ? raw : raw.students || [];
         } else if (format === 'xlsx' || req.file.originalname.endsWith('.xlsx') || req.file.originalname.endsWith('.xls')) {
             return res.status(400).json({
@@ -445,3 +453,4 @@ exports.validateStudents = async (req, res) => {
         });
     }
 };
+
