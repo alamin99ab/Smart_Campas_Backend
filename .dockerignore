@@ -62,7 +62,8 @@ ehthumbs.db
 Thumbs.db
 
 # Development scripts
-scripts/
+scripts/*
+!scripts/seed-test-data.js
 setup-test-users.js
 
 # Documentation (keep essential ones)

@@ -8,7 +8,6 @@ const { enhancedSecurity } = require('./middleware/enhancedSecurity');
 const requestId = require('./middleware/requestId');
 const { ensureMongoIndexes } = require('./utils/ensureMongoIndexes');
 const { validateEnv } = require('./utils/validateEnv');
-const { ensureSeedData } = require('./scripts/seed-test-data');
 require('dotenv').config();
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -30,6 +29,7 @@ async function runAutomaticDeploySeed() {
         return;
     }
 
+    const { ensureSeedData } = require('./scripts/seed-test-data');
     const resetExisting = isTruthyEnv(process.env.AUTO_SEED_RESET_DATA);
     console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}.`);
 
