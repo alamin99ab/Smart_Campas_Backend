@@ -567,6 +567,24 @@ async function buildSuperAdminMetrics() {
     const totalRevenue = totalRevenueAggregate[0]?.total || 0;
     const monthlyIncome = monthlyIncomeAggregate[0]?.total || 0;
 
+    console.log('[SuperAdmin] Metrics:', {
+        totalSchools,
+        activeSchools,
+        inactiveSchools,
+        totalUsers,
+        activeUsers,
+        totalPrincipals,
+        totalTeachers,
+        totalStudents,
+        activeStudents,
+        newSchoolsThisMonth,
+        newStudentsThisMonth,
+        newTeachersThisMonth,
+        activeSubscriptions,
+        totalRevenue,
+        monthlyIncome
+    });
+
     return {
         totalSchools,
         activeSchools,

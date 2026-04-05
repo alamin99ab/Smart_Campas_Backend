@@ -59,6 +59,51 @@ async function runAutomaticDeploySeed() {
     console.warn(`✅ Automatic deploy seed finished: ${result.counts.schools} schools, ${result.counts.students} students, ${result.counts.teachers} teachers.`);
 }
 
+function parseAllowedOrigins() {
+    const fromEnv = (process.env.ALLOWED_ORIGINS || '')
+        .split(',')
+        .map((o) => o.trim())
+        .filter(Boolean);
+
+    const localDefaults = [
+        'http://localhost:3000',
+        'http://localhost:8080',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:8080'
+    ];
+
+    if (process.env.NODE_ENV !== 'production') {
+        return Array.from(new Set([...fromEnv, ...localDefaults]));
+    }
+
+    return fromEnv;
+}
+
+const allowedOrigins = parseAllowedOrigins();
+
+const corsOptions = {
+    origin: (origin, callback) => {
+        if (!origin) return callback(null, true); // allow curl / server-to-server
+
+        if (!allowedOrigins.length) {
+            console.warn('CORS: no ALLOWED_ORIGINS configured; blocking origin', origin);
+            return callback(new Error('CORS not configured'));
+        }
+
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+
+        console.warn('CORS: blocked origin', origin, 'allowed:', allowedOrigins.join(','));
+        return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id']
+};
+
+console.log('CORS allowed origins:', allowedOrigins.length ? allowedOrigins : '[none set]');
+
 // Validate environment variables before starting
 if (!validateEnv()) {
     console.error('\n❌ Server startup aborted due to missing environment variables');
@@ -74,12 +119,8 @@ app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false
 }));
-app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id']
-}));
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
