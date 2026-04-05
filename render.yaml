@@ -48,6 +48,8 @@ services:
       
       # Frontend Configuration
       - key: FRONTEND_URL
+      - key: ALLOW_ALL_ORIGINS
+        value: true
         value: https://smart-campus-api.onrender.com
       - key: ALLOWED_ORIGINS
         value: https://smart-campus-api.onrender.com,https://your-frontend-domain.com
