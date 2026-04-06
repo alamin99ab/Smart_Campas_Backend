@@ -84,16 +84,26 @@ exports.markStudentAttendance = async (req, res) => {
         }
 
         // Verify teacher assignment to this class+subject
+        if (!mongoose.Types.ObjectId.isValid(classId) || !mongoose.Types.ObjectId.isValid(subjectId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid classId or subjectId format'
+            });
+        }
+
         const hasAssignment = await TeacherAssignment.findOne({
             teacher: teacherId,
-            subject: mongoose.Types.ObjectId(subjectId),
-            classes: { $in: [mongoose.Types.ObjectId(classId)] },
+            subject: subjectId,
+            classes: { $in: [classId] },
             schoolCode,
             isActive: true
         });
 
         if (!hasAssignment) {
-            return res.status(403).json({ success: false, message: 'You are not assigned to this class/subject' });
+            return res.status(403).json({
+                success: false,
+                message: 'You are not assigned to teach this class/subject combination'
+            });
         }
 
         // Get or create current academic session to satisfy schema requirement
@@ -106,12 +116,20 @@ exports.markStudentAttendance = async (req, res) => {
         for (const studentData of attendanceData) {
             const { studentId, status, notes, lateMinutes } = studentData;
 
+            // Validate and convert studentId to ObjectId
+            if (!mongoose.Types.ObjectId.isValid(studentId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid studentId format: ${studentId}`
+                });
+            }
+
             // Check if attendance already exists
             const existingAttendance = await AdvancedAttendance.findOne({
                 schoolId,
-                studentId,
+                studentId: mongoose.Types.ObjectId(studentId),
                 classId,
-                sectionId,
+                sectionId: sectionId ? sectionId : undefined,
                 subjectId,
                 date: new Date(date),
                 periodNumber
@@ -132,9 +150,9 @@ exports.markStudentAttendance = async (req, res) => {
                     schoolId,
                     academicSessionId: academicSession._id,
                     attendanceType: 'student',
-                    studentId,
+                    studentId: mongoose.Types.ObjectId(studentId),
                     classId,
-                    sectionId: mongoose.Types.ObjectId.isValid(sectionId) ? sectionId : undefined,
+                    sectionId: sectionId ? sectionId : undefined,
                     subjectId,
                     periodNumber,
                     date: new Date(date),
@@ -150,14 +168,23 @@ exports.markStudentAttendance = async (req, res) => {
                 await attendance.save();
                 markedAttendances.push(attendance);
 
-                // Check for attendance alerts
-                await attendance.calculateMonthlyStats();
-                const attendanceAlerts = await attendance.checkAttendanceAlerts();
-                if (attendanceAlerts.length > 0) {
-                    alerts.push({
-                        studentId,
-                        alerts: attendanceAlerts
-                    });
+                // Check for attendance alerts (non-blocking)
+                try {
+                    if (typeof attendance.calculateMonthlyStats === 'function') {
+                        await attendance.calculateMonthlyStats();
+                    }
+                    if (typeof attendance.checkAttendanceAlerts === 'function') {
+                        const attendanceAlerts = await attendance.checkAttendanceAlerts();
+                        if (attendanceAlerts && attendanceAlerts.length > 0) {
+                            alerts.push({
+                                studentId,
+                                alerts: attendanceAlerts
+                            });
+                        }
+                    }
+                } catch (alertError) {
+                    // Log alert error but don't fail attendance save
+                    console.warn('Attendance alert check failed:', alertError.message);
                 }
             }
         }
@@ -198,9 +225,26 @@ exports.markStudentAttendance = async (req, res) => {
         });
     } catch (error) {
         console.error('Mark student attendance error:', error);
+        
+        // More detailed error responses for debugging
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation error: ' + Object.values(error.errors).map(e => e.message).join(', ')
+            });
+        }
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid ID format: ' + error.value
+            });
+        }
+        
         res.status(500).json({
             success: false,
-            message: 'Internal server error'
+            message: 'Internal server error while marking attendance',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
@@ -671,6 +715,83 @@ exports.acknowledgeAlert = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Get today's attendance overview
+ * @route   GET /api/attendance/today
+ * @access  Principal/Admin
+ */
+exports.getTodayAttendance = async (req, res) => {
+    try {
+        const schoolId = req.tenant?.schoolId;
+        const schoolCode = req.user.schoolCode;
+        
+        if (!schoolId) {
+            return res.status(400).json({
+                success: false,
+                message: 'School context not found'
+            });
+        }
+
+        // Get today's date range
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        // Get all classes for this school
+        const Class = require('../models/Class');
+        const classes = await Class.find({ schoolCode }).lean();
+
+        if (!classes || classes.length === 0) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    date: today.toISOString().split('T')[0],
+                    status: []
+                }
+            });
+        }
+
+        // For each class, check if attendance was taken today
+        const status = [];
+        for (const classDoc of classes) {
+            // Get attendance records for this class today
+            const attendanceRecords = await AdvancedAttendance.findOne({
+                schoolId,
+                classId: classDoc._id,
+                date: { $gte: today, $lt: tomorrow },
+                attendanceType: 'student'
+            }).lean();
+
+            status.push({
+                class: classDoc.className || 'Class',
+                section: classDoc.section || 'N/A',
+                totalStudents: classDoc.totalStudents || 0,
+                taken: !!attendanceRecords,
+                attendanceId: attendanceRecords?._id,
+                takenBy: attendanceRecords ? {
+                    name: attendanceRecords.markedByRole === 'teacher' ? 'Teacher' : 'Admin'
+                } : null,
+                time: attendanceRecords?.createdAt
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                date: today.toISOString().split('T')[0],
+                status
+            }
+        });
+    } catch (error) {
+        console.error('Get today attendance error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};
+
 module.exports = {
     markStudentAttendance: exports.markStudentAttendance,
     teacherAttendance: exports.teacherAttendance,
@@ -679,5 +800,6 @@ module.exports = {
     getTeacherAttendanceReport: exports.getTeacherAttendanceReport,
     getAttendanceAnalytics: exports.getAttendanceAnalytics,
     getAttendanceAlerts: exports.getAttendanceAlerts,
-    acknowledgeAlert: exports.acknowledgeAlert
+    acknowledgeAlert: exports.acknowledgeAlert,
+    getTodayAttendance: exports.getTodayAttendance
 };
