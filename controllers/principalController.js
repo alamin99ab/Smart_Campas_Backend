@@ -523,17 +523,33 @@ exports.assignTeacherToSubject = async (req, res) => {
         await classDoc.save();
 
         // Mirror to TeacherAssignment collection for teacher-facing flows
+        // FIXED: Properly consolidate multiple classes under one assignment
         try {
             const TeacherAssignment = require('../models/TeacherAssignment');
-            await TeacherAssignment.findOneAndUpdate(
-                {
-                    teacher: teacherId,
-                    subject: subjectDoc._id,
-                    schoolCode,
-                    classes: { $in: [classId] },
-                    academicYear: classDoc.academicYear
-                },
-                {
+            
+            // Find existing assignment WITHOUT checking classes array
+            const existingAssignment = await TeacherAssignment.findOne({
+                teacher: teacherId,
+                subject: subjectDoc._id,
+                schoolCode,
+                academicYear: classDoc.academicYear
+            });
+
+            if (existingAssignment) {
+                // Add class to existing assignment if not already there
+                if (!existingAssignment.classes.some(c => String(c) === String(classId))) {
+                    existingAssignment.classes.push(classId);
+                }
+                // Add section if not already there
+                if (!existingAssignment.sections.includes(classDoc.section)) {
+                    existingAssignment.sections.push(classDoc.section);
+                }
+                existingAssignment.periodsPerWeek = periodsPerWeek;
+                existingAssignment.updatedAt = Date.now();
+                await existingAssignment.save();
+            } else {
+                // Create new assignment with single class
+                await TeacherAssignment.create({
                     schoolCode,
                     teacher: teacherId,
                     subject: subjectDoc._id,
@@ -544,9 +560,8 @@ exports.assignTeacherToSubject = async (req, res) => {
                     academicYear: classDoc.academicYear,
                     assignedBy: req.user._id,
                     isActive: true
-                },
-                { upsert: true, new: true, setDefaultsOnInsert: true }
-            );
+                });
+            }
         } catch (assignErr) {
             console.warn('TeacherAssignment mirror warning:', assignErr.message);
         }

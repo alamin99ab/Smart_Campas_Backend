@@ -58,8 +58,12 @@ const protect = async (req, res, next) => {
             return res.status(401).json({ success: false, message: 'Account is deactivated' });
         }
 
-        const userObj = user.toObject ? user.toObject() : user;
+        const userObj = user.toObject ? user.toObject({ virtuals: true }) : user;
         const { password, ...userWithoutPassword } = userObj;
+        // Ensure id is set (alias for _id)
+        if (!userWithoutPassword.id && userWithoutPassword._id) {
+            userWithoutPassword.id = userWithoutPassword._id;
+        }
         req.user = userWithoutPassword;
         next();
     } catch (error) {

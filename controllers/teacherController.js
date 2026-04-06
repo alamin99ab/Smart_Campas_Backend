@@ -565,7 +565,18 @@ exports.getMyClasses = async (req, res) => {
 
         const assignments = await require('../models/TeacherAssignment')
             .find({ teacher: teacherId, schoolCode, isActive: true })
+            .populate('subject', 'subjectName subjectCode')
             .lean();
+
+        if (!assignments || assignments.length === 0) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    classes: [],
+                    totalClasses: 0
+                }
+            });
+        }
 
         const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
         const Class = require('../models/Class');
@@ -574,32 +585,49 @@ exports.getMyClasses = async (req, res) => {
             : [];
 
         const classMap = new Map(classDocs.map((c) => [String(c._id), c]));
-        const subjectIds = [...new Set(assignments.map((a) => a.subject).filter(Boolean))];
-        const subjects = subjectIds.length > 0
-            ? await Subject.find({ _id: { $in: subjectIds } }).lean()
-            : [];
-        const subjectMap = new Map(subjects.map((s) => [String(s._id), s]));
 
-        const classes = assignments.flatMap((a) => {
-            const classList = Array.isArray(a.classes) && a.classes.length ? a.classes : [null];
+        // Build class-centric structure: each class with its subjects
+        const classesMap = new Map();
 
-            return classList.map((classId, index) => {
-                const classDoc = classId ? classMap.get(String(classId)) : null;
-                const section = classDoc?.section || (Array.isArray(a.sections) ? a.sections[index] || a.sections[0] : undefined);
-                const subjectName = a.subjectName || (String(a.subject) && subjectMap.get(String(a.subject))?.subjectName) || a.subject;
+        assignments.forEach((assignment) => {
+            const subjectId = assignment.subject?._id || assignment.subject;
+            const subjectName = assignment.subject?.subjectName || assignment.subjectName || 'Unknown Subject';
 
-                return {
-                    assignmentId: a._id,
-                    classId: classId || undefined,
-                    className: classDoc?.className || (classId ? undefined : a.classes?.[0]) || 'Class',
-                    section,
-                    subjectId: a.subject,
-                    subjectName,
-                    periodsPerWeek: a.periodsPerWeek || 0,
-                    academicYear: a.academicYear,
-                };
+            // For each class in this assignment
+            (assignment.classes || []).forEach((classId, index) => {
+                const classIdStr = String(classId);
+                const classDoc = classMap.get(classIdStr);
+
+                if (!classDoc) return; // Skip if class not found
+
+                if (!classesMap.has(classIdStr)) {
+                    classesMap.set(classIdStr, {
+                        classId: classIdStr,
+                        className: classDoc.className || 'Class',
+                        section: classDoc.section || 'A',
+                        subjects: [],
+                        assignments: []
+                    });
+                }
+
+                const classEntry = classesMap.get(classIdStr);
+
+                // Add subject if not already present
+                if (!classEntry.subjects.some(s => String(s.subjectId) === String(subjectId))) {
+                    classEntry.subjects.push({
+                        subjectId,
+                        subjectName
+                    });
+                }
+
+                // Add assignment ID
+                if (!classEntry.assignments.includes(String(assignment._id))) {
+                    classEntry.assignments.push(String(assignment._id));
+                }
             });
         });
+
+        const classes = Array.from(classesMap.values());
 
         res.status(200).json({
             success: true,
@@ -609,6 +637,7 @@ exports.getMyClasses = async (req, res) => {
             }
         });
     } catch (error) {
+        console.error('Error in getMyClasses:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -629,32 +658,72 @@ exports.getMySubjects = async (req, res) => {
 
         const assignments = await require('../models/TeacherAssignment')
             .find({ teacher: teacherId, schoolCode, isActive: true })
+            .populate('subject', 'subjectName subjectCode')
             .lean();
 
-            const subjectIds = [...new Set(assignments.map((a) => a.subject).filter(Boolean))];
-            const subjects = subjectIds.length > 0
-                ? await Subject.find({ _id: { $in: subjectIds } }).lean()
-                : [];
-            const subjectMap = new Map(subjects.map((s) => [String(s._id), s]));
+        // Build subject-centric structure: each subject with its classes
+        const subjectsMap = new Map();
 
-            const subjectsPayload = assignments.map(a => ({
-                assignmentId: a._id,
-                subjectId: a.subject,
-                subjectName: a.subjectName || (String(a.subject) && subjectMap.get(String(a.subject))?.subjectName) || a.subject,
-                classes: a.classes || [],
-                sections: a.sections || [],
-                periodsPerWeek: a.periodsPerWeek || 0,
-                academicYear: a.academicYear,
-            }));
+        const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
+        const Class = require('../models/Class');
+        const classDocs = classIds.length > 0
+            ? await Class.find({ _id: { $in: classIds } }).lean()
+            : [];
+        const classMap = new Map(classDocs.map((c) => [String(c._id), c]));
 
-            res.status(200).json({
-                success: true,
-                data: {
-                    subjects: subjectsPayload,
-                    totalSubjects: subjectsPayload.length
+        assignments.forEach((assignment) => {
+            const subjectId = String(assignment.subject?._id || assignment.subject);
+            const subjectName = assignment.subject?.subjectName || assignment.subjectName || 'Unknown Subject';
+
+            if (!subjectsMap.has(subjectId)) {
+                subjectsMap.set(subjectId, {
+                    assignmentId: String(assignment._id),
+                    subjectId,
+                    subjectName,
+                    classes: [],
+                    sections: [],
+                    periodsPerWeek: assignment.periodsPerWeek || 0,
+                    academicYear: assignment.academicYear
+                });
+            }
+
+            const subjectEntry = subjectsMap.get(subjectId);
+
+            // Add all classes from this assignment
+            (assignment.classes || []).forEach((classId, index) => {
+                const classIdStr = String(classId);
+                const classDoc = classMap.get(classIdStr);
+
+                if (!classDoc) return;
+
+                if (!subjectEntry.classes.some(c => String(c.classId) === classIdStr)) {
+                    subjectEntry.classes.push({
+                        classId: classIdStr,
+                        className: classDoc.className || 'Class',
+                        section: classDoc.section || 'A'
+                    });
                 }
             });
+
+            // Add sections
+            (assignment.sections || []).forEach((section) => {
+                if (!subjectEntry.sections.includes(section)) {
+                    subjectEntry.sections.push(section);
+                }
+            });
+        });
+
+        const subjects = Array.from(subjectsMap.values());
+
+        res.status(200).json({
+            success: true,
+            data: {
+                subjects,
+                totalSubjects: subjects.length
+            }
+        });
     } catch (error) {
+        console.error('Error in getMySubjects:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
