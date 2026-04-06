@@ -102,15 +102,31 @@ exports.markStudentAttendance = async (req, res) => {
             });
         }
 
+        // Convert to ObjectIds for consistent querying
+        const classObjectId = mongoose.Types.ObjectId(classId);
+        const subjectObjectId = mongoose.Types.ObjectId(subjectId);
+
         const hasAssignment = await TeacherAssignment.findOne({
             teacher: teacherId,
-            subject: subjectId,
-            classes: { $in: [classId] },
+            subject: subjectObjectId,
+            classes: { $in: [classObjectId] },
             schoolCode,
             isActive: true
         });
 
         if (!hasAssignment) {
+            // Debug logging for troubleshooting
+            console.log('Teacher assignment check failed:', {
+                teacherId,
+                subjectId: subjectObjectId,
+                classId: classObjectId,
+                schoolCode,
+                foundAssignments: await TeacherAssignment.find({
+                    teacher: teacherId,
+                    schoolCode,
+                    isActive: true
+                }).select('subject classes subjectName').lean()
+            });
             return res.status(403).json({
                 success: false,
                 message: 'You are not assigned to teach this class/subject combination'

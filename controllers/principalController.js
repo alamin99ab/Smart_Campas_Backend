@@ -537,8 +537,9 @@ exports.assignTeacherToSubject = async (req, res) => {
 
             if (existingAssignment) {
                 // Add class to existing assignment if not already there
-                if (!existingAssignment.classes.some(c => String(c) === String(classId))) {
-                    existingAssignment.classes.push(classId);
+                const classObjectId = mongoose.Types.ObjectId(classId);
+                if (!existingAssignment.classes.some(c => String(c) === String(classObjectId))) {
+                    existingAssignment.classes.push(classObjectId);
                 }
                 // Add section if not already there
                 if (!existingAssignment.sections.includes(classDoc.section)) {
@@ -547,23 +548,26 @@ exports.assignTeacherToSubject = async (req, res) => {
                 existingAssignment.periodsPerWeek = periodsPerWeek;
                 existingAssignment.updatedAt = Date.now();
                 await existingAssignment.save();
+                console.log('Updated existing TeacherAssignment:', existingAssignment._id);
             } else {
                 // Create new assignment with single class
-                await TeacherAssignment.create({
+                const newAssignment = await TeacherAssignment.create({
                     schoolCode,
                     teacher: teacherId,
                     subject: subjectDoc._id,
                     subjectName: subjectDoc.subjectName,
-                    classes: [classId],
+                    classes: [mongoose.Types.ObjectId(classId)],
                     sections: [classDoc.section],
                     periodsPerWeek,
                     academicYear: classDoc.academicYear,
                     assignedBy: req.user._id,
                     isActive: true
                 });
+                console.log('Created new TeacherAssignment:', newAssignment._id);
             }
         } catch (assignErr) {
-            console.warn('TeacherAssignment mirror warning:', assignErr.message);
+            console.error('TeacherAssignment mirror error:', assignErr.message);
+            console.error('Assignment data:', { teacherId, subjectId: subjectDoc._id, classId, schoolCode });
         }
 
         res.status(200).json({
