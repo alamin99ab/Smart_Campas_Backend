@@ -403,8 +403,27 @@ exports.loginUser = async (req, res) => {
             });
         }
 
-        // Verify password
-        const isMatch = await user.comparePassword(password);
+        // Verify password (handle legacy/plaintext edge cases)
+        let isMatch = false;
+
+        if (!user.password) {
+            // Account exists without a stored password – force password reset via admin
+            return res.status(403).json({
+                success: false,
+                message: 'Account password not set. Contact your school administrator to reset the password.'
+            });
+        }
+
+        if (user.password.startsWith('$2')) {
+            // Normal bcrypt hash path
+            isMatch = await user.comparePassword(password);
+        } else {
+            // Legacy plaintext password stored (e.g., from old bulk imports). Upgrade on first successful login.
+            if (user.password === password) {
+                isMatch = true;
+                user.password = password; // pre-save hook will hash
+            }
+        }
 
         if (!isMatch) {
             user.loginAttempts = (user.loginAttempts || 0) + 1;
@@ -423,6 +442,11 @@ exports.loginUser = async (req, res) => {
                 success: false,
                 message: 'Invalid email or password' 
             });
+        }
+
+        // Persist any password upgrades performed above
+        if (isMatch && !user.password.startsWith('$2')) {
+            await user.save();
         }
 
         // Check 2FA if enabled

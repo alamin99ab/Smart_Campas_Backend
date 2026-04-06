@@ -251,18 +251,23 @@ exports.importStudents = async (req, res) => {
 
                 // Create login account for student if email provided
                 if (studentData.email || studentData.guardianEmail || studentData.guardian_email) {
-                    const email = studentData.email || studentData.guardianEmail || studentData.guardian_email;
+                    const email = (studentData.email || studentData.guardianEmail || studentData.guardian_email).trim().toLowerCase();
                     const existingUser = await User.findOne({ email });
                     
                     if (!existingUser) {
+                        const tempPassword = studentData.password || studentData.tempPassword || process.env.SEED_TEST_PASSWORD || 'TempPass123!';
                         const user = new User({
                             name: student.name,
                             email,
+                            password: tempPassword, // will be hashed by pre-save hook
                             role: 'student',
+                            schoolId: req.user.schoolId,
                             schoolCode,
+                            schoolName: req.user.schoolName,
                             phone: student.guardian?.phone || student.phone,
                             isApproved: true,
-                            emailVerified: true
+                            emailVerified: true,
+                            isActive: true
                         });
                         await user.save();
                     }
