@@ -58,6 +58,12 @@ exports.markStudentAttendance = async (req, res) => {
             attendanceData // Array of { studentId, status, notes }
         } = req.body;
 
+        const sectionValue = sectionId ? String(sectionId).trim() : undefined;
+        const sectionName = sectionValue ? sectionValue.toUpperCase() : undefined;
+        const sectionObjectId = sectionValue && mongoose.Types.ObjectId.isValid(sectionValue)
+            ? mongoose.Types.ObjectId(sectionValue)
+            : undefined;
+
         // Core validation
         if (!classId || !subjectId || !date || !attendanceData || !Array.isArray(attendanceData) || attendanceData.length === 0) {
             return res.status(400).json({ success: false, message: 'classId, subjectId, date and attendanceData are required' });
@@ -125,15 +131,21 @@ exports.markStudentAttendance = async (req, res) => {
             }
 
             // Check if attendance already exists
-            const existingAttendance = await AdvancedAttendance.findOne({
+            const attendanceQuery = {
                 schoolId,
                 studentId: mongoose.Types.ObjectId(studentId),
                 classId,
-                sectionId: sectionId ? sectionId : undefined,
                 subjectId,
                 date: new Date(date),
                 periodNumber
-            });
+            };
+            if (sectionObjectId) {
+                attendanceQuery.sectionId = sectionObjectId;
+            } else if (sectionName) {
+                attendanceQuery.section = sectionName;
+            }
+
+            const existingAttendance = await AdvancedAttendance.findOne(attendanceQuery);
 
             if (existingAttendance) {
                 // Update existing attendance
@@ -141,6 +153,9 @@ exports.markStudentAttendance = async (req, res) => {
                 existingAttendance.notes = notes;
                 existingAttendance.lateMinutes = lateMinutes;
                 existingAttendance.isLate = status === 'present' && lateMinutes > 0;
+                if (sectionName && !sectionObjectId) {
+                    existingAttendance.section = sectionName;
+                }
                 existingAttendance.updatedAt = new Date();
                 await existingAttendance.save();
                 markedAttendances.push(existingAttendance);
@@ -152,7 +167,8 @@ exports.markStudentAttendance = async (req, res) => {
                     attendanceType: 'student',
                     studentId: mongoose.Types.ObjectId(studentId),
                     classId,
-                    sectionId: sectionId ? sectionId : undefined,
+                    sectionId: sectionObjectId,
+                    section: sectionObjectId ? undefined : sectionName,
                     subjectId,
                     periodNumber,
                     date: new Date(date),
@@ -386,7 +402,7 @@ exports.teacherAttendance = async (req, res) => {
  */
 exports.getStudentAttendanceReport = async (req, res) => {
     try {
-        const { studentId } = req.params;
+        const studentId = req.params.studentId || req.user.id;
         const { academicSessionId, startDate, endDate } = req.query;
         const schoolId = req.tenant.schoolId;
 

@@ -239,8 +239,11 @@ exports.registerUser = async (req, res) => {
 // @route   POST /api/auth/login
 // @access  Public
 exports.loginUser = async (req, res) => {
-    const { email, password, schoolCode, twoFactorToken, isSuperAdminLogin } = req.body;
+    const { email: rawEmail, password, schoolCode: rawSchoolCode, twoFactorToken, isSuperAdminLogin } = req.body;
     const deviceId = req.headers['x-device-id'] || crypto.randomBytes(16).toString('hex');
+
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : rawEmail;
+    const schoolCode = typeof rawSchoolCode === 'string' ? rawSchoolCode.trim().toUpperCase() : rawSchoolCode;
 
     try {
         if (!email || !password) {
@@ -329,17 +332,19 @@ exports.loginUser = async (req, res) => {
         }
 
         // If user exists in DB, they already have a schoolCode
-        // For db-based users, we use their stored schoolCode
+        // Normalize stored school code for legacy records
+        const normalizedUserSchoolCode = typeof user.schoolCode === 'string' ? user.schoolCode.trim().toUpperCase() : user.schoolCode;
+
         // Only validate provided schoolCode if it's explicitly given
-        if (schoolCode && user.schoolCode && user.schoolCode !== schoolCode.toUpperCase()) {
+        if (schoolCode && normalizedUserSchoolCode && normalizedUserSchoolCode !== schoolCode) {
             return res.status(403).json({ 
                 success: false,
                 message: 'Invalid school code for this user account' 
             });
         }
 
-        // Use user's existing schoolCode from database
-        const userSchoolCode = user.schoolCode;
+        // Use normalized schoolCode for all downstream checks
+        const userSchoolCode = normalizedUserSchoolCode || schoolCode;
         
         // Verify school exists and is active
         if (userSchoolCode) {

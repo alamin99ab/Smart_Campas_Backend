@@ -38,6 +38,11 @@ const advancedAttendanceSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'Section' 
     },
+    section: {
+        type: String,
+        trim: true,
+        uppercase: true
+    },
     
     // For teacher attendance
     teacherId: { 
@@ -448,14 +453,24 @@ advancedAttendanceSchema.statics.getClassAttendanceReport = async function(
     sectionId,
     date
 ) {
-    const attendances = await this.find({
+    const query = {
         schoolId,
         classId,
-        sectionId,
         date: new Date(date),
         attendanceType: 'student'
-    }).populate('studentId', 'name rollNumber')
-     .populate('subjectId', 'subjectName');
+    };
+
+    if (sectionId) {
+        if (mongoose.Types.ObjectId.isValid(sectionId)) {
+            query.sectionId = mongoose.Types.ObjectId(sectionId);
+        } else {
+            query.section = String(sectionId).trim().toUpperCase();
+        }
+    }
+
+    const attendances = await this.find(query)
+        .populate('studentId', 'name rollNumber')
+        .populate('subjectId', 'subjectName');
     
     const summary = {
         totalStudents: attendances.length,
