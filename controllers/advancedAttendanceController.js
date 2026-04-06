@@ -5,6 +5,7 @@
 
 const mongoose = require('mongoose');
 const AdvancedAttendance = require('../models/AdvancedAttendance');
+const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
@@ -72,6 +73,10 @@ exports.markStudentAttendance = async (req, res) => {
         const hasInvalidStudent = attendanceData.some(item => !item.studentId || !item.status);
         if (hasInvalidStudent) {
             return res.status(400).json({ success: false, message: 'Invalid attendanceData: studentId and status required for each record' });
+        }
+
+        if (!req.tenant) {
+            return res.status(403).json({ success: false, message: 'Tenant context missing; ensure schoolCode is present on the user/token.' });
         }
 
         const schoolId = req.tenant.schoolId;
@@ -239,6 +244,43 @@ exports.markStudentAttendance = async (req, res) => {
                 }
             }
         });
+
+        // Best-effort legacy sync so principal/student views (Attendance model) show the same data
+        try {
+            const sectionForLegacy = sectionName || classInfo.section || 'A';
+            const subjectName = subjectInfo.subjectName || subjectInfo.subjectCode || 'Unknown';
+            const records = attendanceData.map((item) => ({
+                studentId: item.studentId,
+                status: mapLegacyStatus(item.status),
+                remarks: item.notes || ''
+            }));
+
+            const legacyFilter = {
+                schoolCode,
+                studentClass: classInfo.className || 'Class',
+                section: sectionForLegacy,
+                date: new Date(date),
+                subject: subjectName
+            };
+
+            await Attendance.findOneAndUpdate(
+                legacyFilter,
+                {
+                    $set: {
+                        records,
+                        takenBy: teacherId,
+                        updatedAt: new Date()
+                    }
+                },
+                {
+                    new: true,
+                    upsert: true,
+                    setDefaultsOnInsert: true
+                }
+            );
+        } catch (legacyError) {
+            console.warn('Legacy Attendance sync failed:', legacyError.message);
+        }
     } catch (error) {
         console.error('Mark student attendance error:', error);
         
@@ -264,6 +306,16 @@ exports.markStudentAttendance = async (req, res) => {
         });
     }
 };
+
+function mapLegacyStatus(status) {
+    switch ((status || '').toLowerCase()) {
+        case 'present': return 'Present';
+        case 'absent': return 'Absent';
+        case 'late': return 'Late';
+        case 'holiday': return 'Holiday';
+        default: return 'Present';
+    }
+}
 
 /**
  * @desc    Teacher Check-In/Check-Out
