@@ -33,20 +33,73 @@ exports.getTeacherDashboard = async (req, res) => {
         let todaySchedule = [];
 
         try {
-            // MongoDB with populate
-            assignedSubjects = await Subject.find({
+            // FIXED: Use TeacherAssignment as the single source of truth
+            const TeacherAssignment = require('../models/TeacherAssignment');
+            const assignments = await TeacherAssignment.find({
+                teacher: teacherId,
                 ...filter,
-                'teachers.teacherId': teacherId,
-                'teachers.isActive': true
-            }).populate('teachers.teacherId', 'name email');
+                isActive: true
+            })
+            .populate('subject', 'subjectName subjectCode')
+            .populate('classes', 'className section classLevel')
+            .lean();
 
-            assignedClasses = await Class.find({
-                ...filter,
-                'subjects.teacherId': teacherId
-            }).populate('classTeacher', 'name email')
-              .populate('subjects.subjectId', 'subjectName subjectCode')
-              .populate('subjects.teacherId', 'name email');
+            // Build assigned subjects from assignments
+            const subjectMap = new Map();
+            assignments.forEach(assignment => {
+                const subjectId = String(assignment.subject?._id || assignment.subject);
+                if (!subjectMap.has(subjectId)) {
+                    subjectMap.set(subjectId, {
+                        _id: subjectId,
+                        subjectName: assignment.subject?.subjectName || assignment.subjectName,
+                        subjectCode: assignment.subject?.subjectCode,
+                        teachers: [{
+                            teacherId: teacherId,
+                            teacherName: req.user.name,
+                            isActive: true
+                        }]
+                    });
+                }
+            });
+            assignedSubjects = Array.from(subjectMap.values());
 
+            // Build assigned classes from assignments
+            const classMap = new Map();
+            assignments.forEach(assignment => {
+                (assignment.classes || []).forEach(classDoc => {
+                    const classId = String(classDoc._id || classDoc);
+                    if (!classMap.has(classId)) {
+                        classMap.set(classId, {
+                            _id: classId,
+                            className: classDoc.className,
+                            section: classDoc.section,
+                            classLevel: classDoc.classLevel,
+                            subjects: [{
+                                subjectId: assignment.subject?._id || assignment.subject,
+                                subjectName: assignment.subject?.subjectName || assignment.subjectName,
+                                teacherId: teacherId,
+                                teacherName: req.user.name,
+                                isActive: true
+                            }]
+                        });
+                    } else {
+                        // Add subject to existing class if not already there
+                        const existingClass = classMap.get(classId);
+                        if (!existingClass.subjects.some(s => String(s.subjectId) === String(assignment.subject?._id || assignment.subject))) {
+                            existingClass.subjects.push({
+                                subjectId: assignment.subject?._id || assignment.subject,
+                                subjectName: assignment.subject?.subjectName || assignment.subjectName,
+                                teacherId: teacherId,
+                                teacherName: req.user.name,
+                                isActive: true
+                            });
+                        }
+                    }
+                });
+            });
+            assignedClasses = Array.from(classMap.values());
+
+            // Get today's schedule (unchanged)
             const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
             todaySchedule = await Routine.find({
                 ...filter,

@@ -57,11 +57,13 @@ exports.getStudentDashboard = async (req, res) => {
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
             
-            attendanceRecords = await Attendance.find({
-                schoolCode,
-                'attendance.studentId': studentId,
+            // FIXED: Use AdvancedAttendance instead of old Attendance model
+            const AdvancedAttendance = require('../models/AdvancedAttendance');
+            attendanceRecords = await AdvancedAttendance.find({
+                schoolId: req.tenant.schoolId,
+                studentId,
                 date: { $gte: thirtyDaysAgo }
-            });
+            }).select('date status');
 
             const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
             todayRoutine = await Routine.findOne({
@@ -118,17 +120,13 @@ exports.getStudentDashboard = async (req, res) => {
             });
         }
 
-        // Calculate attendance summary
-        const studentIdStr = studentId.toString();
+        // Calculate attendance summary - FIXED for AdvancedAttendance model
         let present = 0, absent = 0, late = 0;
         
         attendanceRecords.forEach(record => {
-            const att = record.attendance?.find(a => a.studentId?.toString() === studentIdStr);
-            if (att) {
-                if (att.status === 'Present') present++;
-                else if (att.status === 'Absent') absent++;
-                else if (att.status === 'Late') late++;
-            }
+            if (record.status === 'present') present++;
+            else if (record.status === 'absent') absent++;
+            else if (record.status === 'late') late++;
         });
 
         const attendanceSummary = {
