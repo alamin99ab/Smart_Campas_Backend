@@ -13,7 +13,200 @@ const Notice = require('../models/Notice');
 const Result = require('../models/Result');
 const Attendance = require('../models/Attendance');
 const Routine = require('../models/Routine');
+const ClassRoutine = require('../models/ClassRoutine');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_INDEX = DAY_NAMES.reduce((acc, day, index) => {
+    acc[day.toLowerCase()] = index;
+    return acc;
+}, {});
+
+const normalizeDayName = (value) => {
+    if (typeof value === 'number' && value >= 0 && value < DAY_NAMES.length) {
+        return DAY_NAMES[value];
+    }
+
+    if (!value) return null;
+    const key = String(value).trim().toLowerCase();
+    if (!key) return null;
+    return DAY_NAMES[DAY_INDEX[key]] || null;
+};
+
+const getCurrentDayName = () => DAY_NAMES[new Date().getDay()];
+
+const normalizeRoutinePeriod = (period, index) => {
+    const periodNumber = period?.periodNumber ?? period?.period ?? (index + 1);
+    const subjectName = period?.subjectName
+        || period?.subject
+        || period?.subjectId?.subjectName
+        || period?.subjectId?.name
+        || null;
+    const subjectCode = period?.subjectCode || period?.subjectId?.subjectCode || null;
+    const teacherName = period?.teacherName
+        || period?.teacher?.name
+        || period?.teacherId?.name
+        || (typeof period?.teacher === 'string' ? period.teacher : null);
+    const room = period?.room || period?.roomNumber || null;
+
+    return {
+        period: periodNumber,
+        periodNumber,
+        startTime: period?.startTime || null,
+        endTime: period?.endTime || null,
+        subject: subjectName || 'Subject',
+        subjectName: subjectName || 'Subject',
+        ...(subjectCode ? { subjectCode } : {}),
+        ...(teacherName ? { teacherName } : {}),
+        ...(room ? { room, roomNumber: room } : {})
+    };
+};
+
+const sortWeeklyRoutine = (routineRows) => routineRows.sort((a, b) => {
+    const aIndex = DAY_INDEX[String(a?.day || '').toLowerCase()];
+    const bIndex = DAY_INDEX[String(b?.day || '').toLowerCase()];
+    const safeA = Number.isInteger(aIndex) ? aIndex : 99;
+    const safeB = Number.isInteger(bIndex) ? bIndex : 99;
+    return safeA - safeB;
+});
+
+const buildWeeklyFromLegacyRoutine = (routineDoc) => {
+    if (!routineDoc || !Array.isArray(routineDoc.schedule)) return [];
+
+    const weekly = routineDoc.schedule
+        .map((row) => {
+            const day = normalizeDayName(row?.day);
+            if (!day) return null;
+            const periods = Array.isArray(row?.periods)
+                ? row.periods.map((period, index) => normalizeRoutinePeriod(period, index))
+                : [];
+            return { day, dayName: day, periods };
+        })
+        .filter(Boolean);
+
+    return sortWeeklyRoutine(weekly);
+};
+
+const buildWeeklyFromClassRoutine = (routineDocs) => {
+    if (!Array.isArray(routineDocs)) return [];
+
+    const weekly = routineDocs
+        .map((row) => {
+            const day = normalizeDayName(row?.day);
+            if (!day) return null;
+            const periods = Array.isArray(row?.periods)
+                ? row.periods.map((period, index) => normalizeRoutinePeriod(period, index))
+                : [];
+            return { day, dayName: day, periods };
+        })
+        .filter(Boolean);
+
+    return sortWeeklyRoutine(weekly);
+};
+
+const resolveStudentClassContext = async (studentUser) => {
+    if (!studentUser) return { classId: null, className: null, section: null };
+
+    let classId = null;
+    let className = null;
+    let section = studentUser.section || null;
+
+    if (studentUser.classId && typeof studentUser.classId === 'object' && studentUser.classId.className) {
+        classId = studentUser.classId._id || null;
+        className = studentUser.classId.className || null;
+        section = section || studentUser.classId.section || null;
+    } else if (studentUser.classId && mongoose.Types.ObjectId.isValid(studentUser.classId)) {
+        classId = studentUser.classId;
+        const classDoc = await Class.findById(studentUser.classId).select('className section').lean();
+        if (classDoc) {
+            className = classDoc.className || null;
+            section = section || classDoc.section || null;
+        }
+    }
+
+    return { classId, className, section };
+};
+
+const getStudentRoutineData = async ({ studentUser, schoolCode }) => {
+    const { classId, className, section } = await resolveStudentClassContext(studentUser);
+    if (!classId && !className) {
+        return { weeklyRoutine: [], todayRoutine: null };
+    }
+
+    const today = getCurrentDayName();
+    const now = new Date();
+    let weeklyRoutine = [];
+
+    // Primary source: legacy Routine model (class-level weekly schedule in one document).
+    if (classId) {
+        let routineDoc = await Routine.findOne({
+            schoolCode,
+            classId,
+            isActive: true,
+            effectiveFrom: { $lte: now },
+            $or: [
+                { effectiveTo: null },
+                { effectiveTo: { $exists: false } },
+                { effectiveTo: { $gte: now } }
+            ]
+        })
+            .sort({ effectiveFrom: -1, createdAt: -1 })
+            .populate('schedule.periods.subjectId', 'subjectName subjectCode')
+            .populate('schedule.periods.teacherId', 'name')
+            .lean();
+
+        // Fallback to latest active routine if effective window data is missing.
+        if (!routineDoc) {
+            routineDoc = await Routine.findOne({
+                schoolCode,
+                classId,
+                isActive: true
+            })
+                .sort({ createdAt: -1 })
+                .populate('schedule.periods.subjectId', 'subjectName subjectCode')
+                .populate('schedule.periods.teacherId', 'name')
+                .lean();
+        }
+
+        weeklyRoutine = buildWeeklyFromLegacyRoutine(routineDoc);
+    }
+
+    // Secondary source: ClassRoutine model (one document per day).
+    if (!weeklyRoutine.length && className) {
+        const baseQuery = {
+            schoolCode,
+            studentClass: className,
+            isActive: true
+        };
+
+        let classRoutineDocs = [];
+        const normalizedSection = section ? String(section).trim() : null;
+
+        if (normalizedSection) {
+            const sectionCandidates = [...new Set([
+                normalizedSection,
+                normalizedSection.toUpperCase()
+            ])];
+            classRoutineDocs = await ClassRoutine.find({
+                ...baseQuery,
+                section: { $in: sectionCandidates }
+            })
+                .populate('periods.teacher', 'name')
+                .lean();
+        }
+
+        if (!classRoutineDocs.length) {
+            classRoutineDocs = await ClassRoutine.find(baseQuery)
+                .populate('periods.teacher', 'name')
+                .lean();
+        }
+
+        weeklyRoutine = buildWeeklyFromClassRoutine(classRoutineDocs);
+    }
+
+    const todayRoutine = weeklyRoutine.find((row) => row.day === today) || null;
+    return { weeklyRoutine, todayRoutine };
+};
 
 /**
  * @desc    Get student dashboard
@@ -87,35 +280,8 @@ exports.getStudentDashboard = async (req, res) => {
                   }).select('date status')
                 : [];
 
-            const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-            todayRoutine = await Routine.findOne({
-                schoolCode,
-                classId: student?.classId?._id,
-                'schedule.day': today,
-                isActive: true
-            })
-            .populate('schedule.periods.subjectId', 'subjectName')
-            .populate('schedule.periods.teacherId', 'name');
-
-            // Fallback to ClassRoutine (new model) if legacy routine not found
-            if (!todayRoutine && student?.classId?._id) {
-                const ClassRoutine = require('../models/ClassRoutine');
-                const classRoutine = await ClassRoutine.findOne({
-                    schoolCode,
-                    studentClass: student.classId.className,
-                    section: student.classId.section,
-                    day: today,
-                    isActive: true
-                }).lean();
-                if (classRoutine) {
-                    todayRoutine = {
-                        schedule: [{
-                            day: today,
-                            periods: classRoutine.periods || []
-                        }]
-                    };
-                }
-            }
+            const routineData = await getStudentRoutineData({ studentUser: student, schoolCode });
+            todayRoutine = routineData.todayRoutine;
         } catch (dbError) {
             console.error('Student dashboard data fetch error:', dbError.message);
         }
@@ -161,15 +327,10 @@ exports.getStudentDashboard = async (req, res) => {
                 : 0
         };
 
-        // Get today's schedule from routine
-        const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-        let todaySchedule = null;
-        if (todayRoutine?.schedule) {
-            todaySchedule = todayRoutine.schedule.find(s => s.day === today);
-        }
-
         res.status(200).json({
             success: true,
+            code: 'STUDENT_DASHBOARD_FETCHED',
+            message: 'Student dashboard retrieved successfully',
             data: {
                 student: {
                     name: student.name,
@@ -185,7 +346,7 @@ exports.getStudentDashboard = async (req, res) => {
                         ? Math.round((attendanceSummary.present / attendanceSummary.total) * 100)
                         : 0
                 },
-                todayRoutine: todaySchedule
+                todayRoutine
             }
         });
 
@@ -513,18 +674,35 @@ exports.getTodayRoutine = async (req, res) => {
     try {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
-        const today = new Date().getDay();
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section')
+            .select('classId section');
+
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                code: 'STUDENT_NOT_FOUND',
+                message: 'Student not found',
+                data: null
+            });
+        }
+
+        const { todayRoutine } = await getStudentRoutineData({ studentUser: student, schoolCode });
+        const day = getCurrentDayName();
 
         res.status(200).json({
             success: true,
+            code: 'STUDENT_TODAY_ROUTINE_FETCHED',
             message: 'Today\'s routine retrieved',
-            data: { day: today, routine: [] }
+            data: todayRoutine || { day, dayName: day, periods: [], routine: [] }
         });
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Server error',
-            error: error.message
+            code: 'STUDENT_TODAY_ROUTINE_FETCH_FAILED',
+            message: 'Failed to retrieve today\'s routine',
+            data: null,
+            ...(process.env.NODE_ENV === 'development' ? { error: error.message } : {})
         });
     }
 };
@@ -538,17 +716,34 @@ exports.getWeeklyRoutine = async (req, res) => {
     try {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section')
+            .select('classId section');
+
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                code: 'STUDENT_NOT_FOUND',
+                message: 'Student not found',
+                data: null
+            });
+        }
+
+        const { weeklyRoutine } = await getStudentRoutineData({ studentUser: student, schoolCode });
 
         res.status(200).json({
             success: true,
+            code: 'STUDENT_WEEKLY_ROUTINE_FETCHED',
             message: 'Weekly routine retrieved',
-            data: { routine: [] }
+            data: weeklyRoutine
         });
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Server error',
-            error: error.message
+            code: 'STUDENT_WEEKLY_ROUTINE_FETCH_FAILED',
+            message: 'Failed to retrieve weekly routine',
+            data: [],
+            ...(process.env.NODE_ENV === 'development' ? { error: error.message } : {})
         });
     }
 };
@@ -844,17 +1039,39 @@ exports.getMyRoutine = async (req, res) => {
     try {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section')
+            .select('classId section');
+
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                code: 'STUDENT_NOT_FOUND',
+                message: 'Student not found',
+                data: null
+            });
+        }
+
+        const { weeklyRoutine, todayRoutine } = await getStudentRoutineData({ studentUser: student, schoolCode });
+        const day = getCurrentDayName();
 
         res.status(200).json({
             success: true,
+            code: 'STUDENT_ROUTINE_FETCHED',
             message: 'Routine retrieved',
-            data: { routine: [] }
+            data: {
+                routine: weeklyRoutine,
+                weeklyRoutine,
+                todayRoutine: todayRoutine || { day, dayName: day, periods: [], routine: [] }
+            }
         });
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Server error',
-            error: error.message
+            code: 'STUDENT_ROUTINE_FETCH_FAILED',
+            message: 'Failed to retrieve routine',
+            data: null,
+            ...(process.env.NODE_ENV === 'development' ? { error: error.message } : {})
         });
     }
 };
