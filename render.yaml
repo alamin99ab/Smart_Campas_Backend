@@ -1,22 +1,26 @@
-# 🚀 SMART CAMPUS SaaS - RENDER DEPLOYMENT CONFIGURATION
-# Production-ready deployment configuration for Render.com
-# Docs: https://render.com/docs/blueprint-spec
+# Smart Campus API - Render Blueprint (Production Safe)
+# https://render.com/docs/blueprint-spec
 
 services:
   - type: web
     name: smart-campus-api
     runtime: docker
     plan: starter
-    healthCheckPath: /api/health
     autoDeploy: true
+    healthCheckPath: /api/health
+
     envVars:
-      # Core Environment
+      # Core runtime
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 3001
-      
-      # Security
+
+      # Database
+      - key: MONGO_URI
+        sync: false
+
+      # Auth / security
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
@@ -29,8 +33,8 @@ services:
         value: 12
       - key: SESSION_SECRET
         generateValue: true
-      
-      # Super Admin (Configure in Render dashboard - required)
+
+      # Super admin (must be set in Render dashboard)
       - key: SUPER_ADMIN_EMAIL
         sync: false
       - key: SUPER_ADMIN_PASSWORD
@@ -38,35 +42,30 @@ services:
       - key: SUPER_ADMIN_NAME
         value: Super Admin
       - key: SUPER_ADMIN_PHONE
-        value: ""
-      
-      # Emergency Reset Key (for account recovery)
-      - key: EMERGENCY_RESET_KEY
-        value: smart_campus_2024_reset
-      - key: EMERGENCY_SECRET
-        value: emergency_reset_2024
-      
-      # Frontend Configuration
-      - key: FRONTEND_URL
-      - key: ALLOW_ALL_ORIGINS
-        value: true
-        value: https://smart-campus-api.onrender.com
-      - key: ALLOWED_ORIGINS
-        value: https://smart-campus-api.onrender.com,https://your-frontend-domain.com
-      
-      # Database (Configure in Render dashboard)
-      - key: MONGO_URI
         sync: false
-      - key: MONGO_DB_NAME
-        value: smartcampus
+
+      # CORS
+      - key: FRONTEND_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: ALLOW_ALL_ORIGINS
+        value: false
+
+      # Seeding (opt-in only, safe defaults)
+      - key: SEED_ON_STARTUP
+        value: false
+      - key: FORCE_SEED_RESET
+        value: false
+      # Legacy alias support in code; keep false to avoid accidental reset
       - key: AUTO_SEED_TEST_DATA
-        value: true
+        value: false
       - key: AUTO_SEED_RESET_DATA
-        value: true
+        value: false
       - key: SEED_TEST_PASSWORD
         sync: false
-      
-      # Email Service (Optional - Configure in dashboard)
+
+      # Email (optional)
       - key: EMAIL_HOST
         sync: false
       - key: EMAIL_PORT
@@ -78,53 +77,33 @@ services:
       - key: EMAIL_PASS
         sync: false
       - key: EMAIL_FROM
-        value: noreply@smartcampus.com
-      
-      # AI Services (Optional - Configure in dashboard)
-      - key: OPENAI_API_KEY
         sync: false
-      - key: HUGGINGFACE_API_KEY
-        sync: false
-      - key: AI_SERVICE_URL
-        value: http://localhost:8000
-      
-      # File Storage (Optional - Configure in dashboard)
+
+      # Cloud storage (optional)
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
-      
-      # SMS Service (Optional - Configure in dashboard)
+
+      # AI (optional)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: HUGGINGFACE_API_KEY
+        sync: false
+      - key: AI_SERVICE_URL
+        sync: false
+
+      # SMS (optional)
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
       - key: TWILIO_PHONE_NUMBER
         sync: false
-      
-      # Security & Performance
-      - key: RATE_LIMIT_WINDOW_MS
-        value: 900000
-      - key: RATE_LIMIT_MAX_REQUESTS
-        value: 100
-      - key: CACHE_TTL
-        value: 3600
-      - key: MAX_CONNECTIONS
-        value: 100
-      - key: CONNECTION_TIMEOUT
-        value: 30000
-      
-      # Business Configuration
-      - key: DEFAULT_SUBSCRIPTION_PLAN
-        value: trial
-      - key: MAX_SCHOOLS_PER_PLAN
-        value: 100
-      - key: FREE_TRIAL_DAYS
-        value: 30
-      
-      # Feature Flags
+
+      # Feature flags
       - key: REQUIRE_EMAIL_VERIFICATION
         value: false
       - key: SEND_ABSENT_SMS
@@ -135,16 +114,11 @@ services:
         value: true
       - key: ENABLE_REAL_TIME_NOTIFICATIONS
         value: true
-      
-      # Monitoring
-      - key: ENABLE_METRICS
-        value: true
+
+      # Logging
       - key: LOG_LEVEL
         value: info
-      - key: HEALTH_CHECK_INTERVAL
-        value: 30000
-    
-    # Persistent storage for uploads
+
     disk:
       name: smart-campus-uploads
       mountPath: /app/uploads

@@ -3,6 +3,7 @@
  * Industry-level routine management with drag-drop UI and conflict detection
  */
 
+const mongoose = require('mongoose');
 const AdvancedRoutine = require('../models/AdvancedRoutine');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
@@ -10,7 +11,52 @@ const Teacher = require('../models/Teacher');
 const Room = require('../models/Room');
 const AcademicSession = require('../models/AcademicSession');
 const School = require('../models/School');
+const TeacherAssignment = require('../models/TeacherAssignment');
 const AuditLog = require('../models/AuditLog');
+
+const WEEK_DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+const getTenantContext = (req, res) => {
+    const schoolId = req.tenant?.schoolId;
+    const schoolCode = req.tenant?.schoolCode || req.user?.schoolCode;
+
+    if (!schoolId || !schoolCode) {
+        res.status(400).json({
+            success: false,
+            message: 'School tenant context is required'
+        });
+        return null;
+    }
+
+    return { schoolId, schoolCode };
+};
+
+const toObjectId = (value, fieldName) => {
+    if (!value || !mongoose.Types.ObjectId.isValid(value)) {
+        return { error: `${fieldName} is invalid` };
+    }
+
+    return { value: new mongoose.Types.ObjectId(value) };
+};
+
+const toRoutineDay = (value) => {
+    if (typeof value === 'number' && value >= 0 && value <= 6) {
+        return WEEK_DAYS[value];
+    }
+
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (WEEK_DAYS.includes(normalized)) {
+            return normalized;
+        }
+
+        if (/^[0-6]$/.test(normalized)) {
+            return WEEK_DAYS[Number(normalized)];
+        }
+    }
+
+    return null;
+};
 
 /**
  * @desc    Create Weekly Routine
@@ -26,11 +72,34 @@ exports.createWeeklyRoutine = async (req, res) => {
             routines 
         } = req.body;
 
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId, schoolCode } = tenant;
+
+        if (!classId || !academicSessionId || !Array.isArray(routines) || routines.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'classId, academicSessionId and routines[] are required'
+            });
+        }
+
+        const classIdResult = toObjectId(classId, 'classId');
+        const academicSessionResult = toObjectId(academicSessionId, 'academicSessionId');
+        if (classIdResult.error || academicSessionResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: classIdResult.error || academicSessionResult.error
+            });
+        }
+
+        const sectionResult = sectionId && mongoose.Types.ObjectId.isValid(sectionId)
+            ? { value: new mongoose.Types.ObjectId(sectionId) }
+            : null;
 
         // Validate academic session
         const academicSession = await AcademicSession.findOne({
-            _id: academicSessionId,
+            _id: academicSessionResult.value,
             schoolId
         });
 
@@ -43,8 +112,8 @@ exports.createWeeklyRoutine = async (req, res) => {
 
         // Validate class
         const classInfo = await Class.findOne({
-            _id: classId,
-            schoolId
+            _id: classIdResult.value,
+            schoolCode
         });
 
         if (!classInfo) {
@@ -70,19 +139,65 @@ exports.createWeeklyRoutine = async (req, res) => {
                 notes
             } = routineData;
 
+            const normalizedDay = toRoutineDay(day);
+            if (!normalizedDay) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid routine day: ${day}`
+                });
+            }
+
+            const subjectResult = toObjectId(subjectId, 'subjectId');
+            const teacherResult = toObjectId(teacherId, 'teacherId');
+            if (subjectResult.error || teacherResult.error) {
+                return res.status(400).json({
+                    success: false,
+                    message: subjectResult.error || teacherResult.error
+                });
+            }
+
+            const subjectExists = await Subject.exists({ _id: subjectResult.value, schoolCode, isActive: true });
+            if (!subjectExists) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid subject for this school: ${subjectId}`
+                });
+            }
+
+            let roomObjectId = undefined;
+            if (roomId) {
+                const roomResult = toObjectId(roomId, 'roomId');
+                if (roomResult.error) {
+                    return res.status(400).json({
+                        success: false,
+                        message: roomResult.error
+                    });
+                }
+
+                const roomExists = await Room.exists({ _id: roomResult.value, schoolCode });
+                if (!roomExists) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Invalid room for this school: ${roomId}`
+                    });
+                }
+
+                roomObjectId = roomResult.value;
+            }
+
             // Create routine
             const routine = new AdvancedRoutine({
                 schoolId,
-                academicSessionId,
-                classId,
-                sectionId,
-                day,
+                academicSessionId: academicSessionResult.value,
+                classId: classIdResult.value,
+                sectionId: sectionResult?.value,
+                day: normalizedDay,
                 periodNumber,
                 startTime,
                 endTime,
-                subjectId,
-                teacherId,
-                roomId,
+                subjectId: subjectResult.value,
+                teacherId: teacherResult.value,
+                roomId: roomObjectId,
                 notes,
                 createdBy: req.user.id,
                 status: 'draft'
@@ -158,11 +273,21 @@ exports.dragDropUpdate = async (req, res) => {
             newRoomId
         } = req.body;
 
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
+        const routineIdResult = toObjectId(routineId, 'routineId');
+        if (routineIdResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: routineIdResult.error
+            });
+        }
 
         // Find routine
         const routine = await AdvancedRoutine.findOne({
-            _id: routineId,
+            _id: routineIdResult.value,
             schoolId
         });
 
@@ -183,7 +308,15 @@ exports.dragDropUpdate = async (req, res) => {
         };
 
         // Update routine
-        routine.day = newDay;
+        const normalizedDay = toRoutineDay(newDay);
+        if (!normalizedDay) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid day: ${newDay}`
+            });
+        }
+
+        routine.day = normalizedDay;
         routine.periodNumber = newPeriodNumber;
         routine.startTime = newStartTime;
         routine.endTime = newEndTime;
@@ -250,22 +383,46 @@ exports.dragDropUpdate = async (req, res) => {
 exports.getWeeklyRoutine = async (req, res) => {
     try {
         const { classId, sectionId, academicSessionId } = req.params;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
 
-        const routines = await AdvancedRoutine.getWeeklyRoutine(
+        const { schoolId } = tenant;
+        const classIdResult = toObjectId(classId, 'classId');
+        const sessionIdResult = toObjectId(academicSessionId, 'academicSessionId');
+        if (classIdResult.error || sessionIdResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: classIdResult.error || sessionIdResult.error
+            });
+        }
+
+        const query = {
             schoolId,
-            classId,
-            sectionId
-        );
+            classId: classIdResult.value,
+            academicSessionId: sessionIdResult.value,
+            status: 'published',
+            routineType: 'regular'
+        };
+
+        if (sectionId && mongoose.Types.ObjectId.isValid(sectionId)) {
+            query.sectionId = new mongoose.Types.ObjectId(sectionId);
+        }
+
+        const routines = await AdvancedRoutine.find(query)
+            .populate('teacherId', 'name email')
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('roomId', 'roomNumber')
+            .sort({ day: 1, periodNumber: 1 })
+            .lean();
 
         // Group by day
         const weeklyRoutine = {};
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
         days.forEach(day => {
-            weeklyRoutine[day] = routines
-                .filter(routine => routine.day === day)
-                .sort((a, b) => a.periodNumber - b.periodNumber);
+                weeklyRoutine[day] = routines
+                    .filter(routine => routine.day === day)
+                    .sort((a, b) => a.periodNumber - b.periodNumber);
         });
 
         res.status(200).json({
@@ -274,7 +431,7 @@ exports.getWeeklyRoutine = async (req, res) => {
                 weeklyRoutine,
                 summary: {
                     totalPeriods: routines.length,
-                    conflicts: routines.filter(r => r.hasConflicts()).length
+                    conflicts: routines.filter(r => Array.isArray(r.conflicts) && r.conflicts.some(conflict => !conflict.resolved)).length
                 }
             }
         });
@@ -295,7 +452,10 @@ exports.getWeeklyRoutine = async (req, res) => {
 exports.publishRoutine = async (req, res) => {
     try {
         const { classId, sectionId, academicSessionId } = req.body;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
 
         // Check for conflicts before publishing
         const conflicts = await AdvancedRoutine.detectAllConflicts(schoolId, academicSessionId);
@@ -366,7 +526,10 @@ exports.getTeacherSchedule = async (req, res) => {
     try {
         const { teacherId } = req.params;
         const { startDate, endDate, day } = req.query;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
 
         // Check authorization
         if (req.user.role !== 'principal' && req.user.id !== teacherId) {
@@ -410,9 +573,19 @@ exports.getTeacherSchedule = async (req, res) => {
 exports.detectAllConflicts = async (req, res) => {
     try {
         const { academicSessionId } = req.params;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
 
-        const conflicts = await AdvancedRoutine.detectAllConflicts(schoolId, academicSessionId);
+        const { schoolId } = tenant;
+        const sessionIdResult = toObjectId(academicSessionId, 'academicSessionId');
+        if (sessionIdResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: sessionIdResult.error
+            });
+        }
+
+        const conflicts = await AdvancedRoutine.detectAllConflicts(schoolId, sessionIdResult.value);
 
         res.status(200).json({
             success: true,
@@ -443,10 +616,20 @@ exports.detectAllConflicts = async (req, res) => {
 exports.resolveConflict = async (req, res) => {
     try {
         const { routineId, conflictIndex } = req.params;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
+        const routineIdResult = toObjectId(routineId, 'routineId');
+        if (routineIdResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: routineIdResult.error
+            });
+        }
 
         const routine = await AdvancedRoutine.findOne({
-            _id: routineId,
+            _id: routineIdResult.value,
             schoolId
         });
 
@@ -506,7 +689,49 @@ exports.createExamRoutine = async (req, res) => {
             examSchedule
         } = req.body;
 
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId, schoolCode } = tenant;
+
+        if (!examName || !classId || !academicSessionId || !Array.isArray(examSchedule) || examSchedule.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'examName, classId, academicSessionId and examSchedule[] are required'
+            });
+        }
+
+        const classIdResult = toObjectId(classId, 'classId');
+        const sessionIdResult = toObjectId(academicSessionId, 'academicSessionId');
+        if (classIdResult.error || sessionIdResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: classIdResult.error || sessionIdResult.error
+            });
+        }
+
+        const sectionResult = sectionId && mongoose.Types.ObjectId.isValid(sectionId)
+            ? { value: new mongoose.Types.ObjectId(sectionId) }
+            : null;
+
+        const [academicSession, classInfo] = await Promise.all([
+            AcademicSession.findOne({ _id: sessionIdResult.value, schoolId }).select('_id academicYear'),
+            Class.findOne({ _id: classIdResult.value, schoolCode }).select('_id schoolCode academicYear')
+        ]);
+
+        if (!academicSession) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid academic session'
+            });
+        }
+
+        if (!classInfo) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid class for this school'
+            });
+        }
 
         const createdRoutines = [];
 
@@ -517,22 +742,147 @@ exports.createExamRoutine = async (req, res) => {
                 startTime,
                 endTime,
                 roomId,
-                maxStudents
+                teacherId: providedTeacherId
             } = schedule;
+
+            const parsedExamDate = new Date(examDate);
+            if (Number.isNaN(parsedExamDate.getTime())) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid examDate for subject ${subjectId}`
+                });
+            }
+
+            const normalizedDay = toRoutineDay(parsedExamDate.getDay());
+            if (!normalizedDay) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Unable to resolve day for examDate ${examDate}`
+                });
+            }
+
+            const subjectResult = toObjectId(subjectId, 'subjectId');
+            if (subjectResult.error) {
+                return res.status(400).json({
+                    success: false,
+                    message: subjectResult.error
+                });
+            }
+
+            const subjectExists = await Subject.exists({
+                _id: subjectResult.value,
+                schoolCode,
+                isActive: true
+            });
+            if (!subjectExists) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid subject for this school: ${subjectId}`
+                });
+            }
+
+            let resolvedTeacherId = providedTeacherId;
+            if (!resolvedTeacherId) {
+                const subjectIdString = String(subjectResult.value);
+                const classIdString = String(classIdResult.value);
+                const preferredYear = academicSession.academicYear || classInfo.academicYear;
+
+                let assignment = await TeacherAssignment.aggregate([
+                    { $match: { schoolCode, isActive: true } },
+                    {
+                        $addFields: {
+                            subjectAsString: { $toString: '$subject' },
+                            classesAsString: {
+                                $map: {
+                                    input: '$classes',
+                                    as: 'classRef',
+                                    in: { $toString: '$$classRef' }
+                                }
+                            }
+                        }
+                    },
+                    {
+                        $match: {
+                            subjectAsString: subjectIdString,
+                            classesAsString: classIdString,
+                            academicYear: preferredYear
+                        }
+                    },
+                    { $project: { teacher: 1 } },
+                    { $limit: 1 }
+                ]);
+
+                if (!assignment || assignment.length === 0) {
+                    assignment = await TeacherAssignment.aggregate([
+                        { $match: { schoolCode, isActive: true } },
+                        {
+                            $addFields: {
+                                subjectAsString: { $toString: '$subject' },
+                                classesAsString: {
+                                    $map: {
+                                        input: '$classes',
+                                        as: 'classRef',
+                                        in: { $toString: '$$classRef' }
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            $match: {
+                                subjectAsString: subjectIdString,
+                                classesAsString: classIdString
+                            }
+                        },
+                        { $project: { teacher: 1 } },
+                        { $limit: 1 }
+                    ]);
+                }
+
+                resolvedTeacherId = assignment?.[0]?.teacher ? String(assignment[0].teacher) : null;
+            }
+
+            const teacherResult = toObjectId(resolvedTeacherId, 'teacherId');
+            if (teacherResult.error) {
+                return res.status(400).json({
+                    success: false,
+                    message: `teacherId is required for subject ${subjectId} in exam routine`
+                });
+            }
+
+            let roomObjectId = undefined;
+            if (roomId) {
+                const roomResult = toObjectId(roomId, 'roomId');
+                if (roomResult.error) {
+                    return res.status(400).json({
+                        success: false,
+                        message: roomResult.error
+                    });
+                }
+
+                const roomExists = await Room.exists({ _id: roomResult.value, schoolCode });
+                if (!roomExists) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Invalid room for this school: ${roomId}`
+                    });
+                }
+                roomObjectId = roomResult.value;
+            }
 
             const routine = new AdvancedRoutine({
                 schoolId,
-                academicSessionId,
-                classId,
-                sectionId,
-                day: examDate.getDay(), // Convert to day name
+                academicSessionId: sessionIdResult.value,
+                classId: classIdResult.value,
+                sectionId: sectionResult?.value,
+                day: normalizedDay,
                 periodNumber: 1, // Exam periods are typically single
                 startTime,
                 endTime,
-                subjectId,
-                roomId,
+                subjectId: subjectResult.value,
+                teacherId: teacherResult.value,
+                roomId: roomObjectId,
                 routineType: 'exam',
-                notes: `${examName} - ${examType}`,
+                notes: `${examName}${examType ? ` - ${examType}` : ''} | Exam Date: ${parsedExamDate.toISOString().split('T')[0]}`,
                 createdBy: req.user.id,
                 status: 'draft'
             });
@@ -586,11 +936,21 @@ exports.createExamRoutine = async (req, res) => {
 exports.getRoutineAnalytics = async (req, res) => {
     try {
         const { academicSessionId } = req.query;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
+        const sessionIdResult = toObjectId(academicSessionId, 'academicSessionId');
+        if (sessionIdResult.error) {
+            return res.status(400).json({
+                success: false,
+                message: sessionIdResult.error
+            });
+        }
 
         // Get routine statistics
         const stats = await AdvancedRoutine.aggregate([
-            { $match: { schoolId, academicSessionId: new mongoose.Types.ObjectId(academicSessionId) } },
+            { $match: { schoolId, academicSessionId: sessionIdResult.value } },
             {
                 $group: {
                     _id: null,
@@ -610,7 +970,7 @@ exports.getRoutineAnalytics = async (req, res) => {
 
         // Get teacher load distribution
         const teacherLoad = await AdvancedRoutine.aggregate([
-            { $match: { schoolId, academicSessionId: new mongoose.Types.ObjectId(academicSessionId) } },
+            { $match: { schoolId, academicSessionId: sessionIdResult.value } },
             {
                 $group: {
                     _id: '$teacherId',
@@ -638,7 +998,7 @@ exports.getRoutineAnalytics = async (req, res) => {
 
         // Get room utilization
         const roomUtilization = await AdvancedRoutine.aggregate([
-            { $match: { schoolId, academicSessionId: new mongoose.Types.ObjectId(academicSessionId) } },
+            { $match: { schoolId, academicSessionId: sessionIdResult.value } },
             {
                 $group: {
                     _id: '$roomId',

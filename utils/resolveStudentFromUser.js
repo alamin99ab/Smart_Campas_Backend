@@ -23,11 +23,11 @@ async function resolveStudentObjectIdFromUser(user) {
     }
 
     const roll =
-        rollRaw !== undefined && rollRaw !== null && rollRaw !== ''
-            ? parseInt(String(rollRaw), 10)
-            : NaN;
+        rollRaw !== undefined && rollRaw !== null && String(rollRaw).trim() !== ''
+            ? String(rollRaw).trim()
+            : null;
 
-    if (!studentClass || !Number.isFinite(roll)) {
+    if (!studentClass || !roll) {
         return null;
     }
 

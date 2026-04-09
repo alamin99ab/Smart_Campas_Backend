@@ -2,6 +2,7 @@ const User = require('../models/User');
 const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
 
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -81,6 +82,7 @@ const createAuditLog = async (userId, action, details, req) => {
     try {
         // Use directly imported AuditLog model
         if (!AuditLog) return; // Skip audit logging if not available
+        if (mongoose.connection.readyState !== 1) return; // Skip audit writes when DB is unavailable
         
         // Check if this is an env-based user (super_admin_env)
         const isEnvUser = userId === 'super_admin_env' || (req && req.isEnvUser);
@@ -106,6 +108,57 @@ const createAuditLog = async (userId, action, details, req) => {
     } catch (error) {
         console.error('Audit log error:', error);
     }
+};
+
+const sendAuthError = (res, statusCode, message, code, details) => {
+    return res.status(statusCode).json({
+        success: false,
+        code,
+        message,
+        ...(details && process.env.NODE_ENV !== 'production' ? { details } : {})
+    });
+};
+
+const sendAuthSuccess = (res, { statusCode = 200, code = 'REQUEST_SUCCESS', message = 'Request successful', data, legacyFields = {} } = {}) => {
+    const payload = {
+        success: true,
+        code,
+        message,
+        ...(data !== undefined ? { data } : {}),
+        ...legacyFields
+    };
+
+    return res.status(statusCode).json(payload);
+};
+
+const isDbUnavailableError = (error) => {
+    return error?.name === 'MongoServerSelectionError'
+        || error?.name === 'MongooseServerSelectionError'
+        || error?.name === 'MongoNetworkError'
+        || /buffering timed out/i.test(error?.message || '');
+};
+
+const handleAuthError = (res, error, fallbackMessage) => {
+    if (error?.name === 'CastError') {
+        return sendAuthError(res, 400, 'Invalid request data', 'INVALID_REQUEST_DATA', error.message);
+    }
+
+    if (isDbUnavailableError(error)) {
+        return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE', error.message);
+    }
+
+    return sendAuthError(res, 500, fallbackMessage, 'INTERNAL_ERROR', error?.message);
+};
+
+const getAuthenticatedUserId = (req, res) => {
+    const userId = req?.user?._id || req?.user?.id;
+
+    if (!userId) {
+        sendAuthError(res, 401, 'Authentication required. Please login and try again.', 'AUTH_REQUIRED');
+        return null;
+    }
+
+    return userId;
 };
 
 // ==================== AUTH CONTROLLERS ====================
@@ -247,10 +300,7 @@ exports.loginUser = async (req, res) => {
 
     try {
         if (!email || !password) {
-            return res.status(400).json({ 
-                success: false,
-                message: 'Email and password required' 
-            });
+            return sendAuthError(res, 400, 'Email and password required', 'VALIDATION_ERROR');
         }
 
         // ============================================
@@ -270,10 +320,7 @@ exports.loginUser = async (req, res) => {
             }
             
             if (!isSuperAdminValid) {
-                return res.status(401).json({ 
-                    success: false,
-                    message: 'Invalid credentials' 
-                });
+                return sendAuthError(res, 401, 'Invalid credentials', 'INVALID_CREDENTIALS');
             }
             
             const superAdminToken = jwt.sign(
@@ -289,8 +336,8 @@ exports.loginUser = async (req, res) => {
             
             const refreshToken = generateRefreshToken('super_admin_env', deviceId);
             
-            return res.json({
-                success: true,
+            return sendAuthSuccess(res, {
+                code: 'LOGIN_SUCCESS',
                 message: 'Super Admin login successful',
                 data: {
                     user: {
@@ -311,6 +358,15 @@ exports.loginUser = async (req, res) => {
         // ============================================
         // SCHOOL USERS LOGIN (Principal, Teacher, Student, etc.)
         // ============================================
+
+        if (mongoose.connection.readyState !== 1) {
+            return sendAuthError(
+                res,
+                503,
+                'Database unavailable. School user login is temporarily unavailable.',
+                'DB_UNAVAILABLE'
+            );
+        }
         
         // First, find user by email
         const user = await User.findOne({ email }).select(
@@ -318,17 +374,16 @@ exports.loginUser = async (req, res) => {
         );
 
         if (!user) {
-            return res.status(401).json({ 
-                success: false,
-                message: 'Invalid credentials' 
-            });
+            return sendAuthError(res, 401, 'Invalid credentials', 'INVALID_CREDENTIALS');
         }
 
         if (user.role === 'super_admin') {
-            return res.status(403).json({
-                success: false,
-                message: 'Super Admin is environment-based only. Remove any legacy super_admin DB user and use SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD.'
-            });
+            return sendAuthError(
+                res,
+                403,
+                'Super Admin is environment-based only. Remove any legacy super_admin DB user and use SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD.',
+                'SUPER_ADMIN_ENV_ONLY'
+            );
         }
 
         // If user exists in DB, they already have a schoolCode
@@ -337,10 +392,7 @@ exports.loginUser = async (req, res) => {
 
         // Only validate provided schoolCode if it's explicitly given
         if (schoolCode && normalizedUserSchoolCode && normalizedUserSchoolCode !== schoolCode) {
-            return res.status(403).json({ 
-                success: false,
-                message: 'Invalid school code for this user account' 
-            });
+            return sendAuthError(res, 403, 'Invalid school code for this user account', 'INVALID_SCHOOL_CODE');
         }
 
         // Use normalized schoolCode for all downstream checks
@@ -351,67 +403,48 @@ exports.loginUser = async (req, res) => {
             const school = await School.findOne({ schoolCode: userSchoolCode });
             
             if (!school) {
-                return res.status(404).json({ 
-                    success: false,
-                    message: 'School not found. Contact administrator.' 
-                });
+                return sendAuthError(res, 404, 'School not found. Contact administrator.', 'SCHOOL_NOT_FOUND');
             }
             
             if (!school.isActive) {
-                return res.status(403).json({ 
-                    success: false,
-                    message: 'School account is inactive. Contact administrator.' 
-                });
+                return sendAuthError(res, 403, 'School account is inactive. Contact administrator.', 'SCHOOL_INACTIVE');
             }
             
             // Check subscription status
             if (school.subscription?.status !== 'active') {
-                return res.status(403).json({ 
-                    success: false,
-                    message: 'School subscription has expired. Contact administrator.' 
-                });
+                return sendAuthError(res, 403, 'School subscription has expired. Contact administrator.', 'SUBSCRIPTION_EXPIRED');
             }
         }
 
         // Account status checks
         if (user.isBlocked) {
             await createAuditLog(user._id, 'LOGIN_BLOCKED', { reason: 'Account blocked' }, req);
-            return res.status(403).json({ 
-                success: false,
-                message: 'Account is blocked. Contact your administrator.' 
-            });
+            return sendAuthError(res, 403, 'Account is blocked. Contact your administrator.', 'ACCOUNT_BLOCKED');
         }
 
         if (!user.isActive) {
-            return res.status(403).json({ 
-                success: false,
-                message: 'Account is inactive. Contact your administrator.' 
-            });
+            return sendAuthError(res, 403, 'Account is inactive. Contact your administrator.', 'ACCOUNT_INACTIVE');
         }
 
         if (user.role !== 'super_admin' && !user.isApproved) {
-            return res.status(403).json({ 
-                success: false,
-                message: 'Account pending approval. Please contact your administrator.' 
-            });
+            return sendAuthError(res, 403, 'Account pending approval. Please contact your administrator.', 'ACCOUNT_NOT_APPROVED');
         }
 
         if (!user.emailVerified && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
-            return res.status(403).json({ 
-                success: false,
-                message: 'Please verify your email first' 
-            });
+            return sendAuthError(res, 403, 'Please verify your email first', 'EMAIL_NOT_VERIFIED');
         }
 
         // Verify password (handle legacy/plaintext edge cases)
         let isMatch = false;
 
         if (!user.password) {
-            // Account exists without a stored password – force password reset via admin
-            return res.status(403).json({
-                success: false,
-                message: 'Account password not set. Contact your school administrator to reset the password.'
-            });
+            // Account exists without a stored password - force password reset via admin.
+            return sendAuthError(
+                res,
+                403,
+                'Account password not set. Contact your school administrator to reset the password.',
+                'PASSWORD_NOT_SET'
+            );
         }
 
         if (user.password.startsWith('$2')) {
@@ -431,17 +464,16 @@ exports.loginUser = async (req, res) => {
                 user.isBlocked = true;
                 await user.save();
                 await createAuditLog(user._id, 'ACCOUNT_BLOCKED', { reason: 'Too many failed login attempts' }, req);
-                return res.status(403).json({ 
-                    success: false,
-                    message: 'Too many incorrect password attempts. Account blocked. Contact administrator.' 
-                });
+                return sendAuthError(
+                    res,
+                    403,
+                    'Too many incorrect password attempts. Account blocked. Contact administrator.',
+                    'ACCOUNT_BLOCKED'
+                );
             }
             await user.save();
             await createAuditLog(user._id, 'LOGIN_FAILED', { attempt: user.loginAttempts }, req);
-            return res.status(401).json({ 
-                success: false,
-                message: 'Invalid email or password' 
-            });
+            return sendAuthError(res, 401, 'Invalid email or password', 'INVALID_CREDENTIALS');
         }
 
         // Persist any password upgrades performed above
@@ -454,6 +486,7 @@ exports.loginUser = async (req, res) => {
             if (!twoFactorToken) {
                 return res.status(403).json({
                     success: false,
+                    code: 'TWO_FA_TOKEN_REQUIRED',
                     message: '2FA token required',
                     twoFactorRequired: true
                 });
@@ -465,10 +498,7 @@ exports.loginUser = async (req, res) => {
             });
             if (!verified) {
                 await createAuditLog(user._id, '2FA_FAILED', {}, req);
-                return res.status(401).json({ 
-                    success: false,
-                    message: 'Invalid 2FA token' 
-                });
+                return sendAuthError(res, 401, 'Invalid 2FA token', 'INVALID_TWO_FA_TOKEN');
             }
         }
 
@@ -538,8 +568,8 @@ exports.loginUser = async (req, res) => {
         }
 
         // Return success response with clear structure
-        res.json({
-            success: true,
+        return sendAuthSuccess(res, {
+            code: 'LOGIN_SUCCESS',
             message: 'Login successful',
             data: {
                 user: {
@@ -563,11 +593,13 @@ exports.loginUser = async (req, res) => {
     } catch (error) {
         console.error('❌ Login error:', error.message);
         console.error('Stack:', error.stack);
-        res.status(500).json({ 
-            success: false,
-            message: 'Login failed. Please try again.',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+        return sendAuthError(
+            res,
+            500,
+            'Login failed. Please try again.',
+            'LOGIN_FAILED',
+            process.env.NODE_ENV === 'development' ? error.message : undefined
+        );
     }
 };
 
@@ -577,20 +609,20 @@ exports.loginUser = async (req, res) => {
 exports.refreshToken = async (req, res) => {
     const { refreshToken } = req.body;
     const cookieToken = req.cookies?.refreshToken;
-    const deviceId = req.headers['x-device-id'];
+    const deviceId = req.headers['x-device-id'] || req.body?.deviceId;
 
     try {
         const token = refreshToken || cookieToken;
 
         if (!token) {
-            return res.status(401).json({ message: 'No refresh token' });
+            return sendAuthError(res, 401, 'No refresh token', 'REFRESH_TOKEN_REQUIRED');
         }
 
         const decoded = jwt.verify(token, getRefreshSecret());
 
         if (decoded.deviceId && decoded.deviceId !== deviceId) {
             await createAuditLog(decoded.id, 'REFRESH_TOKEN_DEVICE_MISMATCH', {}, req);
-            return res.status(401).json({ message: 'Invalid device' });
+            return sendAuthError(res, 401, 'Invalid device', 'INVALID_DEVICE');
         }
 
         if (decoded.id === 'super_admin_env') {
@@ -609,16 +641,25 @@ exports.refreshToken = async (req, res) => {
                 setTokenCookie(res, newToken);
                 setRefreshTokenCookie(res, newRefreshToken);
             }
-            return res.json({
-                token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
-                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+            return sendAuthSuccess(res, {
+                code: 'TOKEN_REFRESHED',
+                message: 'Token refreshed successfully',
+                data: {
+                    token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
+                    refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+                },
+                // Keep legacy flat shape for existing clients.
+                legacyFields: {
+                    token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
+                    refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+                }
             });
         }
 
         const user = await User.findOne({ _id: decoded.id, 'sessions.token': token });
 
         if (!user) {
-            return res.status(401).json({ message: 'Invalid refresh token' });
+            return sendAuthError(res, 401, 'Invalid refresh token', 'INVALID_REFRESH_TOKEN');
         }
 
         const newToken = generateToken(user._id, user.role, user.schoolCode, user.permissions, deviceId);
@@ -637,14 +678,30 @@ exports.refreshToken = async (req, res) => {
             setRefreshTokenCookie(res, newRefreshToken);
         }
 
-        res.json({
-            token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
-            refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+        return sendAuthSuccess(res, {
+            code: 'TOKEN_REFRESHED',
+            message: 'Token refreshed successfully',
+            data: {
+                token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
+                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+            },
+            legacyFields: {
+                token: process.env.USE_COOKIE === 'true' ? undefined : newToken,
+                refreshToken: process.env.USE_COOKIE === 'true' ? undefined : newRefreshToken
+            }
         });
 
     } catch (error) {
         console.error('Refresh error:', error);
-        res.status(401).json({ message: 'Invalid or expired refresh token' });
+        if (error?.name === 'TokenExpiredError' || error?.name === 'JsonWebTokenError') {
+            return sendAuthError(res, 401, 'Invalid or expired refresh token', 'INVALID_REFRESH_TOKEN');
+        }
+
+        if (isDbUnavailableError(error)) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
+        }
+
+        return sendAuthError(res, 500, 'Failed to refresh token', 'TOKEN_REFRESH_FAILED');
     }
 };
 
@@ -653,7 +710,7 @@ exports.refreshToken = async (req, res) => {
 // @access  Private
 exports.logoutUser = async (req, res) => {
     const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
-    const deviceId = req.headers['x-device-id'];
+    const deviceId = req.headers['x-device-id'] || req.body?.deviceId;
 
     try {
         if (refreshToken && req.user && !req.user.isEnvBased) {
@@ -668,11 +725,19 @@ exports.logoutUser = async (req, res) => {
 
         res.clearCookie('token');
         res.clearCookie('refreshToken');
-        res.json({ message: 'Logged out successfully' });
+        return sendAuthSuccess(res, {
+            code: 'LOGOUT_SUCCESS',
+            message: 'Logged out successfully',
+            data: null
+        });
 
     } catch (error) {
         console.error('Logout error:', error);
-        res.status(500).json({ message: 'Logout failed' });
+        if (isDbUnavailableError(error)) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
+        }
+
+        return sendAuthError(res, 500, 'Logout failed', 'LOGOUT_FAILED');
     }
 };
 
@@ -703,8 +768,9 @@ exports.getUserProfile = async (req, res) => {
     try {
         if (req.user.isEnvBased && req.user._id === 'super_admin_env') {
             await createAuditLog('super_admin_env', 'PROFILE_VIEW', {}, req);
-            return res.json({
-                success: true,
+            return sendAuthSuccess(res, {
+                code: 'PROFILE_FETCHED',
+                message: 'Profile fetched successfully',
                 data: {
                     _id: 'super_admin_env',
                     name: req.user.name,
@@ -720,12 +786,16 @@ exports.getUserProfile = async (req, res) => {
             });
         }
 
+        if (mongoose.connection.readyState !== 1) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
+        }
+
         // Use Mongoose pattern
         const selectFields = '-password -refreshToken -emailVerificationToken -resetPasswordToken -twoFactorSecret';
         const user = await User.findById(req.user._id).select(selectFields);
 
         if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+            return sendAuthError(res, 404, 'User not found', 'USER_NOT_FOUND');
         }
 
         const activeSessions = user.sessions?.length || 0;
@@ -740,8 +810,9 @@ exports.getUserProfile = async (req, res) => {
         // Use Mongoose toObject method
         const userData = user.toObject();
 
-        res.json({
-            success: true,
+        return sendAuthSuccess(res, {
+            code: 'PROFILE_FETCHED',
+            message: 'Profile fetched successfully',
             data: {
                 ...userData,
                 activeSessions,
@@ -752,7 +823,7 @@ exports.getUserProfile = async (req, res) => {
 
     } catch (error) {
         console.error('Profile error:', error);
-        res.status(500).json({ message: 'Failed to fetch profile' });
+        return handleAuthError(res, error, 'Failed to fetch profile');
     }
 };
 
@@ -764,13 +835,22 @@ exports.updateUserProfile = async (req, res) => {
 
     try {
         if (req.user.isEnvBased) {
-            return res.status(403).json({
-                success: false,
-                message: 'Platform Super Admin profile is managed via environment variables (e.g. SUPER_ADMIN_NAME).'
-            });
+            return sendAuthError(
+                res,
+                403,
+                'Platform Super Admin profile is managed via environment variables (e.g. SUPER_ADMIN_NAME).',
+                'ENV_USER_PROFILE_READ_ONLY'
+            );
+        }
+
+        if (mongoose.connection.readyState !== 1) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
         }
 
         const user = await User.findById(req.user._id);
+        if (!user) {
+            return sendAuthError(res, 404, 'User not found', 'USER_NOT_FOUND');
+        }
 
         if (name) user.name = name;
         if (phone) user.phone = phone;
@@ -780,20 +860,23 @@ exports.updateUserProfile = async (req, res) => {
         await user.save();
         await createAuditLog(user._id, 'PROFILE_UPDATE', { fields: { name, phone, address } }, req);
 
-        res.json({
+        return sendAuthSuccess(res, {
+            code: 'PROFILE_UPDATED',
             message: 'Profile updated',
-            user: {
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                address: user.address,
-                profileImage: user.profileImage
+            data: {
+                user: {
+                    name: user.name,
+                    email: user.email,
+                    phone: user.phone,
+                    address: user.address,
+                    profileImage: user.profileImage
+                }
             }
         });
 
     } catch (error) {
         console.error('Update profile error:', error);
-        res.status(500).json({ message: 'Failed to update profile' });
+        return handleAuthError(res, error, 'Failed to update profile');
     }
 };
 
@@ -1073,9 +1156,22 @@ exports.resendVerificationEmail = async (req, res) => {
 // @access  Private
 exports.setup2FA = async (req, res) => {
     try {
-        const user = await User.findById(req.user._id);
+        const userId = getAuthenticatedUserId(req, res);
+        if (!userId) {
+            return;
+        }
+
+        if (mongoose.connection.readyState !== 1) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
+        }
+
+        const user = await User.findById(userId).select('email twoFactorEnabled');
+        if (!user) {
+            return sendAuthError(res, 404, 'User not found', 'USER_NOT_FOUND');
+        }
+
         if (user.twoFactorEnabled) {
-            return res.status(400).json({ message: '2FA already enabled' });
+            return sendAuthError(res, 400, '2FA is already enabled for this account', 'TWO_FA_ALREADY_ENABLED');
         }
 
         const secret = speakeasy.generateSecret({ name: `Smart Campus (${user.email})` });
@@ -1091,10 +1187,22 @@ exports.setup2FA = async (req, res) => {
 
         await createAuditLog(user._id, '2FA_SETUP_INITIATED', {}, req);
 
-        res.json({ secret: secret.base32, qrCode: dataUrl });
+        return sendAuthSuccess(res, {
+            code: 'TWO_FA_SETUP_INITIATED',
+            message: '2FA setup started. Scan the QR code and verify to enable.',
+            data: {
+                secret: secret.base32,
+                qrCode: dataUrl
+            },
+            // Keep legacy fields for existing clients.
+            legacyFields: {
+                secret: secret.base32,
+                qrCode: dataUrl
+            }
+        });
     } catch (error) {
         console.error('2FA setup error:', error);
-        res.status(500).json({ message: 'Failed to setup 2FA' });
+        return handleAuthError(res, error, 'Failed to set up 2FA');
     }
 };
 
@@ -1105,22 +1213,37 @@ exports.verifyAndEnable2FA = async (req, res) => {
     const { token } = req.body;
 
     try {
-        if (!token) {
-            return res.status(400).json({ message: 'Token required' });
+        const userId = getAuthenticatedUserId(req, res);
+        if (!userId) {
+            return;
         }
 
-        const user = await User.findById(req.user._id).select('+twoFactorSecret');
-        if (!user || !user.twoFactorSecret) {
-            return res.status(400).json({ message: '2FA setup not started or expired. Please setup 2FA again.' });
+        if (mongoose.connection.readyState !== 1) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
         }
+
+        if (!token || typeof token !== 'string') {
+            return sendAuthError(res, 400, '2FA token is required', 'TWO_FA_TOKEN_REQUIRED');
+        }
+
+        const user = await User.findById(userId).select('+twoFactorSecret twoFactorEnabled');
+        if (!user || !user.twoFactorSecret) {
+            return sendAuthError(
+                res,
+                400,
+                '2FA setup not started or expired. Please set up 2FA again.',
+                'TWO_FA_SETUP_NOT_FOUND'
+            );
+        }
+
         const verified = speakeasy.totp.verify({
             secret: user.twoFactorSecret,
             encoding: 'base32',
-            token
+            token: token.trim()
         });
 
         if (!verified) {
-            return res.status(401).json({ message: 'Invalid token' });
+            return sendAuthError(res, 401, 'Invalid 2FA token', 'INVALID_TWO_FA_TOKEN');
         }
 
         user.twoFactorEnabled = true;
@@ -1128,11 +1251,15 @@ exports.verifyAndEnable2FA = async (req, res) => {
 
         await createAuditLog(user._id, '2FA_ENABLED', {}, req);
 
-        res.json({ message: '2FA enabled successfully' });
+        return sendAuthSuccess(res, {
+            code: 'TWO_FA_ENABLED',
+            message: '2FA enabled successfully',
+            data: null
+        });
 
     } catch (error) {
         console.error('Verify 2FA error:', error);
-        res.status(500).json({ message: 'Failed to verify 2FA' });
+        return handleAuthError(res, error, 'Failed to verify 2FA');
     }
 };
 
@@ -1143,28 +1270,46 @@ exports.disable2FA = async (req, res) => {
     const { password, token } = req.body;
 
     try {
-        if (!password || !token) {
-            return res.status(400).json({ message: 'Password and 2FA token required' });
+        const userId = getAuthenticatedUserId(req, res);
+        if (!userId) {
+            return;
         }
 
-        const user = await User.findById(req.user._id).select('+password +twoFactorSecret');
+        if (mongoose.connection.readyState !== 1) {
+            return sendAuthError(res, 503, 'Database unavailable. Please try again shortly.', 'DB_UNAVAILABLE');
+        }
+
+        if (!password || !token) {
+            return sendAuthError(
+                res,
+                400,
+                'Password and 2FA token are required',
+                'PASSWORD_AND_TWO_FA_TOKEN_REQUIRED'
+            );
+        }
+
+        const user = await User.findById(userId).select('+password +twoFactorSecret twoFactorEnabled');
         if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+            return sendAuthError(res, 404, 'User not found', 'USER_NOT_FOUND');
+        }
+
+        if (!user.twoFactorEnabled || !user.twoFactorSecret) {
+            return sendAuthError(res, 400, '2FA is not enabled for this account', 'TWO_FA_NOT_ENABLED');
         }
 
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid password' });
+            return sendAuthError(res, 401, 'Invalid password', 'INVALID_PASSWORD');
         }
 
         const verified = speakeasy.totp.verify({
             secret: user.twoFactorSecret,
             encoding: 'base32',
-            token
+            token: token.trim()
         });
 
         if (!verified) {
-            return res.status(401).json({ message: 'Invalid 2FA token' });
+            return sendAuthError(res, 401, 'Invalid 2FA token', 'INVALID_TWO_FA_TOKEN');
         }
 
         user.twoFactorEnabled = false;
@@ -1173,11 +1318,15 @@ exports.disable2FA = async (req, res) => {
 
         await createAuditLog(user._id, '2FA_DISABLED', {}, req);
 
-        res.json({ message: '2FA disabled successfully' });
+        return sendAuthSuccess(res, {
+            code: 'TWO_FA_DISABLED',
+            message: '2FA disabled successfully',
+            data: null
+        });
 
     } catch (error) {
         console.error('Disable 2FA error:', error);
-        res.status(500).json({ message: 'Failed to disable 2FA' });
+        return handleAuthError(res, error, 'Failed to disable 2FA');
     }
 };
 

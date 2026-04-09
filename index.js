@@ -1,5 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -24,17 +25,29 @@ function isTruthyEnv(value) {
     return typeof value === 'string' && value.toLowerCase() === 'true';
 }
 
+function getBooleanEnv(keys) {
+    for (const key of keys) {
+        if (typeof process.env[key] === 'string') {
+            return isTruthyEnv(process.env[key]);
+        }
+    }
+    return null;
+}
+
 function shouldAutoSeedTestData() {
-    if (typeof process.env.AUTO_SEED_TEST_DATA === 'string') {
-        return isTruthyEnv(process.env.AUTO_SEED_TEST_DATA);
+    const configured = getBooleanEnv(['SEED_ON_STARTUP', 'AUTO_SEED_TEST_DATA']);
+    if (configured !== null) {
+        return configured;
     }
 
-    return process.env.NODE_ENV === 'production';
+    // Production-safe default: auto seeding must be explicit.
+    return false;
 }
 
 function shouldResetAutoSeedData() {
-    if (typeof process.env.AUTO_SEED_RESET_DATA === 'string') {
-        return isTruthyEnv(process.env.AUTO_SEED_RESET_DATA);
+    const configured = getBooleanEnv(['FORCE_SEED_RESET', 'AUTO_SEED_RESET_DATA']);
+    if (configured !== null) {
+        return configured;
     }
 
     return false;
@@ -47,7 +60,14 @@ async function runAutomaticDeploySeed() {
 
     const { ensureSeedData } = require('./scripts/seed-test-data');
     const resetExisting = shouldResetAutoSeedData();
-    const usingProductionDefault = typeof process.env.AUTO_SEED_TEST_DATA !== 'string' && process.env.NODE_ENV === 'production';
+    if (process.env.NODE_ENV === 'production' && resetExisting) {
+        throw new Error('FORCE_SEED_RESET / AUTO_SEED_RESET_DATA cannot be enabled in production');
+    }
+    const usingProductionDefault = (
+        typeof process.env.AUTO_SEED_TEST_DATA !== 'string'
+        && typeof process.env.SEED_ON_STARTUP !== 'string'
+        && process.env.NODE_ENV === 'production'
+    );
     console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}${usingProductionDefault ? ' (production default)' : ''}.`);
 
     const result = await ensureSeedData({ resetExisting });
@@ -64,23 +84,29 @@ function parseAllowedOrigins() {
         .split(',')
         .map((o) => o.trim())
         .filter(Boolean);
+    const frontendUrl = (process.env.FRONTEND_URL || '').trim();
+    const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
+    const configured = [
+        ...fromEnv,
+        ...(frontendUrl ? [frontendUrl] : [])
+    ].map(normalizeOrigin);
 
     const localDefaults = [
         'http://localhost:3000',
         'http://localhost:8080',
         'http://127.0.0.1:3000',
         'http://127.0.0.1:8080'
-    ];
+    ].map(normalizeOrigin);
 
     if (process.env.NODE_ENV !== 'production') {
-        return Array.from(new Set([...fromEnv, ...localDefaults]));
+        return Array.from(new Set([...configured, ...localDefaults]));
     }
 
-    return fromEnv;
+    return Array.from(new Set(configured));
 }
 
 const allowedOrigins = parseAllowedOrigins();
-const allowAllOrigins = isTruthyEnv(process.env.ALLOW_ALL_ORIGINS);
+const allowAllOrigins = !isProduction && isTruthyEnv(process.env.ALLOW_ALL_ORIGINS);
 
 const corsOptions = {
     origin: (origin, callback) => {
@@ -92,7 +118,10 @@ const corsOptions = {
 
         if (!allowedOrigins.length) {
             console.warn('CORS: no ALLOWED_ORIGINS configured; blocking origin', origin);
-            return callback(new Error('CORS not configured'));
+            const corsConfigError = new Error('CORS is not configured for this server');
+            corsConfigError.status = 403;
+            corsConfigError.code = 'CORS_NOT_CONFIGURED';
+            return callback(corsConfigError);
         }
 
         if (allowedOrigins.includes(origin)) {
@@ -100,7 +129,10 @@ const corsOptions = {
         }
 
         console.warn('CORS: blocked origin', origin, 'allowed:', allowedOrigins.join(','));
-        return callback(new Error('Not allowed by CORS'));
+        const corsOriginError = new Error('Origin is not allowed by CORS policy');
+        corsOriginError.status = 403;
+        corsOriginError.code = 'CORS_BLOCKED';
+        return callback(corsOriginError);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -118,6 +150,208 @@ if (!validateEnv()) {
 
 const app = express();
 const PORT = process.env.PORT || 3001; // Render automatically sets PORT
+
+const DB_REQUIRED_PREFIXES = [
+    '/api/super-admin',
+    '/api/principal',
+    '/api/teacher',
+    '/api/student',
+    '/api/parent',
+    '/api/accountant',
+    '/api/dashboard',
+    '/api/notices',
+    '/api/academic-sessions',
+    '/api/admissions',
+    '/api/attendance',
+    '/api/exam-schedules',
+    '/api/fees',
+    '/api/leave',
+    '/api/notifications',
+    '/api/results',
+    '/api/routines',
+    '/api/search',
+    '/api/substitutes',
+    '/api/teacher-assignments',
+    '/api/activities',
+    '/api/analytics',
+    '/api/rooms',
+    '/api/events',
+    '/api/public',
+    '/api/ai',
+    '/api/subscriptions',
+    '/api/promotion',
+    '/api/students/bulk'
+];
+
+const AUTH_DB_OPTIONAL_PUBLIC_ROUTES = new Set([
+    'POST:/api/auth/super-admin/login',
+    'POST:/api/auth/login',
+    'POST:/api/auth/refresh',
+    'POST:/api/auth/logout',
+    'POST:/api/auth/setup',
+    'POST:/api/auth/emergency-reset',
+    'POST:/api/auto-setup-admin',
+    'POST:/api/emergency-reset'
+]);
+
+const AUTH_DB_REQUIRED_PUBLIC_ROUTE_PATTERNS = [
+    /^POST:\/api\/auth\/register$/,
+    /^POST:\/api\/auth\/forgot-password$/,
+    /^POST:\/api\/auth\/reset-password$/,
+    /^PUT:\/api\/auth\/reset-password\/[^/]+$/,
+    /^GET:\/api\/auth\/verify-email\/[^/]+$/,
+    /^POST:\/api\/auth\/verify-email$/
+];
+
+const getMongoConnectionStateLabel = (readyState) => {
+    switch (readyState) {
+    case 0:
+        return 'disconnected';
+    case 1:
+        return 'connected';
+    case 2:
+        return 'connecting';
+    case 3:
+        return 'disconnecting';
+    default:
+        return 'unknown';
+    }
+};
+
+const normalizeRequestPath = (path) => {
+    if (!path) return '';
+    if (path.length > 1 && path.endsWith('/')) {
+        return path.slice(0, -1);
+    }
+    return path;
+};
+
+const isDatabaseReady = () => mongoose.connection.readyState === 1;
+
+const buildRouteKey = (reqMethod, requestPath) => `${reqMethod.toUpperCase()}:${requestPath}`;
+
+const getAuthTokenFromRequest = (req) => {
+    if (req.headers?.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        return req.headers.authorization.split(' ')[1];
+    }
+
+    if (req.cookies?.token) {
+        return req.cookies.token;
+    }
+
+    return null;
+};
+
+const isDbRequiredPublicAuthRoute = (routeKey) => {
+    return AUTH_DB_REQUIRED_PUBLIC_ROUTE_PATTERNS.some((pattern) => pattern.test(routeKey));
+};
+
+const decodeVerifiedAuthToken = (token) => {
+    if (!token) {
+        return null;
+    }
+
+    try {
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+            return null;
+        }
+
+        return jwt.verify(token, secret);
+    } catch (error) {
+        return null;
+    }
+};
+
+const shouldGateAuthRouteForDatabase = (req, path) => {
+    const routeKey = buildRouteKey(req.method, path);
+
+    if (AUTH_DB_OPTIONAL_PUBLIC_ROUTES.has(routeKey)) {
+        return false;
+    }
+
+    if (isDbRequiredPublicAuthRoute(routeKey)) {
+        return true;
+    }
+
+    const token = getAuthTokenFromRequest(req);
+    if (!token) {
+        // Let auth middleware/routes return proper 401/403 for missing auth.
+        return false;
+    }
+
+    const decodedToken = decodeVerifiedAuthToken(token);
+    if (!decodedToken) {
+        // Invalid/expired token should be handled by auth middleware as 401.
+        return false;
+    }
+
+    const isEnvUser = decodedToken.id === 'super_admin_env' && decodedToken.isEnvBased === true;
+    if (isEnvUser) {
+        // Avoid brittle route allowlists for env-based auth routes.
+        // Env-token auth handlers must do their own DB checks when needed.
+        return false;
+    }
+
+    return true;
+};
+
+const isDbDependentRequest = (req) => {
+    if (req.method === 'OPTIONS') {
+        return false;
+    }
+
+    const path = normalizeRequestPath(req.path || req.originalUrl || '');
+
+    if (!path.startsWith('/api')) {
+        return false;
+    }
+
+    if (path === '/api' || path === '/api/health' || path === '/api/readiness') {
+        return false;
+    }
+
+    if (path.startsWith('/api/auth')) {
+        return shouldGateAuthRouteForDatabase(req, path);
+    }
+
+    return DB_REQUIRED_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+};
+
+app.locals.dbStatus = {
+    mode: 'uninitialized',
+    connected: false,
+    readyState: mongoose.connection.readyState,
+    state: getMongoConnectionStateLabel(mongoose.connection.readyState),
+    lastError: null,
+    updatedAt: new Date().toISOString()
+};
+
+const updateDbStatus = (patch = {}) => {
+    app.locals.dbStatus = {
+        ...app.locals.dbStatus,
+        ...patch,
+        connected: isDatabaseReady(),
+        readyState: mongoose.connection.readyState,
+        state: getMongoConnectionStateLabel(mongoose.connection.readyState),
+        updatedAt: new Date().toISOString()
+    };
+};
+
+mongoose.connection.on('connected', () => {
+    updateDbStatus({ connected: true, lastError: null });
+    console.log('ℹ️ MongoDB connection state: connected');
+});
+
+mongoose.connection.on('disconnected', () => {
+    updateDbStatus({ connected: false });
+    console.warn('⚠️ MongoDB connection state: disconnected');
+});
+
+mongoose.connection.on('error', (error) => {
+    updateDbStatus({ connected: false, lastError: error.message });
+    console.error('❌ MongoDB connection error:', error.message);
+});
 
 // Basic middleware
 app.use(helmet({
@@ -159,7 +393,21 @@ app.get('/api/health', (req, res) => {
         version: '5.0.0',
         environment: process.env.NODE_ENV || 'development',
         port: PORT,
-        status: 'All Routes Loaded Successfully'
+        status: 'All Routes Loaded Successfully',
+        database: app.locals.dbStatus
+    });
+});
+
+app.get('/api/readiness', (req, res) => {
+    const ready = isDatabaseReady();
+    const statusCode = ready ? 200 : 503;
+
+    return res.status(statusCode).json({
+        success: ready,
+        message: ready
+            ? 'Service is ready to serve database-dependent APIs'
+            : 'Service is running but database is unavailable',
+        database: app.locals.dbStatus
     });
 });
 
@@ -211,6 +459,26 @@ app.get('/api', (req, res) => {
             phase8: 'Notices ✅',
             phase9: 'Analytics ✅'
         }
+    });
+});
+
+// Readiness gating for database-dependent APIs
+app.use((req, res, next) => {
+    if (!isDbDependentRequest(req)) {
+        return next();
+    }
+
+    if (isDatabaseReady()) {
+        return next();
+    }
+
+    return res.status(503).json({
+        success: false,
+        code: 'DB_UNAVAILABLE',
+        message: 'Database is not connected. Database-dependent APIs are temporarily unavailable.',
+        requestId: req.id || null,
+        retryable: true,
+        database: app.locals.dbStatus
     });
 });
 
@@ -692,71 +960,112 @@ app.use('*', (req, res) => {
 // Global error handler
 app.use((error, req, res, next) => {
     console.error('Global error:', error);
-    res.status(error.status || 500).json({
+
+    const isDbError = error.name === 'MongoServerSelectionError'
+        || error.name === 'MongooseServerSelectionError'
+        || error.name === 'MongoNetworkError'
+        || error.name === 'MongooseError'
+        || /buffering timed out/i.test(error.message || '');
+
+    const statusCode = error.status || error.statusCode || (isDbError ? 503 : 500);
+    const message = statusCode >= 500
+        ? (isDbError ? 'Database unavailable. Please try again shortly.' : 'Internal server error')
+        : (error.message || 'Request failed');
+
+    res.status(statusCode).json({
         success: false,
-        message: error.message || 'Internal server error',
-        ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
+        code: error.code || (isDbError ? 'DB_UNAVAILABLE' : 'REQUEST_FAILED'),
+        message,
+        requestId: req.id || null,
+        ...(process.env.NODE_ENV !== 'production' && {
+            details: error.message,
+            stack: error.stack
+        })
     });
 });
 
 // Database connection and server start
 const startServer = async () => {
     let dbConnected = false;
-    
+
     // Check if we should use mock database for testing
-    const useMockDB = process.env.USE_MOCK_DB === 'true' || process.env.NODE_ENV === 'test';
-    const useMemoryDB = process.env.USE_MEMORY_DB === 'true';
-    
+    let useMockDB = process.env.USE_MOCK_DB === 'true' || process.env.NODE_ENV === 'test';
+    let useMemoryDB = process.env.USE_MEMORY_DB === 'true';
+
+    if (process.env.NODE_ENV === 'production' && (useMockDB || useMemoryDB)) {
+        console.error('[DB] USE_MOCK_DB / USE_MEMORY_DB are not allowed in production.');
+        process.exit(1);
+    }
+
+    if (useMemoryDB) {
+        updateDbStatus({ mode: 'memory', connected: false, lastError: null });
+    } else if (useMockDB) {
+        updateDbStatus({ mode: 'mock', connected: false, lastError: null });
+    } else {
+        updateDbStatus({ mode: 'mongo', connected: false, lastError: null });
+    }
+
     if (useMemoryDB) {
         try {
-            console.log('\n🔄 Starting in-memory MongoDB replica set for local development...');
+            console.log('\n[DB] Starting in-memory MongoDB replica set for local development...');
             let MongoMemoryReplSet;
             try {
                 MongoMemoryReplSet = require('mongodb-memory-server').MongoMemoryReplSet;
             } catch (importError) {
-                console.error('⚠️ mongodb-memory-server package is not installed. Falling back to mock DB mode.');
+                console.error('[DB] mongodb-memory-server package is not installed. Falling back to mock DB mode.');
                 console.warn(importError.message);
-                console.warn('⚠️ Set USE_MOCK_DB=true in .env for non-persistent mock mode.');
-                dbConnected = false;
-                // Avoid hard crash when memory server is intentionally removed for production.
-                console.warn('⚠️ Skipping in-memory DB startup due to missing dependency.');
-                return;
+                console.warn('[DB] Set USE_MOCK_DB=true in .env for non-persistent mock mode.');
+                useMemoryDB = false;
+                useMockDB = true;
+                updateDbStatus({
+                    mode: 'mock',
+                    connected: false,
+                    lastError: 'mongodb-memory-server is not installed'
+                });
             }
 
-            memoryMongoServer = await MongoMemoryReplSet.create({
-                replSet: { count: 1 },
-                instanceOpts: [{
-                    dbName: process.env.MEMORY_DB_NAME || 'smart-campus-dev'
-                }]
-            });
+            if (useMemoryDB && MongoMemoryReplSet) {
+                memoryMongoServer = await MongoMemoryReplSet.create({
+                    replSet: { count: 1 },
+                    instanceOpts: [{
+                        dbName: process.env.MEMORY_DB_NAME || 'smart-campus-dev'
+                    }]
+                });
 
-            const memoryMongoUri = memoryMongoServer.getUri();
-            await mongoose.connect(memoryMongoUri, {
-                serverSelectionTimeoutMS: 10000,
-                socketTimeoutMS: 30000,
-                connectTimeoutMS: 10000,
-                maxPoolSize: 5,
-                minPoolSize: 1,
-                retryWrites: false
-            });
+                const memoryMongoUri = memoryMongoServer.getUri();
+                await mongoose.connect(memoryMongoUri, {
+                    serverSelectionTimeoutMS: 10000,
+                    socketTimeoutMS: 30000,
+                    connectTimeoutMS: 10000,
+                    maxPoolSize: 5,
+                    minPoolSize: 1,
+                    retryWrites: false
+                });
 
-            dbConnected = true;
-            console.log('✅ In-memory MongoDB replica set started successfully');
-            console.log(`📍 Database: ${mongoose.connection.name}`);
-            await ensureMongoIndexes();
+                dbConnected = true;
+                updateDbStatus({ mode: 'memory', connected: true, lastError: null });
+                console.log('[DB] In-memory MongoDB replica set started successfully');
+                console.log(`[DB] Database: ${mongoose.connection.name}`);
+                await ensureMongoIndexes();
+            }
         } catch (memoryError) {
-            console.error('❌ Failed to start in-memory MongoDB:', memoryError.message);
+            updateDbStatus({ mode: 'memory', connected: false, lastError: memoryError.message });
+            console.error('[DB] Failed to start in-memory MongoDB:', memoryError.message);
             process.exit(1);
         }
-    } else if (useMockDB) {
-        console.log('\n🔄 Using Mock Database mode...');
-        console.warn('⚠️  Database-backed features are disabled in mock mode.');
-    } else {
-        // Try to connect to MongoDB but allow server to start anyway
+    }
+
+    if (!dbConnected && useMockDB) {
+        console.log('\n[DB] Using Mock Database mode...');
+        console.warn('[DB] Database-backed features are disabled in mock mode.');
+        updateDbStatus({ mode: 'mock', connected: false, lastError: app.locals.dbStatus.lastError });
+    }
+
+    if (!dbConnected && !useMockDB) {
         try {
-            console.log('\n🔄 Connecting to MongoDB...');
-            console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-            
+            console.log('\n[DB] Connecting to MongoDB...');
+            console.log(`[DB] Environment: ${process.env.NODE_ENV || 'development'}`);
+
             await mongoose.connect(process.env.MONGO_URI, {
                 serverSelectionTimeoutMS: 10000,
                 socketTimeoutMS: 30000,
@@ -765,62 +1074,64 @@ const startServer = async () => {
                 minPoolSize: 1,
                 retryWrites: false
             });
-            
+
             dbConnected = true;
-            console.log('✅ MongoDB Connected Successfully!');
-            console.log(`📍 Database: ${mongoose.connection.name}`);
+            updateDbStatus({ mode: 'mongo', connected: true, lastError: null });
+            console.log('[DB] MongoDB Connected Successfully!');
+            console.log(`[DB] Database: ${mongoose.connection.name}`);
             await ensureMongoIndexes();
-            console.log(`📍 Host: ${mongoose.connection.host}`);
+            console.log(`[DB] Host: ${mongoose.connection.host}`);
         } catch (dbError) {
-            console.error('❌ MongoDB connection failed:', dbError.message);
+            updateDbStatus({ mode: 'mongo', connected: false, lastError: dbError.message });
+            console.error('[DB] MongoDB connection failed:', dbError.message);
             if (process.env.NODE_ENV === 'production') {
-                console.error('❌ Production DB failure: aborting startup to prevent running in a malfunctioning state.');
+                console.error('[DB] Production DB failure: aborting startup to prevent running in a malfunctioning state.');
                 process.exit(1);
             }
 
-            console.warn('⚠️  Non-production environment: continuing startup without database (some features may not work).');
+            console.warn('[DB] Non-production environment: continuing startup with DB readiness gating enabled.');
         }
     }
-        
-        // Initialize Super Admin only if DB is connected
-        if (dbConnected) {
-            try {
-                await runAutomaticDeploySeed();
-            } catch (seedError) {
-                console.error('Automatic deploy seed failed:', seedError.message);
-                if (process.env.NODE_ENV === 'production') {
-                    console.error('Production abort: automatic deploy seed failed. Exiting.');
-                    process.exit(1);
-                }
-            }
-            console.log('\n✅ Super Admin is environment-only (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD). No DB bootstrap.');
-        } else {
-            console.log('\n⚠️  Database not connected — school features unavailable; Super Admin still logs in via environment credentials.');
+
+    // Initialize Super Admin only if DB is connected
+    if (dbConnected) {
+        try {
+            await runAutomaticDeploySeed();
+        } catch (seedError) {
+            console.error('Automatic deploy seed failed:', seedError.message);
             if (process.env.NODE_ENV === 'production') {
-                console.error('❌ Production abort: MongoDB connection required in production. Exiting.');
+                console.error('Production abort: automatic deploy seed failed. Exiting.');
                 process.exit(1);
             }
         }
-        
-        // Start server
-        app.listen(PORT, '0.0.0.0', () => {
-            console.log(`\n🚀 SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING`);
-            console.log(`📍 Server: http://localhost:${PORT}`);
-            console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
-            console.log(`📚 API Info: http://localhost:${PORT}/api`);
-            console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-            console.log(`\n✅ ALL WORKFLOW FEATURES AVAILABLE:`);
-            console.log(`   🔹 Phase 1: Super Admin Setup`);
-            console.log(`   🔹 Phase 2: School Creation`);
-            console.log(`   🔹 Phase 3: Principal Flow`);
-            console.log(`   🔹 Phase 4: Routine Setup`);
-            console.log(`   🔹 Phase 5: Daily Operations`);
-            console.log(`   🔹 Phase 6: Results`);
-            console.log(`   🔹 Phase 7: Fees`);
-            console.log(`   🔹 Phase 8: Notices`);
-            console.log(`   🔹 Phase 9: Analytics`);
-            console.log(`\n🎯 READY FOR COMPLETE WORKFLOW TESTING!`);
-        });
+        console.log('\n[Startup] Super Admin is environment-only (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD). No DB bootstrap.');
+    } else {
+        console.log('\n[Startup] Database not connected - school features unavailable; Super Admin still logs in via environment credentials.');
+        if (process.env.NODE_ENV === 'production') {
+            console.error('[Startup] Production abort: MongoDB connection required in production. Exiting.');
+            process.exit(1);
+        }
+    }
+
+    // Start server
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log('\n[Startup] SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING');
+        console.log(`[Startup] Server: http://localhost:${PORT}`);
+        console.log(`[Startup] Health Check: http://localhost:${PORT}/api/health`);
+        console.log(`[Startup] API Info: http://localhost:${PORT}/api`);
+        console.log(`[DB] Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log('\n[Startup] ALL WORKFLOW FEATURES AVAILABLE:');
+        console.log('   - Phase 1: Super Admin Setup');
+        console.log('   - Phase 2: School Creation');
+        console.log('   - Phase 3: Principal Flow');
+        console.log('   - Phase 4: Routine Setup');
+        console.log('   - Phase 5: Daily Operations');
+        console.log('   - Phase 6: Results');
+        console.log('   - Phase 7: Fees');
+        console.log('   - Phase 8: Notices');
+        console.log('   - Phase 9: Analytics');
+        console.log('\n[Startup] READY FOR COMPLETE WORKFLOW TESTING!');
+    });
 };
 
 // Graceful shutdown

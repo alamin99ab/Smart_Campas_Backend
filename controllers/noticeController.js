@@ -1,8 +1,87 @@
 // controllers/noticeController.js
 const Notice = require('../models/Notice');
+const Notification = require('../models/Notification');
 const School = require('../models/School');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
+
+const ACTIVE_NOTICE_STATUSES = ['active'];
+
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeSchoolScope = (req) => {
+    const schoolId = req.tenant?.schoolId || req.user?.schoolId || null;
+    const schoolCodeRaw = req.tenant?.schoolCode || req.user?.schoolCode || null;
+    return {
+        schoolId,
+        schoolCode: schoolCodeRaw ? String(schoolCodeRaw).toUpperCase() : null
+    };
+};
+
+const toObjectIdStrings = (values = []) =>
+    [...new Set(values.filter(Boolean).map((value) => String(value)))];
+
+const buildPublishedNoticeQuery = ({ schoolId, role, classIds = [] }) => {
+    const now = new Date();
+    const andConditions = [
+        { isDeleted: false },
+        { status: { $in: ACTIVE_NOTICE_STATUSES } },
+        { isPublished: true },
+        { publishDate: { $lte: now } },
+        { $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] }
+    ];
+
+    if (schoolId) {
+        andConditions.push({ $or: [{ schoolId }, { isGlobal: true }] });
+    } else {
+        andConditions.push({ isGlobal: true });
+    }
+
+    if (!['super_admin', 'admin', 'principal'].includes(role)) {
+        const audience = [
+            { targetType: 'all' },
+            { targetType: role },
+            { targetType: 'role', targetRoles: { $in: [role] } },
+            { targetRoles: { $in: [role] } },
+            { targetRoles: { $size: 0 } },
+            { targetRoles: { $exists: false } }
+        ];
+
+        const classIdList = toObjectIdStrings(classIds);
+        if (classIdList.length > 0) {
+            audience.push({ targetType: 'class', 'targetClasses.classId': { $in: classIdList } });
+            audience.push({ targetType: 'section', 'targetSections.sectionId': { $in: classIdList } });
+        }
+
+        andConditions.push({ $or: audience });
+    }
+
+    return { $and: andConditions };
+};
+
+const extractNoticeRows = (payload) => {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.notices)) return payload.notices;
+    if (Array.isArray(payload.data)) return payload.data;
+    return [];
+};
+
+const getParentLinkedClassIds = async (req) => {
+    if (req.user?.role !== 'parent') return [];
+
+    const { schoolCode } = normalizeSchoolScope(req);
+    const parentEmail = String(req.user?.email || '').trim();
+    if (!parentEmail) return [];
+
+    const studentUsers = await User.find({
+        role: 'student',
+        schoolCode,
+        'parentInfo.email': new RegExp(`^${escapeRegex(parentEmail)}$`, 'i')
+    }).select('classId');
+
+    return toObjectIdStrings(studentUsers.map((row) => row.classId));
+};
 
 // Helper function to send notifications
 const sendNoticeNotifications = async (notice, schoolId) => {
@@ -11,6 +90,20 @@ const sendNoticeNotifications = async (notice, schoolId) => {
     } catch (error) {
         console.error('Error sending notice notifications:', error);
     }
+};
+
+const sendServerError = (res, code, message, error) => {
+    const payload = {
+        success: false,
+        code,
+        message
+    };
+
+    if (process.env.NODE_ENV !== 'production' && error?.message) {
+        payload.error = error.message;
+    }
+
+    return res.status(500).json(payload);
 };
 
 /**
@@ -48,6 +141,7 @@ exports.createNotice = async (req, res) => {
         if (!title || !description || !noticeType) {
             return res.status(400).json({
                 success: false,
+                code: 'NOTICE_VALIDATION_FAILED',
                 message: 'Title, description and notice type are required'
             });
         }
@@ -64,6 +158,7 @@ exports.createNotice = async (req, res) => {
                 if (!schoolId) {
                     return res.status(400).json({
                         success: false,
+                        code: 'NOTICE_SCHOOL_REQUIRED',
                         message: 'School ID is required for non-global notices'
                     });
                 }
@@ -79,6 +174,7 @@ exports.createNotice = async (req, res) => {
         if (!isGlobal && !schoolId) {
             return res.status(400).json({
                 success: false,
+                code: 'NOTICE_SCHOOL_CONTEXT_MISSING',
                 message: 'School context missing. Please include schoolId or ensure tenant context is set.'
             });
         }
@@ -93,6 +189,7 @@ exports.createNotice = async (req, res) => {
         if (targetType === 'class' && (!targetClasses || targetClasses.length === 0)) {
             return res.status(400).json({
                 success: false,
+                code: 'NOTICE_TARGET_CLASS_REQUIRED',
                 message: 'Target classes are required for class-specific notices'
             });
         }
@@ -100,6 +197,7 @@ exports.createNotice = async (req, res) => {
         if (targetType === 'teacher' && (!targetTeachers || targetTeachers.length === 0)) {
             return res.status(400).json({
                 success: false,
+                code: 'NOTICE_TARGET_TEACHER_REQUIRED',
                 message: 'Target teachers are required for teacher-specific notices'
             });
         }
@@ -153,7 +251,7 @@ exports.createNotice = async (req, res) => {
             action: 'create_notice',
             resource: 'notice',
             resourceId: notice._id,
-            userId: req.user.id,
+            userId: req.user.id || req.user._id,
             userRole: req.user.role,
             schoolId,
             details: {
@@ -168,6 +266,7 @@ exports.createNotice = async (req, res) => {
 
         res.status(201).json({
             success: true,
+            code: 'NOTICE_CREATED',
             message: 'Notice created successfully',
             data: notice
         });
@@ -177,12 +276,14 @@ exports.createNotice = async (req, res) => {
         if (error.name === 'ValidationError') {
             return res.status(400).json({
                 success: false,
+                code: 'NOTICE_VALIDATION_FAILED',
                 message: 'Validation failed for notice',
                 errors: Object.values(error.errors || {}).map(e => e.message)
             });
         }
         res.status(500).json({
             success: false,
+            code: 'NOTICE_CREATE_FAILED',
             message: error.message || 'Failed to create notice'
         });
     }
@@ -195,84 +296,116 @@ exports.getNotices = async (req, res) => {
     try {
         const { schoolCode } = req.params;
         const { page = 1, limit = 20, category, priority, isActive } = req.query;
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
 
-        let schoolId;
+        let { schoolId } = normalizeSchoolScope(req);
+        const { schoolCode: tenantSchoolCode } = normalizeSchoolScope(req);
 
-        if (req.user.role === 'super_admin') {
-            if (!schoolCode) {
-                return res.status(400).json({ success: false, message: 'schoolCode is required for super_admin' });
-            }
-            const school = await School.findOne({ schoolCode: schoolCode.toUpperCase(), isActive: true });
+        if (req.user.role === 'super_admin' && schoolCode) {
+            const school = await School.findOne({ schoolCode: schoolCode.toUpperCase(), isActive: true }).select('_id');
             if (!school) {
-                return res.status(404).json({ success: false, message: 'School not found' });
+                return res.status(404).json({
+                    success: false,
+                    code: 'SCHOOL_NOT_FOUND',
+                    message: 'School not found'
+                });
             }
             schoolId = school._id;
-        } else {
-            schoolId = req.tenant?.schoolId || req.user.schoolId;
-            if (!schoolId) {
-                return res.status(400).json({ success: false, message: 'Tenant context missing' });
-            }
         }
 
-        const baseConditions = [
-            { $or: [{ schoolId }, { isGlobal: true }] },
-            { isDeleted: false }
-        ];
-
-        if (category) baseConditions.push({ noticeType: category });
-        if (priority) baseConditions.push({ priority });
-
-        if (isActive !== undefined) {
-            if (isActive === 'true' || isActive === true) {
-                baseConditions.push({ status: 'active' });
-                baseConditions.push({ $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] });
-            } else {
-                baseConditions.push({ $or: [{ status: { $ne: 'active' } }, { expiryDate: { $lte: new Date() } }] });
-            }
-        }
-
-        if (req.user.role !== 'admin' && req.user.role !== 'principal' && req.user.role !== 'super_admin') {
-            baseConditions.push({
-                $or: [
-                    { targetRoles: { $in: [req.user.role] } },
-                    { targetRoles: { $size: 0 } }
-                ]
+        if (!schoolId && req.user.role !== 'super_admin') {
+            return res.status(400).json({
+                success: false,
+                code: 'TENANT_CONTEXT_MISSING',
+                message: 'Tenant context missing'
             });
         }
 
-        const query = baseConditions.length > 1 ? { $and: baseConditions } : baseConditions[0];
+        const conditions = [];
 
-        // Pagination
-        const skip = (page - 1) * limit;
+        if (['super_admin', 'admin', 'principal'].includes(req.user.role)) {
+            conditions.push({ isDeleted: false });
+            if (schoolId) conditions.push({ $or: [{ schoolId }, { isGlobal: true }] });
+        } else {
+            let classIds = [];
+            if (req.user.role === 'student' && req.user.classId) {
+                classIds = [req.user.classId];
+            } else if (req.user.role === 'parent') {
+                classIds = await getParentLinkedClassIds(req);
+            }
+            conditions.push(buildPublishedNoticeQuery({
+                schoolId,
+                role: req.user.role,
+                classIds
+            }));
+        }
 
-        const notices = await Notice.find(query)
-            .populate('addedBy', 'name email role')
-            .sort({ priority: -1, createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        if (category) conditions.push({ noticeType: category });
+        if (priority) conditions.push({ priority });
 
-        const total = await Notice.countDocuments(query);
+        if (isActive !== undefined && ['super_admin', 'admin', 'principal'].includes(req.user.role)) {
+            if (isActive === 'true' || isActive === true) {
+                conditions.push({
+                    $and: [
+                        { status: 'active' },
+                        { isPublished: true },
+                        { publishDate: { $lte: new Date() } },
+                        { $or: [{ expiryDate: null }, { expiryDate: { $gt: new Date() } }] }
+                    ]
+                });
+            }
+        }
 
-        // Get active notices count
-        const activeCount = await Notice.countDocuments({
-            $and: [
-                { $or: [{ schoolId }, { isGlobal: true }] },
-                { status: 'active' },
-                { isDeleted: false },
-                { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] }
-            ]
-        });
+        const query = conditions.length > 1 ? { $and: conditions } : conditions[0];
+        const skip = (pageNum - 1) * limitNum;
+
+        const activeCountClassIds =
+            req.user.role === 'student' && req.user.classId
+                ? [req.user.classId]
+                : req.user.role === 'parent'
+                    ? await getParentLinkedClassIds(req)
+                    : [];
+
+        const activeCountQuery = ['super_admin', 'admin', 'principal'].includes(req.user.role)
+            ? {
+                $and: [
+                    ...(schoolId ? [{ $or: [{ schoolId }, { isGlobal: true }] }] : []),
+                    { isDeleted: false },
+                    { status: 'active' },
+                    { isPublished: true },
+                    { publishDate: { $lte: new Date() } },
+                    { $or: [{ expiryDate: null }, { expiryDate: { $gt: new Date() } }] }
+                ]
+            }
+            : buildPublishedNoticeQuery({
+                schoolId,
+                role: req.user.role,
+                classIds: activeCountClassIds
+            });
+
+        const [notices, total, activeCount] = await Promise.all([
+            Notice.find(query)
+                .populate('createdBy', 'name email role')
+                .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum),
+            Notice.countDocuments(query),
+            Notice.countDocuments(activeCountQuery)
+        ]);
 
         const payload = {
             notices,
             total,
             activeCount,
-            totalPages: Math.ceil(total / limit),
-            currentPage: parseInt(page)
+            totalPages: Math.ceil(total / limitNum),
+            currentPage: pageNum,
+            schoolCode: tenantSchoolCode
         };
 
         res.json({
             success: true,
+            code: 'NOTICE_LIST_FETCHED',
             message: 'Notices fetched successfully',
             data: payload,
             ...payload // keep legacy shape
@@ -280,41 +413,11 @@ exports.getNotices = async (req, res) => {
 
     } catch (error) {
         console.error('Get notices error:', error);
-        res.status(500).json({ success: false, message: 'Failed to fetch notices' });
-    }
-};
-
-// @desc    Get single notice
-// @route   GET /api/notices/:id
-// @access  Private
-exports.getNotice = async (req, res) => {
-    try {
-        const notice = await Notice.findById(req.params.id)
-            .populate('addedBy', 'name email role')
-            .populate('updatedBy', 'name email role');
-
-        if (!notice) {
-            return res.status(404).json({ message: 'Notice not found' });
-        }
-
-        // Check school access
-        if (!notice.isGlobal && req.user.role !== 'super_admin') {
-            const tenantSchoolId = req.tenant?.schoolId || req.user.schoolId;
-            if (!tenantSchoolId || notice.schoolId?.toString() !== tenantSchoolId.toString()) {
-                return res.status(403).json({ message: 'Access denied' });
-            }
-        }
-
-        // Increment view count in analytics section
-        notice.analytics = notice.analytics || { views: 0, uniqueViews: 0, downloads: 0, shares: 0, acknowledgments: 0 };
-        notice.analytics.views = (notice.analytics.views || 0) + 1;
-        await notice.save();
-
-        res.json(notice);
-
-    } catch (error) {
-        console.error('Get notice error:', error);
-        res.status(500).json({ message: 'Failed to fetch notice' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTICE_LIST_FETCH_FAILED',
+            message: 'Failed to fetch notices'
+        });
     }
 };
 
@@ -323,37 +426,85 @@ exports.getNotice = async (req, res) => {
 // @access  Private (Principal/Admin/Owner)
 exports.updateNotice = async (req, res) => {
     try {
-        const { title, content, category, targetRoles, targetClasses, attachments, priority, expiryDate, isActive } = req.body;
+        const {
+            title,
+            description,
+            content,
+            noticeType,
+            category,
+            targetRoles,
+            targetClasses,
+            targetSections,
+            targetTeachers,
+            targetSubjects,
+            targetType,
+            attachments,
+            priority,
+            expiryDate,
+            publishDate,
+            status,
+            isPublished,
+            isActive
+        } = req.body;
 
         const notice = await Notice.findById(req.params.id);
 
         if (!notice) {
-            return res.status(404).json({ message: 'Notice not found' });
+            return res.status(404).json({
+                success: false,
+                code: 'NOTICE_NOT_FOUND',
+                message: 'Notice not found'
+            });
         }
 
         // Check permission
         if (!notice.isGlobal && req.user.role !== 'super_admin') {
             const tenantSchoolId = req.tenant?.schoolId || req.user.schoolId;
             if (!tenantSchoolId || notice.schoolId?.toString() !== tenantSchoolId.toString()) {
-                return res.status(403).json({ message: 'Access denied' });
+                return res.status(403).json({
+                    success: false,
+                    code: 'NOTICE_ACCESS_DENIED',
+                    message: 'Access denied'
+                });
             }
         }
 
         if (req.user.role !== 'super_admin' && req.user.role !== 'admin' && req.user.role !== 'principal' && 
             notice.createdBy?.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ message: 'Access denied. Only creator can update.' });
+            return res.status(403).json({
+                success: false,
+                code: 'NOTICE_EDIT_FORBIDDEN',
+                message: 'Access denied. Only creator can update.'
+            });
         }
 
         // Update fields
         if (title) notice.title = title;
-        if (content) notice.content = content;
-        if (category) notice.category = category;
+        if (description || content) notice.description = description || content;
+        if (noticeType || category) notice.noticeType = noticeType || category;
+        if (targetType) notice.targetType = targetType;
         if (targetRoles) notice.targetRoles = targetRoles;
         if (targetClasses) notice.targetClasses = targetClasses;
+        if (targetSections) notice.targetSections = targetSections;
+        if (targetTeachers) notice.targetTeachers = targetTeachers;
+        if (targetSubjects) notice.targetSubjects = targetSubjects;
         if (attachments) notice.attachments = attachments;
         if (priority) notice.priority = priority;
-        if (expiryDate !== undefined) notice.expiryDate = expiryDate;
-        if (isActive !== undefined) notice.isActive = isActive;
+        if (expiryDate !== undefined) notice.expiryDate = expiryDate ? new Date(expiryDate) : null;
+        if (publishDate !== undefined) notice.publishDate = publishDate ? new Date(publishDate) : notice.publishDate;
+        if (status) notice.status = status;
+        if (isPublished !== undefined) notice.isPublished = !!isPublished;
+
+        if (isActive !== undefined) {
+            if (isActive) {
+                notice.status = 'active';
+                notice.isPublished = true;
+                notice.publishedAt = notice.publishedAt || new Date();
+            } else if (!notice.isDeleted) {
+                notice.status = 'draft';
+                notice.isPublished = false;
+            }
+        }
 
         notice.updatedBy = req.user._id;
         notice.updatedAt = Date.now();
@@ -373,13 +524,19 @@ exports.updateNotice = async (req, res) => {
         });
 
         res.json({
+            success: true,
+            code: 'NOTICE_UPDATED',
             message: 'Notice updated successfully',
-            notice
+            data: notice
         });
 
     } catch (error) {
         console.error('Update notice error:', error);
-        res.status(500).json({ message: 'Failed to update notice' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTICE_UPDATE_FAILED',
+            message: 'Failed to update notice'
+        });
     }
 };
 
@@ -391,20 +548,32 @@ exports.deleteNotice = async (req, res) => {
         const notice = await Notice.findById(req.params.id);
 
         if (!notice) {
-            return res.status(404).json({ message: 'Notice not found' });
+            return res.status(404).json({
+                success: false,
+                code: 'NOTICE_NOT_FOUND',
+                message: 'Notice not found'
+            });
         }
 
         // Check permission
         if (!notice.isGlobal && req.user.role !== 'super_admin') {
             const tenantSchoolId = req.tenant?.schoolId || req.user.schoolId;
             if (!tenantSchoolId || notice.schoolId?.toString() !== tenantSchoolId.toString()) {
-                return res.status(403).json({ message: 'Access denied' });
+                return res.status(403).json({
+                    success: false,
+                    code: 'NOTICE_ACCESS_DENIED',
+                    message: 'Access denied'
+                });
             }
         }
 
         if (req.user.role !== 'super_admin' && req.user.role !== 'admin' && req.user.role !== 'principal' && 
             notice.createdBy?.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ message: 'Access denied. Only creator can delete.' });
+            return res.status(403).json({
+                success: false,
+                code: 'NOTICE_DELETE_FORBIDDEN',
+                message: 'Access denied. Only creator can delete.'
+            });
         }
 
         // Soft delete using Notice schema fields
@@ -429,11 +598,20 @@ exports.deleteNotice = async (req, res) => {
             userAgent: req.headers['user-agent']
         });
 
-        res.json({ message: 'Notice deleted successfully' });
+        res.json({
+            success: true,
+            code: 'NOTICE_DELETED',
+            message: 'Notice deleted successfully',
+            data: { id: notice._id }
+        });
 
     } catch (error) {
         console.error('Delete notice error:', error);
-        res.status(500).json({ message: 'Failed to delete notice' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTICE_DELETE_FAILED',
+            message: 'Failed to delete notice'
+        });
     }
 };
 
@@ -461,7 +639,7 @@ exports.getNoticesByCategory = async (req, res) => {
         };
 
         const notices = await Notice.find(query)
-            .populate('addedBy', 'name')
+            .populate('createdBy', 'name')
             .sort({ priority: -1, createdAt: -1 })
             .limit(limit * 1)
             .skip((page - 1) * limit);
@@ -496,7 +674,7 @@ exports.getImportantNotices = async (req, res) => {
                 { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] }
             ]
         })
-        .populate('addedBy', 'name')
+        .populate('createdBy', 'name')
         .sort({ createdAt: -1 })
         .limit(10);
 
@@ -578,7 +756,7 @@ exports.archiveExpiredNotices = async (req, res) => {
 
     } catch (error) {
         console.error('Archive expired notices error:', error);
-        res.status(500).json({ message: 'Failed to archive notices' });
+        return sendServerError(res, 'NOTICE_ARCHIVE_FAILED', 'Failed to archive notices', error);
     }
 };
 
@@ -592,15 +770,12 @@ exports.acknowledgeNotice = async (req, res) => {
         
         res.status(200).json({
             success: true,
+            code: 'NOTICE_ACKNOWLEDGED',
             message: 'Notice acknowledged',
             data: notice
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'NOTICE_ACKNOWLEDGE_FAILED', 'Failed to acknowledge notice', error);
     }
 };
 
@@ -615,15 +790,12 @@ exports.addComment = async (req, res) => {
         
         res.status(200).json({
             success: true,
+            code: 'NOTICE_COMMENT_ADDED',
             message: 'Comment added',
             data: { comment, notice }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'NOTICE_COMMENT_ADD_FAILED', 'Failed to add notice comment', error);
     }
 };
 
@@ -646,6 +818,8 @@ exports.getNoticeAnalytics = async (req, res) => {
         
         res.status(200).json({
             success: true,
+            code: 'NOTICE_ANALYTICS_FETCHED',
+            message: 'Notice analytics fetched successfully',
             data: {
                 totalNotices,
                 activeNotices,
@@ -653,11 +827,7 @@ exports.getNoticeAnalytics = async (req, res) => {
             }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'NOTICE_ANALYTICS_FETCH_FAILED', 'Failed to fetch notice analytics', error);
     }
 };
 
@@ -673,76 +843,12 @@ exports.pinNotice = async (req, res) => {
         
         res.status(200).json({
             success: true,
+            code: 'NOTICE_PIN_UPDATED',
             message: `Notice ${notice.isPinned ? 'pinned' : 'unpinned'}`,
             data: notice
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
-};
-
-// Helper function to send notifications (updated version)
-const sendNoticeNotificationsUpdated = async (notice, schoolId) => {
-    try {
-        const targetUsers = await User.find({
-            schoolId,
-            role: { $in: notice.targetRoles },
-            isActive: true
-        }).select('_id email fcmToken');
-
-        const recipientIds = targetUsers.map(u => u._id);
-        if (recipientIds.length > 0) {
-            await createNotification({
-                title: 'New Notice: ' + notice.title,
-                body: (notice.content || '').substring(0, 150),
-                type: 'notice',
-                link: `/notices/${notice._id}`,
-                data: { noticeId: String(notice._id) },
-                schoolCode,
-                recipients: recipientIds
-            });
-        }
-
-        // Send push notifications (if FCM tokens exist)
-        const fcmTokens = targetUsers
-            .filter(u => u.fcmToken)
-            .map(u => u.fcmToken);
-
-        if (fcmTokens.length > 0 && notice.priority !== 'low') {
-            await sendPushNotification({
-                tokens: fcmTokens,
-                title: 'New Notice: ' + notice.title,
-                body: notice.content.substring(0, 100) + '...',
-                data: { noticeId: notice._id, type: 'notice' }
-            });
-        }
-
-        // Send emails for high priority notices
-        if (notice.priority === 'high' || notice.priority === 'urgent') {
-            const emailPromises = targetUsers
-                .filter(u => u.email)
-                .map(u => 
-                    sendEmail({
-                        to: u.email,
-                        subject: `[${notice.priority.toUpperCase()}] New Notice: ${notice.title}`,
-                        template: 'notice-alert',
-                        data: {
-                            title: notice.title,
-                            content: notice.content,
-                            category: notice.category
-                        }
-                    }).catch(err => console.error('Email error:', err))
-                );
-
-            await Promise.all(emailPromises);
-        }
-
-    } catch (error) {
-        console.error('Send notice notifications error:', error);
+        return sendServerError(res, 'NOTICE_PIN_FAILED', 'Failed to update pinned notice state', error);
     }
 };
 
@@ -753,34 +859,31 @@ const sendNoticeNotificationsUpdated = async (notice, schoolId) => {
  */
 exports.getStudentNotices = async (req, res) => {
     try {
-        const schoolId = req.tenant?.schoolId || req.user.schoolId;
-        const studentRole = req.user.role;
+        const { schoolId } = normalizeSchoolScope(req);
+        const classIds =
+            req.user?.role === 'parent'
+                ? await getParentLinkedClassIds(req)
+                : req.user?.classId
+                    ? [req.user.classId]
+                    : [];
+        const query = buildPublishedNoticeQuery({
+            schoolId,
+            role: req.user.role,
+            classIds
+        });
 
-        const notices = await Notice.find({
-            $and: [
-                { $or: [{ schoolId }, { isGlobal: true }] },
-                { status: 'active' },
-                { isDeleted: false },
-                { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
-                {
-                    $or: [
-                        { targetRoles: { $in: [studentRole] } },
-                        { targetRoles: { $size: 0 } }
-                    ]
-                }
-            ]
-        }).sort({ createdAt: -1 });
+        const notices = await Notice.find(query)
+            .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, createdAt: -1 })
+            .lean();
 
         res.status(200).json({
             success: true,
+            code: 'STUDENT_NOTICES_FETCHED',
+            message: 'Student notices fetched successfully',
             data: notices
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'STUDENT_NOTICES_FETCH_FAILED', 'Failed to fetch student notices', error);
     }
 };
 
@@ -791,34 +894,39 @@ exports.getStudentNotices = async (req, res) => {
  */
 exports.getUnreadNotices = async (req, res) => {
     try {
-        const schoolId = req.tenant?.schoolId || req.user.schoolId;
-        const studentRole = req.user.role;
+        const { schoolId } = normalizeSchoolScope(req);
+        const classIds =
+            req.user?.role === 'parent'
+                ? await getParentLinkedClassIds(req)
+                : req.user?.classId
+                    ? [req.user.classId]
+                    : [];
+        const query = buildPublishedNoticeQuery({
+            schoolId,
+            role: req.user.role,
+            classIds
+        });
 
-        const notices = await Notice.find({
-            $and: [
-                { $or: [{ schoolId }, { isGlobal: true }] },
-                { status: 'active' },
-                { isDeleted: false },
-                { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
-                {
-                    $or: [
-                        { targetRoles: { $in: [studentRole] } },
-                        { targetRoles: { $size: 0 } }
-                    ]
-                }
-            ]
-        }).sort({ createdAt: -1 });
+        const notices = await Notice.find(query)
+            .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, createdAt: -1 })
+            .lean();
+
+        const readEvents = await Notification.find({
+            recipient: req.user._id || req.user.id,
+            type: 'notice',
+            'data.event': 'notice_read'
+        }).select('data.noticeId');
+        const readIds = new Set(readEvents.map((row) => String(row.data?.noticeId || '')));
+        const unread = notices.filter((notice) => !readIds.has(String(notice._id)));
 
         res.status(200).json({
             success: true,
-            data: notices
+            code: 'STUDENT_UNREAD_NOTICES_FETCHED',
+            message: 'Unread notices fetched successfully',
+            data: unread
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'STUDENT_UNREAD_NOTICES_FETCH_FAILED', 'Failed to fetch unread notices', error);
     }
 };
 
@@ -831,18 +939,54 @@ exports.markNoticeAsRead = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user.id;
+        const { schoolId, schoolCode } = normalizeSchoolScope(req);
+        const query = buildPublishedNoticeQuery({
+            schoolId,
+            role: req.user.role,
+            classIds: req.user?.classId ? [req.user.classId] : []
+        });
+        query.$and.push({ _id: id });
+
+        const notice = await Notice.findOne(query).select('_id title');
+        if (!notice) {
+            return res.status(404).json({
+                success: false,
+                code: 'NOTICE_NOT_FOUND',
+                message: 'Notice not found'
+            });
+        }
+
+        await Notification.findOneAndUpdate(
+            {
+                recipient: userId,
+                type: 'notice',
+                'data.noticeId': String(id),
+                'data.event': 'notice_read'
+            },
+            {
+                recipient: userId,
+                title: 'Notice read',
+                body: `Read notice: ${notice.title}`,
+                type: 'notice',
+                schoolCode,
+                data: {
+                    noticeId: String(id),
+                    event: 'notice_read'
+                },
+                read: true,
+                readAt: new Date()
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
 
         res.status(200).json({
             success: true,
+            code: 'NOTICE_MARKED_READ',
             message: 'Notice marked as read',
             data: { noticeId: id, readBy: userId }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'NOTICE_MARK_READ_FAILED', 'Failed to mark notice as read', error);
     }
 };
 
@@ -861,20 +1005,19 @@ exports.getNoticeById = async (req, res) => {
         if (!notice || (!notice.isGlobal && notice.schoolId?.toString() !== schoolId?.toString() && req.user.role !== 'super_admin')) {
             return res.status(404).json({
                 success: false,
+                code: 'NOTICE_NOT_FOUND',
                 message: 'Notice not found'
             });
         }
 
         res.status(200).json({
             success: true,
+            code: 'NOTICE_FETCHED',
+            message: 'Notice fetched successfully',
             data: notice
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'NOTICE_FETCH_FAILED', 'Failed to fetch notice', error);
     }
 };
 
@@ -899,20 +1042,18 @@ exports.publishNotice = async (req, res) => {
         if (!notice) {
             return res.status(404).json({
                 success: false,
+                code: 'NOTICE_NOT_FOUND',
                 message: 'Notice not found'
             });
         }
 
         res.status(200).json({
             success: true,
+            code: 'NOTICE_PUBLISHED',
             message: 'Notice published successfully',
             data: notice
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return sendServerError(res, 'NOTICE_PUBLISH_FAILED', 'Failed to publish notice', error);
     }
 };

@@ -31,7 +31,6 @@ router.use(addSchoolScope);
 // 🎓 Student Login is handled by /api/auth/login (public endpoint), not by tenant-protected internal route
 
 // All other routes require student authentication
-router.use(protect);
 router.use(authorize('student'));
 
 /**

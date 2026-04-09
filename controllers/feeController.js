@@ -1,751 +1,120 @@
-// controllers/feeController.js
-const Fee = require('../models/Fee');
-const Student = require('../models/Student');
-const PaymentHistory = require('../models/PaymentHistory');
-const FeeStructure = require('../models/FeeStructure');
-const AuditLog = require('../models/AuditLog');
-const School = require('../models/School');
+const mongoose = require('mongoose');
 const Excel = require('exceljs');
 const PDFDocument = require('pdfkit');
+
+const Fee = require('../models/Fee');
+const Student = require('../models/Student');
+const User = require('../models/User');
+const Class = require('../models/Class');
+const PaymentHistory = require('../models/PaymentHistory');
+const FeeStructure = require('../models/FeeStructure');
+const School = require('../models/School');
+const AuditLog = require('../models/AuditLog');
+
 const { sendSMS } = require('../utils/smsService');
 const { sendEmail } = require('../utils/emailService');
 
-const getMonthName = (monthNumber) => {
-    const months = ['January', 'February', 'March', 'April', 'May', 'June',
-        'July', 'August', 'September', 'October', 'November', 'December'];
-    return months[monthNumber - 1] || 'Unknown';
+const FEE_STATUS = { PAID: 'Paid', PARTIAL: 'Partial', UNPAID: 'Unpaid' };
+const PAYMENT_METHODS = new Set(['Cash', 'Bank', 'Mobile Banking', 'Cheque', 'Online']);
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+
+const toNumber = (value, fallback = 0) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
 };
 
-// @desc    Update Student Fee
-// @route   POST /api/fee/update
-// @access  Private (Principal/Accountant)
-exports.updateFee = async (req, res) => {
-    const { studentId, month, year, amountPaid, amountDue, paymentMethod, transactionId, remarks } = req.body;
-    
-    try {
-        // Validation
-        if (!studentId || !month || !year || amountPaid === undefined || amountDue === undefined) {
-            return res.status(400).json({ message: 'All fields are required' });
-        }
-
-        // Check if student exists and belongs to this school
-        const student = await Student.findOne({ 
-            _id: studentId, 
-            schoolCode: req.user.schoolCode 
-        });
-        
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        // Calculate status
-        let status = 'Unpaid';
-        if (amountPaid >= amountDue) status = 'Paid';
-        else if (amountPaid > 0) status = 'Partial';
-
-        // Check for existing fee record
-        const existingFee = await Fee.findOne({
-            studentId,
-            month,
-            year,
-            schoolCode: req.user.schoolCode
-        });
-
-        // Use transaction for data consistency
-        const session = await Fee.startSession();
-        session.startTransaction();
-
-        try {
-            let fee;
-            
-            if (existingFee) {
-                // Update existing
-                const previousAmountPaid = existingFee.amountPaid;
-                
-                existingFee.amountPaid = amountPaid;
-                existingFee.amountDue = amountDue;
-                existingFee.status = status;
-                existingFee.updatedBy = req.user._id;
-                existingFee.updatedAt = Date.now();
-                
-                await existingFee.save({ session });
-                fee = existingFee;
-
-                // Create payment history record
-                if (amountPaid > previousAmountPaid) {
-                    await PaymentHistory.create([{
-                        feeId: fee._id,
-                        studentId,
-                        month,
-                        year,
-                        amount: amountPaid - previousAmountPaid,
-                        previousDue: previousAmountPaid,
-                        newDue: amountPaid,
-                        paymentMethod,
-                        transactionId,
-                        remarks,
-                        receivedBy: req.user._id,
-                        schoolCode: req.user.schoolCode
-                    }], { session });
-                }
-            } else {
-                // Create new
-                fee = await Fee.create([{
-                    studentId,
-                    month,
-                    year,
-                    amountPaid,
-                    amountDue,
-                    status,
-                    schoolCode: req.user.schoolCode,
-                    createdBy: req.user._id
-                }], { session });
-
-                // Create payment history
-                if (amountPaid > 0) {
-                    await PaymentHistory.create([{
-                        feeId: fee[0]._id,
-                        studentId,
-                        month,
-                        year,
-                        amount: amountPaid,
-                        previousDue: 0,
-                        newDue: amountPaid,
-                        paymentMethod,
-                        transactionId,
-                        remarks,
-                        receivedBy: req.user._id,
-                        schoolCode: req.user.schoolCode
-                    }], { session });
-                }
-            }
-
-            await session.commitTransaction();
-
-            // Update student's total due
-            await updateStudentTotalDue(studentId);
-
-            // Send SMS/Email receipt if requested
-            if (amountPaid > 0 && process.env.SEND_PAYMENT_RECEIPT === 'true') {
-                sendPaymentReceipt(student, fee, amountPaid, paymentMethod);
-            }
-
-            // Audit log
-            await AuditLog.create({
-                user: req.user._id,
-                action: existingFee ? 'FEE_UPDATED' : 'FEE_CREATED',
-                details: { 
-                    studentId, 
-                    studentName: student.name,
-                    month, 
-                    year, 
-                    amountPaid,
-                    status
-                },
-                ip: req.ip,
-                userAgent: req.headers['user-agent']
-            });
-
-            res.json({ 
-                message: existingFee ? 'Fee updated successfully' : 'Fee added successfully',
-                fee: existingFee || fee[0]
-            });
-
-        } catch (error) {
-            await session.abortTransaction();
-            throw error;
-        } finally {
-            session.endSession();
-        }
-
-    } catch (error) {
-        console.error('Update fee error:', error);
-        res.status(500).json({ message: 'Failed to update fee' });
-    }
+const toPositive = (value) => {
+    const n = toNumber(value, NaN);
+    return Number.isFinite(n) && n >= 0 ? n : null;
 };
 
-// @desc    Get Student Clearance
-// @route   GET /api/fee/clearance/:studentId
-// @access  Private
-exports.getClearance = async (req, res) => {
-    const { studentId } = req.params;
-    
-    try {
-        const student = await Student.findById(studentId)
-            .populate('schoolCode', 'schoolName');
-            
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        // Check if student belongs to this school
-        if (student.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        // Get all fees for this student
-        const fees = await Fee.find({ 
-            studentId, 
-            schoolCode: student.schoolCode 
-        }).sort({ year: -1, month: -1 });
-
-        // Calculate total due
-        const totalDue = fees.reduce((acc, curr) => {
-            return acc + (curr.amountDue - curr.amountPaid);
-        }, 0);
-
-        // Get payment history
-        const paymentHistory = await PaymentHistory.find({ studentId })
-            .populate('receivedBy', 'name')
-            .sort({ createdAt: -1 })
-            .limit(10);
-
-        // Check if student has special permission or force admit
-        const isCleared = totalDue <= 0 || student.forceAdmit === true;
-
-        // Monthly breakdown
-        const monthlyBreakdown = fees.map(fee => ({
-            month: fee.month,
-            year: fee.year,
-            amountDue: fee.amountDue,
-            amountPaid: fee.amountPaid,
-            due: fee.amountDue - fee.amountPaid,
-            status: fee.status
-        }));
-
-        res.json({
-            studentId: student._id,
-            studentName: student.name,
-            studentClass: student.studentClass,
-            roll: student.roll,
-            schoolName: student.schoolCode?.schoolName,
-            totalDue,
-            isCleared,
-            specialPermission: student.forceAdmit || false,
-            monthlyBreakdown,
-            recentPayments: paymentHistory
-        });
-
-    } catch (error) {
-        console.error('Get clearance error:', error);
-        res.status(500).json({ message: 'Failed to fetch clearance' });
-    }
+const parsePeriod = (monthInput, yearInput) => {
+    const month = Math.floor(toNumber(monthInput, NaN));
+    const year = Math.floor(toNumber(yearInput, NaN));
+    if (!Number.isInteger(month) || month < 1 || month > 12) return null;
+    if (!Number.isInteger(year) || year < 1900 || year > 3000) return null;
+    return { month, year };
 };
 
-// @desc    Give Special Permission (Force Admit)
-// @route   PUT /api/fee/special-permission/:studentId
-// @access  Private (Principal only)
-exports.giveSpecialPermission = async (req, res) => {
+const parseDate = (value) => {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const computeOutstanding = (amountDue, amountPaid) => Math.max(0, toNumber(amountDue) - toNumber(amountPaid));
+const computeStatus = (amountDue, amountPaid) => {
+    if (toNumber(amountPaid) <= 0) return FEE_STATUS.UNPAID;
+    return computeOutstanding(amountDue, amountPaid) <= 0 ? FEE_STATUS.PAID : FEE_STATUS.PARTIAL;
+};
+
+const normalizeStatus = (status) => {
+    if (typeof status !== 'string') return null;
+    const lower = status.trim().toLowerCase();
+    if (lower === 'paid') return FEE_STATUS.PAID;
+    if (lower === 'partial') return FEE_STATUS.PARTIAL;
+    if (lower === 'unpaid') return FEE_STATUS.UNPAID;
+    return null;
+};
+
+const normalizePaymentMethod = (method) => {
+    if (typeof method !== 'string') return 'Cash';
+    const normalized = method.trim();
+    return PAYMENT_METHODS.has(normalized) ? normalized : 'Cash';
+};
+
+const monthName = (month) => MONTH_NAMES[month - 1] || 'Unknown';
+
+const sendError = (res, status, message, code = 'REQUEST_FAILED', details) => res.status(status).json({
+    success: false,
+    code,
+    message,
+    ...(details && process.env.NODE_ENV !== 'production' ? { details } : {})
+});
+
+const sendSuccess = (res, { status = 200, code = 'REQUEST_SUCCESS', message = 'Request successful', data, extra = {} } = {}) => {
+    return res.status(status).json({
+        success: true,
+        code,
+        message,
+        ...(data !== undefined ? { data } : {}),
+        ...extra
+    });
+};
+
+const safeAudit = async (req, action, details) => {
     try {
-        if (req.user.role !== 'principal') {
-            return res.status(403).json({ message: 'Access denied. Principal only.' });
-        }
-
-        const { studentId } = req.params;
-        const { reason, expiryDate } = req.body;
-
-        const student = await Student.findOne({ 
-            _id: studentId, 
-            schoolCode: req.user.schoolCode 
-        });
-
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        // Update student
-        student.forceAdmit = true;
-        student.forceAdmitReason = reason || 'Special permission granted';
-        student.forceAdmitExpiry = expiryDate || null;
-        student.forceAdmitGrantedBy = req.user._id;
-        student.forceAdmitGrantedAt = new Date();
-        
-        await student.save();
-
-        // Audit log
+        if (!AuditLog || mongoose.connection.readyState !== 1) return;
+        const user = req?.user?._id || req?.user?.id;
+        if (!user) return;
         await AuditLog.create({
-            user: req.user._id,
-            action: 'SPECIAL_PERMISSION_GRANTED',
-            details: { 
-                studentId, 
-                studentName: student.name,
-                reason,
-                expiryDate 
-            },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
+            user,
+            action,
+            details,
+            schoolCode: req?.user?.schoolCode,
+            ip: req?.ip,
+            userAgent: req?.headers?.['user-agent']
         });
-
-        res.json({ 
-            message: 'Special permission granted successfully',
-            student: {
-                id: student._id,
-                name: student.name,
-                forceAdmit: true,
-                forceAdmitExpiry: student.forceAdmitExpiry
-            }
-        });
-
     } catch (error) {
-        console.error('Special permission error:', error);
-        res.status(500).json({ message: 'Failed to grant special permission' });
+        console.error('Fee audit error:', error.message);
     }
 };
 
-// @desc    Revoke Special Permission
-// @route   PUT /api/fee/revoke-permission/:studentId
-// @access  Private (Principal only)
-exports.revokeSpecialPermission = async (req, res) => {
-    try {
-        if (req.user.role !== 'principal') {
-            return res.status(403).json({ message: 'Access denied. Principal only.' });
-        }
-
-        const student = await Student.findOne({ 
-            _id: req.params.studentId, 
-            schoolCode: req.user.schoolCode 
-        });
-
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        student.forceAdmit = false;
-        student.forceAdmitReason = null;
-        student.forceAdmitExpiry = null;
-        await student.save();
-
-        // Audit log
-        await AuditLog.create({
-            user: req.user._id,
-            action: 'SPECIAL_PERMISSION_REVOKED',
-            details: { studentId: student._id, studentName: student.name },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
-        });
-
-        res.json({ message: 'Special permission revoked' });
-
-    } catch (error) {
-        console.error('Revoke permission error:', error);
-        res.status(500).json({ message: 'Failed to revoke permission' });
-    }
+const updateStudentTotalDue = async (studentId, schoolCode, session = null) => {
+    const fees = await Fee.find({ studentId, schoolCode }).session(session).select('amountDue amountPaid');
+    const totalDue = fees.reduce((sum, fee) => sum + computeOutstanding(fee.amountDue, fee.amountPaid), 0);
+    await Student.findByIdAndUpdate(studentId, { totalDue }, { session: session || undefined });
+    return totalDue;
 };
 
-// @desc    Get Fee Report (Monthly/Yearly)
-// @route   GET /api/fee/report
-// @access  Private (Principal/Accountant)
-exports.getFeeReport = async (req, res) => {
-    const { class: className, section, month, year, status, page = 1, limit = 20 } = req.query;
-    
+const sendReceipt = async ({ student, fee, amount, paymentMethod }) => {
+    if (!student) return;
     try {
-        let query = { schoolCode: req.user.schoolCode };
-
-        if (month && year) {
-            query.month = parseInt(month);
-            query.year = parseInt(year);
-        }
-
-        // Get students first if class/section filter applied
-        let studentIds = [];
-        if (className || section) {
-            const studentQuery = { schoolCode: req.user.schoolCode };
-            if (className) studentQuery.studentClass = className;
-            if (section) studentQuery.section = section;
-            
-            const students = await Student.find(studentQuery).select('_id');
-            studentIds = students.map(s => s._id);
-            query.studentId = { $in: studentIds };
-        }
-
-        // Status filter
-        if (status) {
-            query.status = status;
-        }
-
-        // Pagination
-        const skip = (page - 1) * limit;
-
-        const fees = await Fee.find(query)
-            .populate('studentId', 'name roll studentClass section fatherName motherName')
-            .populate('createdBy', 'name')
-            .populate('updatedBy', 'name')
-            .sort({ year: -1, month: -1, 'studentId.roll': 1 })
-            .skip(skip)
-            .limit(limit * 1);
-
-        const total = await Fee.countDocuments(query);
-
-        // Calculate summary
-        const summary = await Fee.aggregate([
-            { $match: query },
-            {
-                $group: {
-                    _id: null,
-                    totalCollected: { $sum: '$amountPaid' },
-                    totalDue: { $sum: { $subtract: ['$amountDue', '$amountPaid'] } },
-                    totalStudents: { $sum: 1 },
-                    paidCount: { $sum: { $cond: [{ $eq: ['$status', 'Paid'] }, 1, 0] } },
-                    partialCount: { $sum: { $cond: [{ $eq: ['$status', 'Partial'] }, 1, 0] } },
-                    unpaidCount: { $sum: { $cond: [{ $eq: ['$status', 'Unpaid'] }, 1, 0] } }
-                }
-            }
-        ]);
-
-        res.json({
-            fees,
-            summary: summary[0] || { totalCollected: 0, totalDue: 0, totalStudents: 0 },
-            totalPages: Math.ceil(total / limit),
-            currentPage: page,
-            total
-        });
-
-    } catch (error) {
-        console.error('Fee report error:', error);
-        res.status(500).json({ message: 'Failed to fetch fee report' });
-    }
-};
-
-// @desc    Get Student Fee History
-// @route   GET /api/fee/history/:studentId
-// @access  Private
-exports.getStudentFeeHistory = async (req, res) => {
-    const { studentId } = req.params;
-    
-    try {
-        const student = await Student.findById(studentId);
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        const fees = await Fee.find({ 
-            studentId, 
-            schoolCode: req.user.schoolCode 
-        }).sort({ year: -1, month: -1 });
-
-        const paymentHistory = await PaymentHistory.find({ studentId })
-            .populate('receivedBy', 'name')
-            .sort({ createdAt: -1 });
-
-        res.json({
-            student: {
-                name: student.name,
-                roll: student.roll,
-                class: student.studentClass,
-                section: student.section
-            },
-            fees,
-            paymentHistory
-        });
-
-    } catch (error) {
-        console.error('Fee history error:', error);
-        res.status(500).json({ message: 'Failed to fetch fee history' });
-    }
-};
-
-// @desc    Get Due List
-// @route   GET /api/fee/due-list
-// @access  Private (Principal/Accountant)
-exports.getDueList = async (req, res) => {
-    const { class: className, section, month, year, minDue = 0 } = req.query;
-    
-    try {
-        const matchQuery = {
-            schoolCode: req.user.schoolCode,
-            $expr: { $gt: [{ $subtract: ['$amountDue', '$amountPaid'] }, parseFloat(minDue)] }
-        };
-
-        if (month && year) {
-            matchQuery.month = parseInt(month);
-            matchQuery.year = parseInt(year);
-        }
-
-        // Get students with due
-        const dues = await Fee.aggregate([
-            { $match: matchQuery },
-            {
-                $lookup: {
-                    from: 'students',
-                    localField: 'studentId',
-                    foreignField: '_id',
-                    as: 'student'
-                }
-            },
-            { $unwind: '$student' },
-            { 
-                $match: { 
-                    'student.schoolCode': req.user.schoolCode,
-                    ...(className && { 'student.studentClass': className }),
-                    ...(section && { 'student.section': section })
-                } 
-            },
-            {
-                $project: {
-                    studentId: 1,
-                    studentName: '$student.name',
-                    roll: '$student.roll',
-                    class: '$student.studentClass',
-                    section: '$student.section',
-                    fatherName: '$student.fatherName',
-                    phone: '$student.guardian.phone',
-                    month: 1,
-                    year: 1,
-                    amountDue: 1,
-                    amountPaid: 1,
-                    dueAmount: { $subtract: ['$amountDue', '$amountPaid'] },
-                    status: 1
-                }
-            },
-            { $sort: { class: 1, section: 1, roll: 1 } }
-        ]);
-
-        // Calculate total due
-        const totalDue = dues.reduce((acc, curr) => acc + curr.dueAmount, 0);
-
-        res.json({
-            totalDue,
-            totalStudents: dues.length,
-            dues
-        });
-
-    } catch (error) {
-        console.error('Due list error:', error);
-        res.status(500).json({ message: 'Failed to fetch due list' });
-    }
-};
-
-// @desc    Export Fee Report to Excel
-// @route   GET /api/fee/export
-// @access  Private (Principal/Accountant)
-exports.exportFeeReport = async (req, res) => {
-    const { class: className, section, month, year, startDate, endDate } = req.query;
-    
-    try {
-        let query = { schoolCode: req.user.schoolCode };
-
-        if (month && year) {
-            query.month = parseInt(month);
-            query.year = parseInt(year);
-        }
-
-        if (startDate && endDate) {
-            const start = new Date(startDate);
-            const end = new Date(endDate);
-            query.createdAt = { $gte: start, $lte: end };
-        }
-
-        // Get students if class/section filter
-        if (className || section) {
-            const studentQuery = { schoolCode: req.user.schoolCode };
-            if (className) studentQuery.studentClass = className;
-            if (section) studentQuery.section = section;
-            
-            const students = await Student.find(studentQuery).select('_id');
-            query.studentId = { $in: students.map(s => s._id) };
-        }
-
-        const fees = await Fee.find(query)
-            .populate('studentId', 'name roll studentClass section fatherName motherName guardian')
-            .sort({ year: -1, month: -1, 'studentId.roll': 1 })
-            .lean();
-
-        // Create Excel workbook
-        const workbook = new Excel.Workbook();
-        const worksheet = workbook.addWorksheet('Fee Report');
-
-        // Add headers
-        worksheet.columns = [
-            { header: 'Student Name', key: 'studentName', width: 25 },
-            { header: 'Class', key: 'class', width: 10 },
-            { header: 'Section', key: 'section', width: 10 },
-            { header: 'Roll', key: 'roll', width: 10 },
-            { header: 'Month', key: 'month', width: 15 },
-            { header: 'Year', key: 'year', width: 8 },
-            { header: 'Amount Due', key: 'amountDue', width: 15 },
-            { header: 'Amount Paid', key: 'amountPaid', width: 15 },
-            { header: 'Due', key: 'due', width: 15 },
-            { header: 'Status', key: 'status', width: 12 },
-            { header: 'Father\'s Name', key: 'fatherName', width: 20 },
-            { header: 'Phone', key: 'phone', width: 15 }
-        ];
-
-        // Add rows
-        fees.forEach(fee => {
-            worksheet.addRow({
-                studentName: fee.studentId?.name || 'N/A',
-                class: fee.studentId?.studentClass || 'N/A',
-                section: fee.studentId?.section || 'N/A',
-                roll: fee.studentId?.roll || 'N/A',
-                month: getMonthName(fee.month),
-                year: fee.year,
-                amountDue: fee.amountDue,
-                amountPaid: fee.amountPaid,
-                due: fee.amountDue - fee.amountPaid,
-                status: fee.status,
-                fatherName: fee.studentId?.fatherName || 'N/A',
-                phone: fee.studentId?.guardian?.phone || 'N/A'
-            });
-        });
-
-        // Summary row
-        const totalDue = fees.reduce((acc, f) => acc + (f.amountDue - f.amountPaid), 0);
-        const totalPaid = fees.reduce((acc, f) => acc + f.amountPaid, 0);
-        
-        worksheet.addRow({});
-        worksheet.addRow({
-            studentName: 'SUMMARY',
-            amountDue: totalPaid + totalDue,
-            amountPaid: totalPaid,
-            due: totalDue
-        });
-
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=fee_report_${Date.now()}.xlsx`);
-
-        await workbook.xlsx.write(res);
-        res.end();
-
-    } catch (error) {
-        console.error('Export fee report error:', error);
-        res.status(500).json({ message: 'Failed to export report' });
-    }
-};
-
-// @desc    Generate Fee Collection Summary PDF
-// @route   GET /api/fee/summary-pdf
-// @access  Private (Principal only)
-exports.generateFeeSummaryPDF = async (req, res) => {
-    const { month, year } = req.query;
-    
-    try {
-        if (!month || !year) {
-            return res.status(400).json({ message: 'Month and year required' });
-        }
-
-        const school = await School.findOne({ schoolCode: req.user.schoolCode });
-        
-        // Get fee summary
-        const summary = await Fee.aggregate([
-            {
-                $match: {
-                    schoolCode: req.user.schoolCode,
-                    month: parseInt(month),
-                    year: parseInt(year)
-                }
-            },
-            {
-                $group: {
-                    _id: '$status',
-                    count: { $sum: 1 },
-                    totalCollected: { $sum: '$amountPaid' },
-                    totalDue: { $sum: { $subtract: ['$amountDue', '$amountPaid'] } }
-                }
-            }
-        ]);
-
-        // Get recent collections
-        const recentPayments = await PaymentHistory.find({
-            schoolCode: req.user.schoolCode,
-            month: parseInt(month),
-            year: parseInt(year)
-        })
-        .populate('studentId', 'name roll')
-        .populate('receivedBy', 'name')
-        .sort({ createdAt: -1 })
-        .limit(20);
-
-        // Create PDF
-        const doc = new PDFDocument({ margin: 50, size: 'A4' });
-
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=fee_summary_${month}_${year}.pdf`);
-
-        doc.pipe(res);
-
-        // Header
-        doc.fontSize(20)
-           .font('Helvetica-Bold')
-           .text(school.schoolName, { align: 'center' });
-        
-        doc.fontSize(16)
-           .text(`Fee Collection Summary`, { align: 'center' });
-        
-        doc.fontSize(12)
-           .text(`${getMonthName(month)} ${year}`, { align: 'center' });
-
-        doc.moveDown();
-
-        // Summary table
-        doc.fontSize(14).text('Collection Summary', 50);
-        doc.moveDown(0.5);
-
-        const summaryData = {
-            Paid: summary.find(s => s._id === 'Paid') || { count: 0, totalCollected: 0 },
-            Partial: summary.find(s => s._id === 'Partial') || { count: 0, totalCollected: 0 },
-            Unpaid: summary.find(s => s._id === 'Unpaid') || { count: 0, totalCollected: 0 }
-        };
-
-        const totalCollected = summaryData.Paid.totalCollected + summaryData.Partial.totalCollected;
-        const totalDue = summaryData.Paid.totalDue + summaryData.Partial.totalDue + summaryData.Unpaid.totalDue;
-
-        doc.fontSize(10);
-        doc.text(`Total Collected: ৳${totalCollected}`, 50, doc.y);
-        doc.text(`Total Due: ৳${totalDue}`, 50, doc.y + 20);
-        doc.text(`Paid Students: ${summaryData.Paid.count}`, 250, doc.y - 20);
-        doc.text(`Partial Students: ${summaryData.Partial.count}`, 250, doc.y);
-        doc.text(`Unpaid Students: ${summaryData.Unpaid.count}`, 250, doc.y + 20);
-
-        doc.moveDown(3);
-
-        // Recent collections
-        doc.fontSize(14).text('Recent Collections', 50);
-        doc.moveDown(0.5);
-
-        let y = doc.y;
-        recentPayments.forEach((payment, index) => {
-            if (index < 10) {
-                doc.fontSize(9)
-                   .text(`${new Date(payment.createdAt).toLocaleDateString()}`, 50, y)
-                   .text(`${payment.studentId?.name || 'N/A'}`, 120, y)
-                   .text(`৳${payment.amount}`, 300, y)
-                   .text(`${payment.paymentMethod}`, 380, y);
-                y += 15;
-            }
-        });
-
-        doc.end();
-
-    } catch (error) {
-        console.error('Generate PDF error:', error);
-        res.status(500).json({ message: 'Failed to generate PDF' });
-    }
-};
-
-// Helper function to update student's total due
-const updateStudentTotalDue = async (studentId) => {
-    try {
-        const fees = await Fee.find({ studentId });
-        const totalDue = fees.reduce((acc, curr) => {
-            return acc + (curr.amountDue - curr.amountPaid);
-        }, 0);
-
-        await Student.findByIdAndUpdate(studentId, { totalDue });
-    } catch (error) {
-        console.error('Update student total due error:', error);
-    }
-};
-
-// Helper function to send payment receipt
-const sendPaymentReceipt = async (student, fee, amount, method) => {
-    try {
-        const now = new Date();
-        const month = fee?.month || now.getMonth() + 1;
-        const year = fee?.year || now.getFullYear();
         if (student.guardian?.phone) {
             await sendSMS({
                 to: student.guardian.phone,
-                message: `Payment receipt: ৳${amount} received for ${student.name} (${month}/${year}). Thank you.`
+                message: `Payment received: ${amount} for ${student.name} (${monthName(fee.month)} ${fee.year}).`
             });
         }
         if (student.guardian?.email) {
@@ -756,412 +125,1287 @@ const sendPaymentReceipt = async (student, fee, amount, method) => {
                 data: {
                     studentName: student.name,
                     amount,
-                    month: getMonthName(month),
-                    year,
-                    date: now.toLocaleDateString(),
-                    method
+                    month: monthName(fee.month),
+                    year: fee.year,
+                    method: paymentMethod,
+                    date: new Date().toLocaleDateString()
                 }
             });
         }
     } catch (error) {
-        console.error('Send payment receipt error:', error);
+        console.error('Send payment receipt error:', error.message);
     }
 };
 
-// @desc    Get all fees
-    // @route   GET /api/fee
-    // @access  Private
-    exports.getFees = async (req, res) => {
-        try {
-            const { page = 1, limit = 10, studentId, month, year, status } = req.query;
-            const filter = { schoolCode: req.user.schoolCode };
-            
-            if (studentId) filter.studentId = studentId;
-            if (month) filter.month = month;
-            if (year) filter.year = year;
-            if (status) filter.status = status;
-            
-            const fees = await Fee.find(filter)
-                .populate('studentId', 'name rollNumber class section')
-                .limit(limit * 1)
-                .skip((page - 1) * limit)
-                .sort({ createdAt: -1 });
-                
-            const total = await Fee.countDocuments(filter);
-            
-            res.json({
-                success: true,
-                data: {
-                    fees,
-                    pagination: {
-                        page: parseInt(page),
-                        limit: parseInt(limit),
-                        total,
-                        pages: Math.ceil(total / limit)
-                    }
+const resolveStudentFromAuth = async (req) => {
+    const schoolCode = req.user.schoolCode;
+    const userId = req.user._id || req.user.id;
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        const byId = await Student.findOne({ _id: userId, schoolCode });
+        if (byId) return byId;
+    }
+    const roll = req.user.roll || req.user.rollNumber;
+    if (roll) return Student.findOne({ schoolCode, roll: String(roll).trim() });
+    return null;
+};
+
+const resolveStudentByRef = async (studentRef, schoolCode) => {
+    if (!studentRef || !schoolCode) return null;
+
+    const ref = String(studentRef).trim();
+    if (mongoose.Types.ObjectId.isValid(ref)) {
+        const byId = await Student.findOne({ _id: ref, schoolCode });
+        if (byId) return byId;
+
+        const userDoc = await User.findOne({ _id: ref, role: 'student', schoolCode }).select('rollNumber classId section');
+        if (userDoc?.rollNumber) {
+            const roll = String(userDoc.rollNumber).trim();
+            const studentQuery = { schoolCode, roll };
+
+            if (userDoc.classId) {
+                const classDoc = await Class.findById(userDoc.classId).select('className').lean();
+                if (classDoc?.className) studentQuery.studentClass = classDoc.className;
+            }
+            if (userDoc.section) studentQuery.section = userDoc.section;
+
+            let byUser = await Student.findOne(studentQuery);
+            if (!byUser && studentQuery.section) {
+                delete studentQuery.section;
+                byUser = await Student.findOne(studentQuery);
+            }
+            if (byUser) return byUser;
+        }
+    }
+
+    const byRoll = await Student.findOne({ schoolCode, roll: ref });
+    if (byRoll) return byRoll;
+
+    return null;
+};
+
+const resolveAuthenticatedStudent = async (req) => {
+    return resolveStudentFromAuth(req);
+};
+
+const mapFeeStructure = (doc) => {
+    const row = doc.toObject ? doc.toObject() : doc;
+    const now = new Date();
+    const dueDate = row.dueDayOfMonth
+        ? new Date(now.getFullYear(), now.getMonth(), row.dueDayOfMonth)
+        : null;
+    return {
+        ...row,
+        className: row.classLevel,
+        name: `${row.classLevel} - ${row.feeType}`,
+        type: String(row.feeType || '').toLowerCase(),
+        dueDay: row.dueDayOfMonth,
+        dueDate: dueDate ? dueDate.toISOString() : null
+    };
+};
+
+const defaultAcademicYear = (school) => {
+    if (school?.academicSettings?.currentSession) return school.academicSettings.currentSession;
+    const year = new Date().getFullYear();
+    return `${year}-${year + 1}`;
+};
+
+const parseFeeType = (value) => {
+    const key = String(value || 'monthly').trim().toLowerCase();
+    const map = {
+        tuition: 'Tuition',
+        monthly: 'Monthly',
+        yearly: 'Yearly',
+        transport: 'Transport',
+        library: 'Library',
+        lab: 'Lab',
+        other: 'Other',
+        examination: 'Other',
+        sports: 'Other'
+    };
+    return map[key] || 'Monthly';
+};
+
+const applyPaymentAcrossFees = async ({
+    schoolCode, studentId, amount, paymentMethod, transactionId, remarks, actorId, feeId, month, year, session
+}) => {
+    const payableAmount = toPositive(amount);
+    if (payableAmount === null || payableAmount <= 0) throw new Error('Payment amount must be a positive number');
+
+    const query = { schoolCode, studentId };
+    if (feeId) query._id = feeId;
+    if (!feeId && month && year) {
+        query.month = month;
+        query.year = year;
+    }
+
+    const feeRows = await Fee.find(query).session(session).sort({ year: 1, month: 1, createdAt: 1 });
+    if (!feeRows.length) throw new Error('No fee records found');
+
+    const rows = feeRows
+        .map((fee) => ({ fee, outstanding: computeOutstanding(fee.amountDue, fee.amountPaid) }))
+        .filter((row) => row.outstanding > 0);
+    if (!rows.length) throw new Error('All selected fee records are already paid');
+
+    const totalOutstanding = rows.reduce((sum, row) => sum + row.outstanding, 0);
+    if (payableAmount > totalOutstanding) {
+        throw new Error(`Payment exceeds outstanding amount (${totalOutstanding.toFixed(2)})`);
+    }
+
+    let remaining = payableAmount;
+    const paymentEntries = [];
+    for (const row of rows) {
+        if (remaining <= 0) break;
+        const applied = Math.min(remaining, row.outstanding);
+        row.fee.amountPaid = toNumber(row.fee.amountPaid) + applied;
+        row.fee.status = computeStatus(row.fee.amountDue, row.fee.amountPaid);
+        row.fee.updatedBy = actorId;
+        row.fee.updatedAt = new Date();
+        await row.fee.save({ session });
+
+        const docs = await PaymentHistory.create([{
+            feeId: row.fee._id,
+            studentId: row.fee.studentId,
+            month: row.fee.month,
+            year: row.fee.year,
+            amount: applied,
+            previousDue: row.outstanding,
+            newDue: Math.max(0, row.outstanding - applied),
+            paymentMethod: normalizePaymentMethod(paymentMethod),
+            transactionId: transactionId || undefined,
+            remarks: remarks || undefined,
+            receivedBy: actorId || undefined,
+            schoolCode
+        }], { session });
+        paymentEntries.push(docs[0]);
+        remaining -= applied;
+    }
+
+    return { appliedAmount: payableAmount - remaining, paymentEntries };
+};
+
+exports.getFees = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, studentId, month, year, status } = req.query;
+        const filter = { schoolCode: req.user.schoolCode };
+        if (studentId) filter.studentId = studentId;
+        if (month && year) {
+            const period = parsePeriod(month, year);
+            if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
+            filter.month = period.month;
+            filter.year = period.year;
+        }
+        if (status) {
+            const normalizedStatus = normalizeStatus(status);
+            if (!normalizedStatus) return sendError(res, 400, 'Invalid status', 'VALIDATION_ERROR');
+            filter.status = normalizedStatus;
+        }
+
+        const pageNum = Math.max(toNumber(page, 1), 1);
+        const limitNum = Math.min(Math.max(toNumber(limit, 10), 1), 500);
+        const skip = (pageNum - 1) * limitNum;
+
+        const [fees, total] = await Promise.all([
+            Fee.find(filter)
+                .populate('studentId', 'name roll studentClass section')
+                .sort({ year: -1, month: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum),
+            Fee.countDocuments(filter)
+        ]);
+
+        const summary = fees.reduce((acc, fee) => {
+            acc.totalAssessed += toNumber(fee.amountDue);
+            acc.totalPaid += toNumber(fee.amountPaid);
+            acc.totalDue += computeOutstanding(fee.amountDue, fee.amountPaid);
+            return acc;
+        }, { totalAssessed: 0, totalPaid: 0, totalDue: 0 });
+
+        return sendSuccess(res, {
+            code: 'FEES_FETCHED',
+            message: 'Fees fetched successfully',
+            data: {
+                fees,
+                summary,
+                pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total,
+                    pages: Math.max(Math.ceil(total / limitNum), 1)
                 }
+            }
+        });
+    } catch (error) {
+        console.error('getFees error:', error);
+        return sendError(res, 500, 'Failed to fetch fees', 'FEES_FETCH_FAILED', error.message);
+    }
+};
+
+exports.updateFee = async (req, res) => {
+    const { studentId, month, year, amountDue, amountPaid, paymentMethod, transactionId, remarks } = req.body || {};
+    const schoolCode = req.user.schoolCode;
+    const actorId = req.user._id || req.user.id;
+    const period = parsePeriod(month, year);
+
+    if (!studentId || !period) return sendError(res, 400, 'studentId, month, and year are required', 'VALIDATION_ERROR');
+    const due = toPositive(amountDue);
+    const paid = toPositive(amountPaid);
+    if (due === null || paid === null) return sendError(res, 400, 'amountDue and amountPaid must be non-negative', 'VALIDATION_ERROR');
+
+    try {
+        const student = await resolveStudentByRef(studentId, schoolCode);
+        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try {
+            const existing = await Fee.findOne({ studentId: student._id, month: period.month, year: period.year, schoolCode }).session(session);
+            let feeDoc;
+            let payment = null;
+
+            if (existing) {
+                const oldPaid = toNumber(existing.amountPaid);
+                existing.amountDue = due;
+                existing.amountPaid = paid;
+                existing.status = computeStatus(due, paid);
+                existing.updatedBy = actorId;
+                existing.updatedAt = new Date();
+                await existing.save({ session });
+                feeDoc = existing;
+
+                const increment = paid - oldPaid;
+                if (increment > 0) {
+                    const docs = await PaymentHistory.create([{
+                        feeId: existing._id,
+                        studentId: existing.studentId,
+                        month: existing.month,
+                        year: existing.year,
+                        amount: increment,
+                        previousDue: computeOutstanding(due, oldPaid),
+                        newDue: computeOutstanding(due, paid),
+                        paymentMethod: normalizePaymentMethod(paymentMethod),
+                        transactionId: transactionId || undefined,
+                        remarks: remarks || undefined,
+                        receivedBy: actorId,
+                        schoolCode
+                    }], { session });
+                    payment = docs[0];
+                }
+            } else {
+                const docs = await Fee.create([{
+                    studentId: student._id,
+                    month: period.month,
+                    year: period.year,
+                    amountDue: due,
+                    amountPaid: paid,
+                    status: computeStatus(due, paid),
+                    schoolCode,
+                    createdBy: actorId,
+                    updatedBy: actorId
+                }], { session });
+                feeDoc = docs[0];
+
+                if (paid > 0) {
+                    const pdocs = await PaymentHistory.create([{
+                        feeId: feeDoc._id,
+                        studentId: feeDoc.studentId,
+                        month: feeDoc.month,
+                        year: feeDoc.year,
+                        amount: paid,
+                        previousDue: due,
+                        newDue: computeOutstanding(due, paid),
+                        paymentMethod: normalizePaymentMethod(paymentMethod),
+                        transactionId: transactionId || undefined,
+                        remarks: remarks || undefined,
+                        receivedBy: actorId,
+                        schoolCode
+                    }], { session });
+                    payment = pdocs[0];
+                }
+            }
+
+            await updateStudentTotalDue(student._id, schoolCode, session);
+            await session.commitTransaction();
+
+            await safeAudit(req, existing ? 'FEE_UPDATED' : 'FEE_CREATED', {
+                feeId: feeDoc._id, studentId: student._id, month: period.month, year: period.year, amountDue: due, amountPaid: paid
+            });
+
+            if (payment && process.env.SEND_PAYMENT_RECEIPT === 'true') {
+                await sendReceipt({ student, fee: feeDoc, amount: payment.amount, paymentMethod: payment.paymentMethod });
+            }
+
+            return sendSuccess(res, {
+                code: existing ? 'FEE_UPDATED' : 'FEE_CREATED',
+                message: existing ? 'Fee updated successfully' : 'Fee created successfully',
+                data: { fee: feeDoc, payment },
+                extra: { fee: feeDoc }
             });
         } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
         }
-    };
+    } catch (error) {
+        console.error('updateFee error:', error);
+        return sendError(res, 500, 'Failed to update fee', 'FEE_UPDATE_FAILED', error.message);
+    }
+};
 
-    // @desc    Collect payment
-    // @route   POST /api/fee/collect
-    // @access  Private (Principal/Accountant)
-    exports.collectPayment = async (req, res) => {
+exports.collectPayment = async (req, res) => {
+    const { studentId, amount, paymentMethod, transactionId, remarks, feeId, month, year } = req.body || {};
+    const schoolCode = req.user.schoolCode;
+    const actorId = req.user._id || req.user.id;
+    if (!studentId) return sendError(res, 400, 'Student ID is required', 'VALIDATION_ERROR');
+    const period = (month && year) ? parsePeriod(month, year) : null;
+    if ((month || year) && !period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
+
+    try {
+        const student = await resolveStudentByRef(studentId, schoolCode);
+        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
         try {
-            const { studentId, amount, paymentMethod, transactionId, remarks } = req.body;
-            
-            if (!studentId || !amount || !paymentMethod) {
-                return res.status(400).json({ success: false, message: 'Student ID, amount, and payment method are required' });
-            }
-            
-            // Find student
-            const student = await Student.findOne({ 
-                _id: studentId, 
-                schoolCode: req.user.schoolCode 
-            });
-            
-            if (!student) {
-                return res.status(404).json({ success: false, message: 'Student not found' });
-            }
-            
-            // Create payment history record
-            const now = new Date();
-            const paymentHistory = await PaymentHistory.create({
-                studentId,
-                month: now.getMonth() + 1,
-                year: now.getFullYear(),
+            const result = await applyPaymentAcrossFees({
+                schoolCode,
+                studentId: student._id,
                 amount,
-                previousDue: student.totalDue || 0,
-                newDue: Math.max(0, (student.totalDue || 0) - amount),
                 paymentMethod,
                 transactionId,
                 remarks,
-                receivedBy: req.user._id,
-                schoolCode: req.user.schoolCode
+                actorId,
+                feeId,
+                month: period?.month,
+                year: period?.year,
+                session
             });
-            
-            // Update student's total due
-            const currentTotalDue = student.totalDue || 0;
-            const newTotalDue = Math.max(0, currentTotalDue - amount);
-            
-            await Student.findByIdAndUpdate(studentId, { 
-                totalDue: newTotalDue 
-            });
-            
-            // Send payment receipt
-            await sendPaymentReceipt(student, null, amount, paymentMethod);
-            
-            res.status(201).json({
-                success: true,
-                data: paymentHistory,
-                message: 'Payment collected successfully'
+            await updateStudentTotalDue(student._id, schoolCode, session);
+            await session.commitTransaction();
+
+            if (result.paymentEntries.length && process.env.SEND_PAYMENT_RECEIPT === 'true') {
+                const latest = result.paymentEntries[result.paymentEntries.length - 1];
+                const fee = await Fee.findById(latest.feeId);
+                await sendReceipt({ student, fee, amount: latest.amount, paymentMethod: latest.paymentMethod });
+            }
+
+            return sendSuccess(res, {
+                status: 201,
+                code: 'FEE_PAYMENT_COLLECTED',
+                message: 'Payment collected successfully',
+                data: { appliedAmount: result.appliedAmount, payments: result.paymentEntries }
             });
         } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
         }
-    };
+    } catch (error) {
+        return sendError(res, 400, error.message || 'Payment failed', 'PAYMENT_COLLECTION_FAILED');
+    }
+};
 
-/**
- * @desc    Create fee structure
- * @route   POST /api/fee/structure
- * @access  Principal only
- */
+exports.getClearance = async (req, res) => {
+    const { studentId } = req.params;
+    const schoolCode = req.user.schoolCode;
+    try {
+        const [student, school] = await Promise.all([
+            resolveStudentByRef(studentId, schoolCode),
+            School.findOne({ schoolCode }).select('schoolName')
+        ]);
+        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+
+        const [fees, recentPayments] = await Promise.all([
+            Fee.find({ studentId: student._id, schoolCode }).sort({ year: -1, month: -1 }),
+            PaymentHistory.find({ studentId: student._id, schoolCode }).populate('receivedBy', 'name').sort({ createdAt: -1 }).limit(20)
+        ]);
+
+        const totalDue = fees.reduce((sum, fee) => sum + computeOutstanding(fee.amountDue, fee.amountPaid), 0);
+        return sendSuccess(res, {
+            code: 'FEE_CLEARANCE_FETCHED',
+            message: 'Fee clearance fetched successfully',
+            data: {
+                studentId: student._id,
+                studentName: student.name,
+                studentClass: student.studentClass,
+                roll: student.roll,
+                schoolName: school?.schoolName || schoolCode,
+                totalDue,
+                isCleared: totalDue <= 0 || student.forceAdmit === true,
+                specialPermission: Boolean(student.forceAdmit),
+                monthlyBreakdown: fees.map((fee) => ({
+                    feeId: fee._id,
+                    month: fee.month,
+                    year: fee.year,
+                    amountDue: fee.amountDue,
+                    amountPaid: fee.amountPaid,
+                    due: computeOutstanding(fee.amountDue, fee.amountPaid),
+                    status: fee.status
+                })),
+                recentPayments
+            }
+        });
+    } catch (error) {
+        console.error('getClearance error:', error);
+        return sendError(res, 500, 'Failed to fetch clearance', 'FEE_CLEARANCE_FETCH_FAILED', error.message);
+    }
+};
+
+exports.getStudentFeeHistory = async (req, res) => {
+    const { studentId } = req.params;
+    const schoolCode = req.user.schoolCode;
+    try {
+        const student = await resolveStudentByRef(studentId, schoolCode);
+        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+        const [fees, paymentHistory] = await Promise.all([
+            Fee.find({ studentId: student._id, schoolCode }).sort({ year: -1, month: -1 }),
+            PaymentHistory.find({ studentId: student._id, schoolCode }).populate('receivedBy', 'name').sort({ createdAt: -1 })
+        ]);
+        return sendSuccess(res, {
+            code: 'STUDENT_FEE_HISTORY_FETCHED',
+            message: 'Fee history fetched successfully',
+            data: {
+                student: { id: student._id, name: student.name, roll: student.roll, class: student.studentClass, section: student.section },
+                fees,
+                paymentHistory
+            }
+        });
+    } catch (error) {
+        console.error('getStudentFeeHistory error:', error);
+        return sendError(res, 500, 'Failed to fetch fee history', 'FEE_HISTORY_FETCH_FAILED', error.message);
+    }
+};
+
+exports.getFeeReport = async (req, res) => {
+    const { class: className, section, month, year, status, page = 1, limit = 20 } = req.query;
+    const schoolCode = req.user.schoolCode;
+    try {
+        const query = { schoolCode };
+        if (month && year) {
+            const period = parsePeriod(month, year);
+            if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
+            query.month = period.month;
+            query.year = period.year;
+        }
+        if (status) {
+            const normalizedStatus = normalizeStatus(status);
+            if (!normalizedStatus) return sendError(res, 400, 'Invalid status filter', 'VALIDATION_ERROR');
+            query.status = normalizedStatus;
+        }
+        if (className || section) {
+            const studentQuery = { schoolCode };
+            if (className) studentQuery.studentClass = className;
+            if (section) studentQuery.section = section;
+            const students = await Student.find(studentQuery).select('_id');
+            query.studentId = { $in: students.map((s) => s._id) };
+        }
+
+        const pageNum = Math.max(toNumber(page, 1), 1);
+        const limitNum = Math.min(Math.max(toNumber(limit, 20), 1), 500);
+        const skip = (pageNum - 1) * limitNum;
+
+        const [fees, total, summaryAgg] = await Promise.all([
+            Fee.find(query)
+                .populate('studentId', 'name roll studentClass section fatherName motherName guardian')
+                .sort({ year: -1, month: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum),
+            Fee.countDocuments(query),
+            Fee.aggregate([
+                { $match: query },
+                {
+                    $group: {
+                        _id: null,
+                        totalAssessed: { $sum: '$amountDue' },
+                        totalCollected: { $sum: '$amountPaid' },
+                        totalDue: { $sum: { $max: [0, { $subtract: ['$amountDue', '$amountPaid'] }] } },
+                        paidCount: { $sum: { $cond: [{ $eq: ['$status', FEE_STATUS.PAID] }, 1, 0] } },
+                        partialCount: { $sum: { $cond: [{ $eq: ['$status', FEE_STATUS.PARTIAL] }, 1, 0] } },
+                        unpaidCount: { $sum: { $cond: [{ $eq: ['$status', FEE_STATUS.UNPAID] }, 1, 0] } }
+                    }
+                }
+            ])
+        ]);
+
+        const summary = summaryAgg[0] || { totalAssessed: 0, totalCollected: 0, totalDue: 0, paidCount: 0, partialCount: 0, unpaidCount: 0 };
+        const payload = {
+            fees,
+            summary,
+            pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.max(Math.ceil(total / limitNum), 1) }
+        };
+
+        return sendSuccess(res, {
+            code: 'FEE_REPORT_FETCHED',
+            message: 'Fee report fetched successfully',
+            data: payload,
+            extra: { fees, summary, totalPages: payload.pagination.totalPages, currentPage: pageNum, total }
+        });
+    } catch (error) {
+        console.error('getFeeReport error:', error);
+        return sendError(res, 500, 'Failed to fetch report', 'FEE_REPORT_FETCH_FAILED', error.message);
+    }
+};
+
+exports.getDueList = async (req, res) => {
+    const { class: className, section, month, year, minDue = 0 } = req.query;
+    const schoolCode = req.user.schoolCode;
+    try {
+        const query = { schoolCode };
+        if (month && year) {
+            const period = parsePeriod(month, year);
+            if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
+            query.month = period.month;
+            query.year = period.year;
+        }
+        const rows = await Fee.find(query)
+            .populate('studentId', 'name roll studentClass section fatherName guardian')
+            .sort({ year: 1, month: 1 });
+
+        const minDueNumber = Math.max(toNumber(minDue, 0), 0);
+        const dues = rows.map((fee) => ({
+            feeId: fee._id,
+            studentId: fee.studentId?._id,
+            studentName: fee.studentId?.name,
+            roll: fee.studentId?.roll,
+            class: fee.studentId?.studentClass,
+            section: fee.studentId?.section,
+            fatherName: fee.studentId?.fatherName,
+            phone: fee.studentId?.guardian?.phone,
+            month: fee.month,
+            year: fee.year,
+            amountDue: fee.amountDue,
+            amountPaid: fee.amountPaid,
+            dueAmount: computeOutstanding(fee.amountDue, fee.amountPaid),
+            status: fee.status
+        }))
+            .filter((row) => row.studentId)
+            .filter((row) => row.dueAmount > minDueNumber)
+            .filter((row) => !className || row.class === className)
+            .filter((row) => !section || row.section === section);
+
+        return sendSuccess(res, {
+            code: 'FEE_DUE_LIST_FETCHED',
+            message: 'Due list fetched successfully',
+            data: { totalDue: dues.reduce((sum, row) => sum + row.dueAmount, 0), totalStudents: dues.length, dues },
+            extra: { totalDue: dues.reduce((sum, row) => sum + row.dueAmount, 0), totalStudents: dues.length, dues }
+        });
+    } catch (error) {
+        console.error('getDueList error:', error);
+        return sendError(res, 500, 'Failed to fetch due list', 'FEE_DUE_LIST_FETCH_FAILED', error.message);
+    }
+};
+
+exports.giveSpecialPermission = async (req, res) => {
+    try {
+        if (req.user.role !== 'principal') {
+            return sendError(res, 403, 'Access denied. Principal only.', 'FORBIDDEN');
+        }
+
+        const { studentId } = req.params;
+        const { reason, expiryDate } = req.body || {};
+        const student = await resolveStudentByRef(studentId, req.user.schoolCode);
+
+        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+
+        student.forceAdmit = true;
+        student.forceAdmitReason = reason || 'Special permission granted';
+        student.forceAdmitExpiry = expiryDate || null;
+        student.forceAdmitGrantedBy = req.user._id || req.user.id;
+        student.forceAdmitGrantedAt = new Date();
+        await student.save();
+
+        await safeAudit(req, 'SPECIAL_PERMISSION_GRANTED', {
+            studentId: student._id,
+            reason: student.forceAdmitReason,
+            expiryDate: student.forceAdmitExpiry
+        });
+
+        return sendSuccess(res, {
+            code: 'SPECIAL_PERMISSION_GRANTED',
+            message: 'Special permission granted successfully',
+            data: {
+                id: student._id,
+                name: student.name,
+                forceAdmit: true,
+                forceAdmitExpiry: student.forceAdmitExpiry
+            }
+        });
+    } catch (error) {
+        console.error('giveSpecialPermission error:', error);
+        return sendError(res, 500, 'Failed to grant special permission', 'SPECIAL_PERMISSION_FAILED', error.message);
+    }
+};
+
+exports.revokeSpecialPermission = async (req, res) => {
+    try {
+        if (req.user.role !== 'principal') {
+            return sendError(res, 403, 'Access denied. Principal only.', 'FORBIDDEN');
+        }
+
+        const student = await resolveStudentByRef(req.params.studentId, req.user.schoolCode);
+        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+
+        student.forceAdmit = false;
+        student.forceAdmitReason = null;
+        student.forceAdmitExpiry = null;
+        await student.save();
+
+        await safeAudit(req, 'SPECIAL_PERMISSION_REVOKED', { studentId: student._id });
+
+        return sendSuccess(res, {
+            code: 'SPECIAL_PERMISSION_REVOKED',
+            message: 'Special permission revoked',
+            data: { id: student._id, forceAdmit: false }
+        });
+    } catch (error) {
+        console.error('revokeSpecialPermission error:', error);
+        return sendError(res, 500, 'Failed to revoke special permission', 'SPECIAL_PERMISSION_REVOKE_FAILED', error.message);
+    }
+};
+
+exports.exportFeeReport = async (req, res) => {
+    const { class: className, section, month, year, status } = req.query;
+
+    try {
+        const query = { schoolCode: req.user.schoolCode };
+        if (month && year) {
+            const period = parsePeriod(month, year);
+            if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
+            query.month = period.month;
+            query.year = period.year;
+        }
+        if (status) {
+            const normalizedStatus = normalizeStatus(status);
+            if (!normalizedStatus) return sendError(res, 400, 'Invalid status', 'VALIDATION_ERROR');
+            query.status = normalizedStatus;
+        }
+        if (className || section) {
+            const studentQuery = { schoolCode: req.user.schoolCode };
+            if (className) studentQuery.studentClass = className;
+            if (section) studentQuery.section = section;
+            const students = await Student.find(studentQuery).select('_id');
+            query.studentId = { $in: students.map((s) => s._id) };
+        }
+
+        const fees = await Fee.find(query)
+            .populate('studentId', 'name roll studentClass section fatherName guardian')
+            .sort({ year: -1, month: -1, createdAt: -1 })
+            .lean();
+
+        const workbook = new Excel.Workbook();
+        const worksheet = workbook.addWorksheet('Fee Report');
+
+        worksheet.columns = [
+            { header: 'Student Name', key: 'studentName', width: 25 },
+            { header: 'Class', key: 'className', width: 12 },
+            { header: 'Section', key: 'section', width: 10 },
+            { header: 'Roll', key: 'roll', width: 10 },
+            { header: 'Month', key: 'month', width: 15 },
+            { header: 'Year', key: 'year', width: 8 },
+            { header: 'Amount Due', key: 'amountDue', width: 14 },
+            { header: 'Amount Paid', key: 'amountPaid', width: 14 },
+            { header: 'Due', key: 'due', width: 14 },
+            { header: 'Status', key: 'status', width: 12 },
+            { header: 'Phone', key: 'phone', width: 15 }
+        ];
+
+        fees.forEach((fee) => {
+            worksheet.addRow({
+                studentName: fee.studentId?.name || 'N/A',
+                className: fee.studentId?.studentClass || 'N/A',
+                section: fee.studentId?.section || 'N/A',
+                roll: fee.studentId?.roll || 'N/A',
+                month: getMonthName(fee.month),
+                year: fee.year,
+                amountDue: toNumber(fee.amountDue),
+                amountPaid: toNumber(fee.amountPaid),
+                due: computeOutstanding(fee.amountDue, fee.amountPaid),
+                status: fee.status,
+                phone: fee.studentId?.guardian?.phone || 'N/A'
+            });
+        });
+
+        const totals = fees.reduce((acc, fee) => {
+            acc.totalDue += toNumber(fee.amountDue);
+            acc.totalPaid += toNumber(fee.amountPaid);
+            acc.totalOutstanding += computeOutstanding(fee.amountDue, fee.amountPaid);
+            return acc;
+        }, { totalDue: 0, totalPaid: 0, totalOutstanding: 0 });
+
+        worksheet.addRow({});
+        worksheet.addRow({
+            studentName: 'SUMMARY',
+            amountDue: totals.totalDue,
+            amountPaid: totals.totalPaid,
+            due: totals.totalOutstanding
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=fee_report_${Date.now()}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        console.error('exportFeeReport error:', error);
+        return sendError(res, 500, 'Failed to export report', 'FEE_EXPORT_FAILED', error.message);
+    }
+};
+
+exports.generateFeeSummaryPDF = async (req, res) => {
+    const { month, year } = req.query;
+    const period = parsePeriod(month, year);
+    if (!period) return sendError(res, 400, 'Month and year required', 'VALIDATION_ERROR');
+
+    try {
+        const school = await School.findOne({ schoolCode: req.user.schoolCode }).select('schoolName');
+        const [summaryRows, recentPayments] = await Promise.all([
+            Fee.aggregate([
+                {
+                    $match: {
+                        schoolCode: req.user.schoolCode,
+                        month: period.month,
+                        year: period.year
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$status',
+                        count: { $sum: 1 },
+                        totalCollected: { $sum: '$amountPaid' },
+                        totalDue: { $sum: { $max: [0, { $subtract: ['$amountDue', '$amountPaid'] }] } }
+                    }
+                }
+            ]),
+            PaymentHistory.find({
+                schoolCode: req.user.schoolCode,
+                month: period.month,
+                year: period.year
+            })
+                .populate('studentId', 'name roll')
+                .populate('receivedBy', 'name')
+                .sort({ createdAt: -1 })
+                .limit(20)
+        ]);
+
+        const map = new Map(summaryRows.map((row) => [row._id, row]));
+        const paid = map.get(FEE_STATUS.PAID) || { count: 0, totalCollected: 0, totalDue: 0 };
+        const partial = map.get(FEE_STATUS.PARTIAL) || { count: 0, totalCollected: 0, totalDue: 0 };
+        const unpaid = map.get(FEE_STATUS.UNPAID) || { count: 0, totalCollected: 0, totalDue: 0 };
+
+        const totalCollected = toNumber(paid.totalCollected) + toNumber(partial.totalCollected);
+        const totalDue = toNumber(paid.totalDue) + toNumber(partial.totalDue) + toNumber(unpaid.totalDue);
+
+        const doc = new PDFDocument({ margin: 48, size: 'A4' });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=fee_summary_${period.month}_${period.year}.pdf`);
+        doc.pipe(res);
+
+        doc.fontSize(18).text(school?.schoolName || req.user.schoolCode, { align: 'center' });
+        doc.fontSize(14).text('Fee Collection Summary', { align: 'center' });
+        doc.fontSize(11).text(`${getMonthName(period.month)} ${period.year}`, { align: 'center' });
+        doc.moveDown();
+
+        doc.fontSize(12).text(`Total Collected: ${totalCollected.toFixed(2)}`);
+        doc.text(`Total Outstanding: ${totalDue.toFixed(2)}`);
+        doc.text(`Paid Records: ${paid.count || 0}`);
+        doc.text(`Partial Records: ${partial.count || 0}`);
+        doc.text(`Unpaid Records: ${unpaid.count || 0}`);
+
+        doc.moveDown();
+        doc.fontSize(12).text('Recent Payments');
+        doc.moveDown(0.5);
+
+        let y = doc.y;
+        recentPayments.slice(0, 12).forEach((payment) => {
+            doc.fontSize(9)
+                .text(new Date(payment.createdAt).toLocaleDateString(), 48, y)
+                .text(payment.studentId?.name || 'N/A', 130, y)
+                .text(String(payment.amount || 0), 300, y)
+                .text(payment.paymentMethod || 'Cash', 390, y);
+            y += 14;
+        });
+
+        doc.end();
+    } catch (error) {
+        console.error('generateFeeSummaryPDF error:', error);
+        return sendError(res, 500, 'Failed to generate PDF', 'FEE_SUMMARY_PDF_FAILED', error.message);
+    }
+};
+
 exports.createFeeStructure = async (req, res) => {
     try {
-        const { className, feeType, amount, dueDate, description } = req.body;
-        const schoolCode = req.user.schoolCode;
+        const school = await School.findOne({ schoolCode: req.user.schoolCode }).select('_id schoolCode academicSettings');
+        if (!school) return sendError(res, 404, 'School not found', 'SCHOOL_NOT_FOUND');
 
-        const feeStructure = new FeeStructure({
-            className,
-            feeType,
+        const classLevel = String(req.body.classLevel || req.body.className || req.body.name || '').trim();
+        if (!classLevel) return sendError(res, 400, 'classLevel is required', 'VALIDATION_ERROR');
+
+        const amount = toPositive(req.body.amount);
+        if (amount === null) return sendError(res, 400, 'amount must be non-negative', 'VALIDATION_ERROR');
+
+        const dueDate = parseDate(req.body.dueDate);
+        const dueDayOfMonth = req.body.dueDayOfMonth !== undefined
+            ? Math.min(Math.max(Math.floor(toNumber(req.body.dueDayOfMonth, 1)), 1), 28)
+            : (dueDate ? Math.min(Math.max(dueDate.getDate(), 1), 28) : undefined);
+
+        const structure = await FeeStructure.create({
+            schoolId: school._id,
+            schoolCode: school.schoolCode,
+            academicYear: String(req.body.academicYear || defaultAcademicYear(school)).trim(),
+            classLevel,
+            section: req.body.section || undefined,
+            feeType: parseFeeType(req.body.feeType || req.body.type),
             amount,
-            dueDate,
-            description,
-            schoolCode,
-            createdBy: req.user.id
+            dueDayOfMonth,
+            lateFinePerDay: toPositive(req.body.lateFinePerDay) ?? 0,
+            isActive: req.body.isActive !== undefined ? Boolean(req.body.isActive) : true,
+            createdBy: req.user._id || req.user.id
         });
 
-        await feeStructure.save();
-
-        res.status(201).json({
-            success: true,
+        return sendSuccess(res, {
+            status: 201,
+            code: 'FEE_STRUCTURE_CREATED',
             message: 'Fee structure created successfully',
-            data: feeStructure
+            data: mapFeeStructure(structure)
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        if (error?.code === 11000) return sendError(res, 409, 'Fee structure already exists', 'FEE_STRUCTURE_DUPLICATE');
+        console.error('createFeeStructure error:', error);
+        return sendError(res, 500, 'Server error', 'FEE_STRUCTURE_CREATE_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get fee structures
- * @route   GET /api/fee/structures
- * @access  Principal only
- */
 exports.getFeeStructures = async (req, res) => {
     try {
-        const schoolCode = req.user.schoolCode;
-        
-        const feeStructures = await FeeStructure.find({ schoolCode })
-            .sort({ createdAt: -1 });
+        const { academicYear, classLevel, className, feeType } = req.query;
+        const query = { schoolCode: req.user.schoolCode };
+        if (academicYear) query.academicYear = academicYear;
+        if (classLevel || className) query.classLevel = classLevel || className;
+        if (feeType) query.feeType = parseFeeType(feeType);
 
-        res.status(200).json({
-            success: true,
-            data: feeStructures
+        const rows = await FeeStructure.find(query).sort({ createdAt: -1 });
+        return sendSuccess(res, {
+            code: 'FEE_STRUCTURES_FETCHED',
+            message: 'Fee structures fetched successfully',
+            data: rows.map(mapFeeStructure)
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getFeeStructures error:', error);
+        return sendError(res, 500, 'Server error', 'FEE_STRUCTURES_FETCH_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Update fee structure
- * @route   PUT /api/fee/structures/:id
- * @access  Principal only
- */
 exports.updateFeeStructure = async (req, res) => {
     try {
-        const { id } = req.params;
-        const { className, feeType, amount, dueDate, description } = req.body;
-        const schoolCode = req.user.schoolCode;
+        const structure = await FeeStructure.findOne({
+            _id: req.params.id,
+            schoolCode: req.user.schoolCode
+        });
+        if (!structure) return sendError(res, 404, 'Fee structure not found', 'FEE_STRUCTURE_NOT_FOUND');
 
-        const feeStructure = await FeeStructure.findOneAndUpdate(
-            { _id: id, schoolCode },
-            { className, feeType, amount, dueDate, description },
-            { new: true, runValidators: true }
-        );
-
-        if (!feeStructure) {
-            return res.status(404).json({
-                success: false,
-                message: 'Fee structure not found'
-            });
+        const classLevel = req.body.classLevel || req.body.className;
+        if (classLevel !== undefined) structure.classLevel = String(classLevel).trim();
+        if (req.body.section !== undefined) structure.section = req.body.section || undefined;
+        if (req.body.feeType !== undefined || req.body.type !== undefined) {
+            structure.feeType = parseFeeType(req.body.feeType || req.body.type);
+        }
+        if (req.body.academicYear !== undefined) structure.academicYear = String(req.body.academicYear).trim();
+        if (req.body.isActive !== undefined) structure.isActive = Boolean(req.body.isActive);
+        if (req.body.amount !== undefined) {
+            const amount = toPositive(req.body.amount);
+            if (amount === null) return sendError(res, 400, 'amount must be non-negative', 'VALIDATION_ERROR');
+            structure.amount = amount;
+        }
+        if (req.body.dueDayOfMonth !== undefined) {
+            structure.dueDayOfMonth = Math.min(Math.max(Math.floor(toNumber(req.body.dueDayOfMonth, 1)), 1), 28);
+        } else if (req.body.dueDate !== undefined) {
+            const dueDate = parseDate(req.body.dueDate);
+            structure.dueDayOfMonth = dueDate ? Math.min(Math.max(dueDate.getDate(), 1), 28) : undefined;
+        }
+        if (req.body.lateFinePerDay !== undefined) {
+            const fine = toPositive(req.body.lateFinePerDay);
+            if (fine === null) return sendError(res, 400, 'lateFinePerDay must be non-negative', 'VALIDATION_ERROR');
+            structure.lateFinePerDay = fine;
         }
 
-        res.status(200).json({
-            success: true,
+        structure.updatedAt = new Date();
+        await structure.save();
+
+        return sendSuccess(res, {
+            code: 'FEE_STRUCTURE_UPDATED',
             message: 'Fee structure updated successfully',
-            data: feeStructure
+            data: mapFeeStructure(structure)
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        if (error?.code === 11000) return sendError(res, 409, 'Fee structure already exists', 'FEE_STRUCTURE_DUPLICATE');
+        console.error('updateFeeStructure error:', error);
+        return sendError(res, 500, 'Server error', 'FEE_STRUCTURE_UPDATE_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get fee collections
- * @route   GET /api/fee/collections
- * @access  Principal only
- */
 exports.getFeeCollections = async (req, res) => {
     try {
-        const schoolCode = req.user.schoolCode;
         const { startDate, endDate } = req.query;
+        const query = { schoolCode: req.user.schoolCode };
 
-        const query = { schoolCode };
-        if (startDate && endDate) {
-            query.createdAt = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
-            };
+        const start = parseDate(startDate);
+        const end = parseDate(endDate);
+        if (start || end) {
+            query.createdAt = {};
+            if (start) query.createdAt.$gte = start;
+            if (end) query.createdAt.$lte = end;
         }
 
         const collections = await PaymentHistory.find(query)
             .populate('studentId', 'name roll studentClass section')
+            .populate('receivedBy', 'name')
             .sort({ createdAt: -1 });
 
-        res.status(200).json({
-            success: true,
-            data: collections
+        const summary = collections.reduce((acc, item) => {
+            acc.totalCollected += toNumber(item.amount);
+            acc.totalPayments += 1;
+            return acc;
+        }, { totalCollected: 0, totalPayments: 0 });
+
+        return sendSuccess(res, {
+            code: 'FEE_COLLECTIONS_FETCHED',
+            message: 'Fee collections fetched successfully',
+            data: collections,
+            extra: { summary }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getFeeCollections error:', error);
+        return sendError(res, 500, 'Server error', 'FEE_COLLECTIONS_FETCH_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get unpaid fees
- * @route   GET /api/fee/unpaid
- * @access  Principal only
- */
 exports.getUnpaidFees = async (req, res) => {
     try {
-        const schoolCode = req.user.schoolCode;
-        
-        const unpaidFees = await Student.find({
-            schoolCode,
-            totalDue: { $gt: 0 }
-        }).select('name rollNumber totalDue class');
+        const rows = await Fee.aggregate([
+            {
+                $match: {
+                    schoolCode: req.user.schoolCode,
+                    $expr: { $gt: ['$amountDue', '$amountPaid'] }
+                }
+            },
+            {
+                $project: {
+                    studentId: 1,
+                    dueAmount: { $max: [0, { $subtract: ['$amountDue', '$amountPaid'] }] }
+                }
+            },
+            {
+                $group: {
+                    _id: '$studentId',
+                    totalDue: { $sum: '$dueAmount' }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'students',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'student'
+                }
+            },
+            { $unwind: '$student' },
+            {
+                $project: {
+                    _id: '$student._id',
+                    name: '$student.name',
+                    roll: '$student.roll',
+                    studentClass: '$student.studentClass',
+                    section: '$student.section',
+                    totalDue: 1
+                }
+            },
+            { $sort: { totalDue: -1, name: 1 } }
+        ]);
 
-        res.status(200).json({
-            success: true,
-            data: unpaidFees
+        return sendSuccess(res, {
+            code: 'UNPAID_FEES_FETCHED',
+            message: 'Unpaid fees fetched successfully',
+            data: rows
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getUnpaidFees error:', error);
+        return sendError(res, 500, 'Server error', 'UNPAID_FEES_FETCH_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Generate invoices
- * @route   POST /api/fee/generate-invoices
- * @access  Principal only
- */
 exports.generateInvoices = async (req, res) => {
     try {
-        const { className, feeType, dueDate } = req.body;
         const schoolCode = req.user.schoolCode;
+        const classLevel = String(req.body.classLevel || req.body.className || '').trim();
+        if (!classLevel) return sendError(res, 400, 'classLevel is required', 'VALIDATION_ERROR');
 
-        res.status(200).json({
-            success: true,
-            message: 'Invoices generated successfully',
-            data: { invoicesGenerated: 0 }
+        const period = parsePeriod(req.body.month || new Date().getMonth() + 1, req.body.year || new Date().getFullYear());
+        if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
+
+        const section = req.body.section ? String(req.body.section).trim() : null;
+        const school = await School.findOne({ schoolCode }).select('_id academicSettings');
+        if (!school) return sendError(res, 404, 'School not found', 'SCHOOL_NOT_FOUND');
+        const academicYear = String(req.body.academicYear || defaultAcademicYear(school)).trim();
+
+        const structureQuery = { schoolCode, classLevel, academicYear, isActive: true };
+        if (section) structureQuery.section = section;
+        if (req.body.feeType || req.body.type) structureQuery.feeType = parseFeeType(req.body.feeType || req.body.type);
+        const structure = await FeeStructure.findOne(structureQuery).sort({ createdAt: -1 });
+
+        const explicitAmount = req.body.amount !== undefined ? toPositive(req.body.amount) : null;
+        if (req.body.amount !== undefined && explicitAmount === null) {
+            return sendError(res, 400, 'amount must be non-negative', 'VALIDATION_ERROR');
+        }
+        const amountDue = explicitAmount !== null ? explicitAmount : (structure ? toNumber(structure.amount) : null);
+        if (amountDue === null) return sendError(res, 400, 'No fee structure found and amount not provided', 'FEE_STRUCTURE_REQUIRED');
+
+        const studentQuery = { schoolCode, studentClass: classLevel, isActive: true };
+        if (section) studentQuery.section = section;
+        const students = await Student.find(studentQuery).select('_id');
+        if (!students.length) return sendError(res, 404, 'No active students found for this class', 'NO_STUDENTS_FOUND');
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        let createdCount = 0;
+        let updatedCount = 0;
+        try {
+            for (const student of students) {
+                const existing = await Fee.findOne({
+                    schoolCode,
+                    studentId: student._id,
+                    month: period.month,
+                    year: period.year
+                }).session(session);
+
+                if (existing) {
+                    if (req.body.overwrite === true) {
+                        existing.amountDue = Math.max(amountDue, toNumber(existing.amountPaid));
+                        existing.status = computeStatus(existing.amountDue, existing.amountPaid);
+                        existing.updatedBy = req.user._id || req.user.id;
+                        existing.updatedAt = new Date();
+                        await existing.save({ session });
+                        updatedCount += 1;
+                    }
+                    continue;
+                }
+
+                await Fee.create([{
+                    studentId: student._id,
+                    month: period.month,
+                    year: period.year,
+                    amountDue,
+                    amountPaid: 0,
+                    status: FEE_STATUS.UNPAID,
+                    schoolCode,
+                    createdBy: req.user._id || req.user.id,
+                    updatedBy: req.user._id || req.user.id
+                }], { session });
+                createdCount += 1;
+            }
+
+            await Promise.all(students.map((student) => updateStudentTotalDue(student._id, schoolCode, session)));
+            await session.commitTransaction();
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
+
+        return sendSuccess(res, {
+            status: 201,
+            code: 'FEE_INVOICES_GENERATED',
+            message: `Invoices processed (${createdCount} created, ${updatedCount} updated)`,
+            data: {
+                classLevel,
+                section,
+                month: period.month,
+                year: period.year,
+                amountDue,
+                totalStudents: students.length,
+                createdCount,
+                updatedCount
+            }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('generateInvoices error:', error);
+        return sendError(res, 500, 'Server error', 'INVOICE_GENERATION_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get student fees
- * @route   GET /api/fees/student
- * @access  Student only
- */
 exports.getStudentFees = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const student = await resolveAuthenticatedStudent(req);
+        if (!student) {
+            return sendSuccess(res, {
+                code: 'STUDENT_FEES_FETCHED',
+                message: 'No linked fee ledger found for this student account',
+                data: {
+                    fees: [],
+                    summary: { totalFees: 0, totalPaid: 0, totalDue: 0, paidCount: 0, partialCount: 0, unpaidCount: 0 },
+                    feeDetails: []
+                }
+            });
+        }
 
-        const fees = {
-            totalFees: 0,
-            paidFees: 0,
-            dueFees: 0,
-            feeDetails: []
-        };
+        const fees = await Fee.find({
+            studentId: student._id,
+            schoolCode: req.user.schoolCode
+        }).sort({ year: -1, month: -1 });
 
-        res.status(200).json({
-            success: true,
-            data: fees
+        const summary = fees.reduce((acc, fee) => {
+            const due = toNumber(fee.amountDue);
+            const paid = toNumber(fee.amountPaid);
+            const outstanding = computeOutstanding(due, paid);
+            acc.totalFees += due;
+            acc.totalPaid += paid;
+            acc.totalDue += outstanding;
+            if (fee.status === FEE_STATUS.PAID) acc.paidCount += 1;
+            else if (fee.status === FEE_STATUS.PARTIAL) acc.partialCount += 1;
+            else acc.unpaidCount += 1;
+            return acc;
+        }, { totalFees: 0, totalPaid: 0, totalDue: 0, paidCount: 0, partialCount: 0, unpaidCount: 0 });
+
+        return sendSuccess(res, {
+            code: 'STUDENT_FEES_FETCHED',
+            message: 'Student fees fetched successfully',
+            data: {
+                student: {
+                    id: student._id,
+                    name: student.name,
+                    roll: student.roll,
+                    studentClass: student.studentClass,
+                    section: student.section
+                },
+                fees,
+                summary,
+                feeDetails: fees.map((fee) => ({
+                    feeId: fee._id,
+                    month: fee.month,
+                    year: fee.year,
+                    amountDue: fee.amountDue,
+                    amountPaid: fee.amountPaid,
+                    dueAmount: computeOutstanding(fee.amountDue, fee.amountPaid),
+                    status: fee.status,
+                    title: `${monthName(fee.month)} ${fee.year}`,
+                    amount: fee.amountDue,
+                    isPaid: fee.status === FEE_STATUS.PAID
+                }))
+            },
+            extra: { fees }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getStudentFees error:', error);
+        return sendError(res, 500, 'Server error', 'STUDENT_FEES_FETCH_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get due fees
- * @route   GET /api/fees/due
- * @access  Student only
- */
 exports.getDueFees = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const student = await resolveAuthenticatedStudent(req);
+        if (!student) {
+            return sendSuccess(res, {
+                code: 'STUDENT_DUE_FEES_FETCHED',
+                message: 'No linked fee ledger found for this student account',
+                data: { totalDue: 0, dueItems: [] }
+            });
+        }
 
-        const dueFees = {
-            totalDue: 0,
-            dueItems: [],
-            dueDate: null
-        };
+        const fees = await Fee.find({
+            studentId: student._id,
+            schoolCode: req.user.schoolCode,
+            $expr: { $gt: ['$amountDue', '$amountPaid'] }
+        }).sort({ year: -1, month: -1 });
 
-        res.status(200).json({
-            success: true,
-            data: dueFees
+        const dueItems = fees.map((fee) => ({
+            feeId: fee._id,
+            month: fee.month,
+            year: fee.year,
+            amountDue: fee.amountDue,
+            amountPaid: fee.amountPaid,
+            dueAmount: computeOutstanding(fee.amountDue, fee.amountPaid),
+            status: fee.status
+        }));
+
+        const totalDue = dueItems.reduce((sum, row) => sum + row.dueAmount, 0);
+        return sendSuccess(res, {
+            code: 'STUDENT_DUE_FEES_FETCHED',
+            message: 'Due fees fetched successfully',
+            data: { totalDue, dueItems }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getDueFees error:', error);
+        return sendError(res, 500, 'Server error', 'STUDENT_DUE_FEES_FETCH_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get payment history
- * @route   GET /api/fees/payment-history
- * @access  Student only
- */
 exports.getPaymentHistory = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const student = await resolveAuthenticatedStudent(req);
+        if (!student) {
+            return sendSuccess(res, {
+                code: 'STUDENT_PAYMENT_HISTORY_FETCHED',
+                message: 'No linked fee ledger found for this student account',
+                data: { payments: [], totalPaid: 0 }
+            });
+        }
 
-        const history = {
-            payments: [],
-            totalPaid: 0
-        };
+        const payments = await PaymentHistory.find({
+            studentId: student._id,
+            schoolCode: req.user.schoolCode
+        })
+            .populate('receivedBy', 'name')
+            .sort({ createdAt: -1 });
 
-        res.status(200).json({
-            success: true,
-            data: history
+        const totalPaid = payments.reduce((sum, row) => sum + toNumber(row.amount), 0);
+
+        return sendSuccess(res, {
+            code: 'STUDENT_PAYMENT_HISTORY_FETCHED',
+            message: 'Payment history fetched successfully',
+            data: { payments, totalPaid }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getPaymentHistory error:', error);
+        return sendError(res, 500, 'Server error', 'STUDENT_PAYMENT_HISTORY_FETCH_FAILED', error.message);
     }
 };
 
-/**
- * @desc    Get invoice
- * @route   GET /api/fees/invoice/:invoiceId
- * @access  Student only
- */
 exports.getInvoice = async (req, res) => {
     try {
-        const { invoiceId } = req.params;
-        const studentId = req.user.id;
+        const student = await resolveAuthenticatedStudent(req);
+        if (!student) return sendError(res, 404, 'Student fee ledger not found', 'STUDENT_NOT_FOUND');
 
-        const invoice = {
-            invoiceId,
-            amount: 0,
-            status: 'unpaid',
-            date: new Date()
-        };
+        const fee = await Fee.findOne({
+            _id: req.params.invoiceId,
+            studentId: student._id,
+            schoolCode: req.user.schoolCode
+        });
+        if (!fee) return sendError(res, 404, 'Invoice not found', 'INVOICE_NOT_FOUND');
 
-        res.status(200).json({
-            success: true,
-            data: invoice
+        const payments = await PaymentHistory.find({
+            feeId: fee._id,
+            studentId: student._id,
+            schoolCode: req.user.schoolCode
+        })
+            .populate('receivedBy', 'name')
+            .sort({ createdAt: -1 });
+
+        return sendSuccess(res, {
+            code: 'STUDENT_INVOICE_FETCHED',
+            message: 'Invoice fetched successfully',
+            data: {
+                invoiceId: fee._id,
+                month: fee.month,
+                year: fee.year,
+                amountDue: fee.amountDue,
+                amountPaid: fee.amountPaid,
+                dueAmount: computeOutstanding(fee.amountDue, fee.amountPaid),
+                status: fee.status,
+                payments
+            }
         });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('getInvoice error:', error);
+        return sendError(res, 500, 'Server error', 'STUDENT_INVOICE_FETCH_FAILED', error.message);
     }
 };

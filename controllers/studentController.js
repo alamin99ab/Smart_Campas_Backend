@@ -13,6 +13,7 @@ const Notice = require('../models/Notice');
 const Result = require('../models/Result');
 const Attendance = require('../models/Attendance');
 const Routine = require('../models/Routine');
+const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
 
 /**
  * @desc    Get student dashboard
@@ -35,35 +36,56 @@ exports.getStudentDashboard = async (req, res) => {
             student = await User.findById(studentId)
                 .populate('classId', 'className section classLevel')
                 .select('name rollNumber email phone classId');
+            const studentObjectId = await resolveStudentObjectIdFromUser(student || req.user);
 
             notices = await Notice.find({
-                schoolCode,
-                targetAudience: { $in: ['student', 'all'] },
-                isActive: true
+                $and: [
+                    { $or: [{ schoolId: req.tenant?.schoolId || req.user.schoolId }, { isGlobal: true }] },
+                    { isDeleted: false },
+                    { status: 'active' },
+                    { isPublished: true },
+                    { publishDate: { $lte: new Date() } },
+                    { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
+                    {
+                        $or: [
+                            { targetType: 'all' },
+                            { targetType: 'student' },
+                            { targetType: 'role', targetRoles: { $in: ['student'] } },
+                            { targetRoles: { $in: ['student'] } },
+                            { targetRoles: { $size: 0 } },
+                            { targetRoles: { $exists: false } }
+                        ]
+                    }
+                ]
             })
-            .sort({ createdAt: -1 })
+            .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, createdAt: -1 })
             .limit(5);
 
-            results = await Result.find({
-                schoolCode,
-                studentId,
-                isActive: true
-            })
-            .populate('subjectId', 'subjectName subjectCode')
-            .populate('examType')
-            .sort({ examDate: -1 })
-            .limit(5);
+            results = studentObjectId
+                ? await Result.find({
+                      schoolCode,
+                      studentId: studentObjectId,
+                      isPublished: true
+                  })
+                      .populate('subjectId', 'subjectName subjectCode')
+                      .populate('examType')
+                      .sort({ examDate: -1 })
+                      .limit(5)
+                : [];
 
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
             
             // FIXED: Use AdvancedAttendance instead of old Attendance model
             const AdvancedAttendance = require('../models/AdvancedAttendance');
-            attendanceRecords = await AdvancedAttendance.find({
-                schoolId: req.tenant.schoolId,
-                studentId,
-                date: { $gte: thirtyDaysAgo }
-            }).select('date status');
+            attendanceRecords = studentObjectId
+                ? await AdvancedAttendance.find({
+                      schoolId: req.tenant?.schoolId || req.user.schoolId,
+                      studentId: studentObjectId,
+                      attendanceType: 'student',
+                      date: { $gte: thirtyDaysAgo }
+                  }).select('date status')
+                : [];
 
             const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
             todayRoutine = await Routine.findOne({
@@ -185,35 +207,53 @@ exports.getStudentDashboard = async (req, res) => {
 exports.getNotices = async (req, res) => {
     try {
         const { page = 1, limit = 10, priority } = req.query;
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
 
         const query = {
-            schoolCode,
-            targetAudience: { $in: ['student', 'all'] },
-            isActive: true
+            $and: [
+                { $or: [{ schoolId }, { isGlobal: true }] },
+                { isDeleted: false },
+                { status: 'active' },
+                { isPublished: true },
+                { publishDate: { $lte: new Date() } },
+                { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
+                {
+                    $or: [
+                        { targetType: 'all' },
+                        { targetType: 'student' },
+                        { targetType: 'role', targetRoles: { $in: ['student'] } },
+                        { targetRoles: { $in: ['student'] } },
+                        { targetRoles: { $size: 0 } },
+                        { targetRoles: { $exists: false } }
+                    ]
+                }
+            ]
         };
 
         if (priority) {
-            query.priority = priority;
+            query.$and.push({ priority });
         }
 
         const notices = await Notice.find(query)
-            .sort({ createdAt: -1, priority: -1 })
-            .skip((page - 1) * limit)
-            .limit(parseInt(limit));
+            .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, priority: -1 })
+            .skip((pageNum - 1) * limitNum)
+            .limit(limitNum);
 
         const total = await Notice.countDocuments(query);
 
         res.status(200).json({
             success: true,
+            code: 'STUDENT_NOTICES_FETCHED',
+            message: 'Student notices fetched successfully',
             data: {
                 notices,
                 pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
+                    page: pageNum,
+                    limit: limitNum,
                     total,
-                    pages: Math.ceil(total / limit)
+                    pages: Math.ceil(total / limitNum)
                 }
             }
         });

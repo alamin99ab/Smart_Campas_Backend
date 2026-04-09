@@ -16,6 +16,8 @@ exports.getNotifications = async (req, res) => {
 
         res.json({
             success: true,
+            code: 'NOTIFICATIONS_FETCHED',
+            message: 'Notifications fetched successfully',
             data: {
                 notifications,
                 unreadCount,
@@ -24,7 +26,11 @@ exports.getNotifications = async (req, res) => {
         });
     } catch (err) {
         console.error('Get notifications error:', err);
-        res.status(500).json({ success: false, message: 'Failed to fetch notifications' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTIFICATIONS_FETCH_FAILED',
+            message: 'Failed to fetch notifications'
+        });
     }
 };
 
@@ -34,9 +40,18 @@ exports.getUnreadCount = async (req, res) => {
             recipient: req.user._id,
             read: false
         });
-        res.json({ success: true, data: { count } });
+        res.json({
+            success: true,
+            code: 'NOTIFICATION_UNREAD_COUNT_FETCHED',
+            message: 'Unread count fetched successfully',
+            data: { count }
+        });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Failed to get unread count' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTIFICATION_UNREAD_COUNT_FETCH_FAILED',
+            message: 'Failed to get unread count'
+        });
     }
 };
 
@@ -48,14 +63,27 @@ exports.markAsRead = async (req, res) => {
             recipient: req.user._id
         });
         if (!notification) {
-            return res.status(404).json({ success: false, message: 'Notification not found' });
+            return res.status(404).json({
+                success: false,
+                code: 'NOTIFICATION_NOT_FOUND',
+                message: 'Notification not found'
+            });
         }
         notification.read = true;
         notification.readAt = new Date();
         await notification.save();
-        res.json({ success: true, data: notification });
+        res.json({
+            success: true,
+            code: 'NOTIFICATION_MARKED_READ',
+            message: 'Notification marked as read',
+            data: notification
+        });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Failed to update notification' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTIFICATION_UPDATE_FAILED',
+            message: 'Failed to update notification'
+        });
     }
 };
 
@@ -65,8 +93,17 @@ exports.markAllAsRead = async (req, res) => {
             { recipient: req.user._id, read: false },
             { read: true, readAt: new Date() }
         );
-        res.json({ success: true, message: 'All notifications marked as read' });
+        res.json({
+            success: true,
+            code: 'NOTIFICATIONS_MARKED_READ',
+            message: 'All notifications marked as read',
+            data: null
+        });
     } catch (err) {
-        res.status(500).json({ success: false, message: 'Failed to update notifications' });
+        res.status(500).json({
+            success: false,
+            code: 'NOTIFICATIONS_UPDATE_FAILED',
+            message: 'Failed to update notifications'
+        });
     }
 };

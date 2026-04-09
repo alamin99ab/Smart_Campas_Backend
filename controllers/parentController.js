@@ -83,8 +83,7 @@ exports.getParentDashboard = async (req, res) => {
                 schoolCode,
                 isActive: true,
                 $or: [{ parentId }, ...(gRe ? [{ 'guardian.email': gRe }] : [])]
-            }).populate('classId', 'className')
-              .populate('sectionId', 'sectionName');
+            });
 
             attendanceSummary = await Promise.all(
                 children.map(async (child) => {
@@ -126,17 +125,24 @@ exports.getParentDashboard = async (req, res) => {
                     const fees = await Fee.find({
                         studentId: child._id,
                         schoolCode
-                    }).sort({ dueDate: -1 }).limit(3);
+                    }).sort({ year: -1, month: -1 }).limit(6);
 
-                    const totalDue = fees.reduce((sum, fee) => sum + ((fee.amountDue || fee.amount || 0) - (fee.amountPaid || 0)), 0);
-                    const upcomingFees = fees.filter(fee => fee.status === 'unpaid');
+                    const totalDue = fees.reduce((sum, fee) => {
+                        return sum + Math.max(0, (fee.amountDue || 0) - (fee.amountPaid || 0));
+                    }, 0);
+                    const upcomingFees = fees.filter((fee) =>
+                        Math.max(0, (fee.amountDue || 0) - (fee.amountPaid || 0)) > 0
+                    );
+                    const nextDue = upcomingFees[0]
+                        ? new Date(upcomingFees[0].year, Math.max(0, (upcomingFees[0].month || 1) - 1), 1)
+                        : null;
 
                     return {
                         studentId: child._id,
                         studentName: child.name,
                         totalDue,
                         upcomingFees: upcomingFees.length,
-                        nextDueDate: upcomingFees[0]?.dueDate || null
+                        nextDueDate: nextDue
                     };
                 })
             );
@@ -147,16 +153,29 @@ exports.getParentDashboard = async (req, res) => {
         // Get notices relevant to parents
         let notices = [];
         try {
-            // MongoDB
-            const Notice = require('../models/Notice');
+            const schoolId = req.tenant?.schoolId || req.user.schoolId;
             notices = await Notice.find({
-                schoolCode,
-                isActive: true,
-                $or: [
-                    { targetRoles: { $in: ['parent'] } },
-                    { targetRoles: { $size: 0 } }
+                $and: [
+                    { $or: [{ schoolId }, { isGlobal: true }] },
+                    { isDeleted: false },
+                    { status: 'active' },
+                    { isPublished: true },
+                    { publishDate: { $lte: new Date() } },
+                    { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
+                    {
+                        $or: [
+                            { targetType: 'all' },
+                            { targetType: 'parent' },
+                            { targetType: 'role', targetRoles: { $in: ['parent'] } },
+                            { targetRoles: { $in: ['parent'] } },
+                            { targetRoles: { $size: 0 } },
+                            { targetRoles: { $exists: false } }
+                        ]
+                    }
                 ]
-            }).sort({ createdAt: -1 }).limit(10);
+            })
+                .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, createdAt: -1 })
+                .limit(10);
         } catch (noticeError) {
             console.error('Notice fetch error:', noticeError.message);
         }
@@ -165,10 +184,10 @@ exports.getParentDashboard = async (req, res) => {
             children: children.map(child => ({
                 id: child._id,
                 name: child.name,
-                className: child.classId?.className || 'N/A',
-                sectionName: child.sectionId?.sectionName || 'N/A',
-                rollNumber: child.rollNumber,
-                profileImage: child.profileImage
+                className: child.studentClass || 'N/A',
+                sectionName: child.section || 'N/A',
+                rollNumber: child.roll || null,
+                profileImage: child.photo?.url || null
             })),
             attendanceSummary,
             resultsSummary,
@@ -210,10 +229,7 @@ exports.getChildren = async (req, res) => {
             schoolCode,
             isActive: true,
             $or: [{ parentId }, ...(gRe ? [{ 'guardian.email': gRe }] : [])]
-        })
-            .populate('classId', 'className')
-            .populate('sectionId', 'sectionName')
-            .populate('subjects.subjectId', 'subjectName');
+        }).lean();
 
         const parentEmailNorm = String(req.user.email || '').trim().toLowerCase();
         const fromUsers = parentEmailNorm
@@ -224,20 +240,55 @@ exports.getChildren = async (req, res) => {
                       `^${parentEmailNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
                       'i'
                   )
-              }).select('name email rollNumber section classId')
+              })
+                  .select('name email rollNumber section classId')
+                  .populate('classId', 'className section')
+                  .lean()
             : [];
 
-        const seen = new Set(fromStudents.map((s) => String(s._id)));
-        const merged = [...fromStudents];
-        for (const u of fromUsers) {
-            if (!seen.has(String(u._id))) {
-                merged.push(u);
-                seen.add(String(u._id));
+        const mappedStudents = fromStudents.map((student) => ({
+            _id: String(student._id),
+            source: 'student',
+            studentObjectId: String(student._id),
+            name: student.name,
+            rollNumber: student.roll,
+            studentClass: student.studentClass || null,
+            section: student.section || null
+        }));
+
+        const mappedUsers = fromUsers.map((user) => ({
+            _id: String(user._id),
+            source: 'user',
+            studentObjectId: null,
+            name: user.name,
+            rollNumber: user.rollNumber || null,
+            studentClass: user.classId?.className || null,
+            section: user.section || user.classId?.section || null
+        }));
+
+        const seen = new Set();
+        const merged = [...mappedStudents];
+        for (const row of mappedStudents) {
+            seen.add(
+                `${String(row.name || '').toLowerCase()}|${String(row.rollNumber || '')}|${String(
+                    row.studentClass || ''
+                )}|${String(row.section || '')}`
+            );
+        }
+        for (const row of mappedUsers) {
+            const key = `${String(row.name || '').toLowerCase()}|${String(row.rollNumber || '')}|${String(
+                row.studentClass || ''
+            )}|${String(row.section || '')}`;
+            if (!seen.has(key)) {
+                merged.push(row);
+                seen.add(key);
             }
         }
 
         res.status(200).json({
             success: true,
+            code: 'PARENT_CHILDREN_FETCHED',
+            message: 'Children fetched successfully',
             data: merged
         });
     } catch (error) {

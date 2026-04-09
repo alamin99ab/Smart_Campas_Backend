@@ -14,6 +14,7 @@ const AcademicSession = require('../models/AcademicSession');
 const Section = require('../models/Section');
 const Room = require('../models/Room');
 const Exam = require('../models/Exam');
+const { assignTeacherSubjectToClasses, AssignmentServiceError } = require('../services/teacherAssignmentService');
 
 /**
  * @desc    Get all users in principal's school
@@ -486,101 +487,45 @@ exports.assignTeacherToSubject = async (req, res) => {
         if (!classId || !subjectId || !teacherId) {
             return res.status(400).json({
                 success: false,
-                message: 'classId, subjectId and teacherId are required'
+                code: 'VALIDATION_ERROR',
+                message: 'classId, subjectId and teacherId are required',
+                data: null
             });
         }
-
-        const [classDoc, subjectDoc, teacherDoc] = await Promise.all([
-            Class.findOne({ _id: classId, schoolCode }),
-            Subject.findOne({ _id: subjectId, schoolCode }),
-            User.findOne({ _id: teacherId, schoolCode, role: 'teacher' })
-        ]);
-
-        if (!classDoc) return res.status(404).json({ success: false, message: 'Class not found' });
-        if (!subjectDoc) return res.status(404).json({ success: false, message: 'Subject not found' });
-        if (!teacherDoc) return res.status(404).json({ success: false, message: 'Teacher not found in this school' });
-
-        // Upsert assignment inside class.subjects
-        const idx = classDoc.subjects.findIndex(
-            s => String(s.subjectId) === String(subjectId)
-        );
-        const payload = {
-            subjectId,
-            subjectName: subjectDoc.subjectName,
-            subjectCode: subjectDoc.subjectCode,
+        const result = await assignTeacherSubjectToClasses({
+            requester: req.user,
+            schoolCode,
             teacherId,
-            teacherName: teacherDoc.name,
-            periodsPerWeek,
-            isActive: true
-        };
-
-        if (idx >= 0) {
-            classDoc.subjects[idx] = { ...classDoc.subjects[idx].toObject?.() ?? {}, ...payload };
-        } else {
-            classDoc.subjects.push(payload);
-        }
-
-        await classDoc.save();
-
-        // Mirror to TeacherAssignment collection for teacher-facing flows
-        // FIXED: Properly consolidate multiple classes under one assignment
-        try {
-            const TeacherAssignment = require('../models/TeacherAssignment');
-            
-            // Find existing assignment WITHOUT checking classes array
-            const existingAssignment = await TeacherAssignment.findOne({
-                teacher: teacherId,
-                subject: subjectDoc._id,
-                schoolCode,
-                academicYear: classDoc.academicYear
-            });
-
-            if (existingAssignment) {
-                // Add class to existing assignment if not already there
-                const classObjectId = mongoose.Types.ObjectId(classId);
-                if (!existingAssignment.classes.some(c => String(c) === String(classObjectId))) {
-                    existingAssignment.classes.push(classObjectId);
-                }
-                // Add section if not already there
-                if (!existingAssignment.sections.includes(classDoc.section)) {
-                    existingAssignment.sections.push(classDoc.section);
-                }
-                existingAssignment.periodsPerWeek = periodsPerWeek;
-                existingAssignment.updatedAt = Date.now();
-                await existingAssignment.save();
-                console.log('Updated existing TeacherAssignment:', existingAssignment._id);
-            } else {
-                // Create new assignment with single class
-                const newAssignment = await TeacherAssignment.create({
-                    schoolCode,
-                    teacher: teacherId,
-                    subject: subjectDoc._id,
-                    subjectName: subjectDoc.subjectName,
-                    classes: [mongoose.Types.ObjectId(classId)],
-                    sections: [classDoc.section],
-                    periodsPerWeek,
-                    academicYear: classDoc.academicYear,
-                    assignedBy: req.user._id,
-                    isActive: true
-                });
-                console.log('Created new TeacherAssignment:', newAssignment._id);
-            }
-        } catch (assignErr) {
-            console.error('TeacherAssignment mirror error:', assignErr.message);
-            console.error('Assignment data:', { teacherId, subjectId: subjectDoc._id, classId, schoolCode });
-        }
+            subjectId,
+            classIds: [classId],
+            periodsPerWeek
+        });
 
         res.status(200).json({
             success: true,
-            message: 'Teacher assigned to subject for class',
-            data: classDoc
+            code: 'TEACHER_ASSIGNED_TO_CLASS_SUBJECT',
+            message: 'Teacher assigned to class and subject successfully',
+            data: result
         });
     } catch (error) {
         console.error('assignTeacherToSubject error:', error);
+
+        if (error instanceof AssignmentServiceError) {
+            return res.status(error.status).json({
+                success: false,
+                code: error.code,
+                message: error.message,
+                data: error.details || null
+            });
+        }
+
         res.status(500).json({
             success: false,
+            code: 'TEACHER_ASSIGNMENT_FAILED',
             message: 'Failed to assign teacher to subject',
-            error: error.message
+            data: {
+                error: error.message
+            }
         });
     }
 };

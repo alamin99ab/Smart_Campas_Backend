@@ -7,15 +7,16 @@ const nodemailer = require('nodemailer');
 
 // Create transporter if email configuration is available
 let transporter = null;
+const emailPassword = process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD;
 
-if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+if (process.env.EMAIL_HOST && process.env.EMAIL_USER && emailPassword) {
     transporter = nodemailer.createTransport({
         host: process.env.EMAIL_HOST,
         port: process.env.EMAIL_PORT || 587,
         secure: process.env.EMAIL_SECURE === 'true',
         auth: {
             user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
+            pass: emailPassword
         }
     });
 }

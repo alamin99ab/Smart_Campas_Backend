@@ -1,75 +1,106 @@
 /**
- * 📝 Notification Utility
- * Creates notifications for users
+ * Notification utility
+ * Supports both new object payload and legacy positional signature.
  */
 
 const Notification = require('../models/Notification');
 
-/**
- * Create a notification for a user
- * @param {Object} options - Notification options
- * @param {string} options.recipient - Recipient user ID
- * @param {string} options.title - Notification title
- * @param {string} options.message - Notification message
- * @param {string} options.type - Notification type (info, warning, success, error)
- * @param {string} options.category - Notification category
- * @param {Object} options.data - Additional data
- * @returns {Promise<Object>} Created notification
- */
-const createNotification = async ({
-    recipient,
-    title,
-    message,
-    type = 'info',
-    category = 'general',
-    data = {}
-}) => {
-    try {
-        const notification = new Notification({
-            recipient,
-            title,
-            message,
-            type,
-            category,
-            data,
-            read: false
-        });
+const ALLOWED_TYPES = new Set(['notice', 'fee', 'attendance', 'result', 'event', 'approval', 'system', 'info']);
 
-        await notification.save();
-        return notification;
+const normalizeType = (type) => {
+    const raw = String(type || '').trim().toLowerCase();
+    if (!raw) return 'info';
+    if (ALLOWED_TYPES.has(raw)) return raw;
+    if (raw.includes('fee') || raw.includes('payment')) return 'fee';
+    if (raw.includes('attendance')) return 'attendance';
+    if (raw.includes('result') || raw.includes('exam')) return 'result';
+    if (raw.includes('notice')) return 'notice';
+    if (raw.includes('event')) return 'event';
+    if (raw.includes('approval')) return 'approval';
+    return 'system';
+};
+
+const normalizeSingle = (payload) => {
+    const title = String(payload?.title || payload?.subject || '').trim() || 'Notification';
+    const body = String(payload?.body || payload?.message || payload?.description || '').trim();
+
+    return {
+        recipient: payload?.recipient,
+        title,
+        body,
+        type: normalizeType(payload?.type),
+        link: payload?.link || null,
+        data: payload?.data || {},
+        schoolCode: payload?.schoolCode || null,
+        read: payload?.read === true,
+        readAt: payload?.readAt || null
+    };
+};
+
+const normalizePayload = (...args) => {
+    // New signature: createNotification({ ... })
+    if (args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+        const payload = args[0];
+        const recipients = Array.isArray(payload.recipients) ? payload.recipients.filter(Boolean) : [];
+
+        if (recipients.length > 0) {
+            return recipients.map((recipient) => normalizeSingle({ ...payload, recipient }));
+        }
+
+        return [normalizeSingle(payload)];
+    }
+
+    // Legacy signature: createNotification(recipient, type, { title, message }, schoolCode)
+    const [recipient, type, content, schoolCode] = args;
+    const payload = {
+        recipient,
+        type,
+        title: content?.title,
+        body: content?.body || content?.message,
+        data: content?.data || {},
+        schoolCode
+    };
+    return [normalizeSingle(payload)];
+};
+
+/**
+ * Create notification(s).
+ * @returns {Promise<Object|Object[]|null>} One doc, many docs, or null on failure.
+ */
+const createNotification = async (...args) => {
+    try {
+        const rows = normalizePayload(...args).filter((row) => row.recipient);
+        if (!rows.length) return null;
+
+        if (rows.length === 1) {
+            return await Notification.create(rows[0]);
+        }
+
+        return await Notification.insertMany(rows, { ordered: false });
     } catch (error) {
         console.error('Error creating notification:', error.message);
-        // Don't throw - notification failure shouldn't break the main flow
         return null;
     }
 };
 
 /**
- * Create multiple notifications for multiple recipients
- * @param {Array} notifications - Array of notification objects
+ * Create multiple notifications from an array of payloads.
  */
 const createBulkNotifications = async (notifications) => {
     try {
-        if (!notifications || notifications.length === 0) return [];
+        if (!Array.isArray(notifications) || notifications.length === 0) return [];
 
-        const notificationDocs = notifications.map(n => ({
-            recipient: n.recipient,
-            title: n.title,
-            message: n.message,
-            type: n.type || 'info',
-            category: n.category || 'general',
-            data: n.data || {},
-            read: false
-        }));
+        const rows = notifications
+            .flatMap((payload) => normalizePayload(payload))
+            .filter((row) => row.recipient);
 
-        return await Notification.insertMany(notificationDocs);
+        if (!rows.length) return [];
+
+        return await Notification.insertMany(rows, { ordered: false });
     } catch (error) {
         console.error('Error creating bulk notifications:', error.message);
         return [];
     }
 };
 
-module.exports = {
-    createNotification,
-    createBulkNotifications
-};
+module.exports = { createNotification, createBulkNotifications };

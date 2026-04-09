@@ -251,13 +251,70 @@ exports.createSchool = async (req, res) => {
 
 exports.getAllSchools = async (req, res) => {
     try {
-        const schools = await School.find()
-            .select('-__v')
-            .populate('principal', 'name email phone role');
-        res.json({ success: true, data: schools });
+        const page = clampNumber(req.query.page, { min: 1, max: 100000, fallback: 1 });
+        const limit = clampNumber(req.query.limit, { min: 1, max: 200, fallback: 25 });
+        const skip = (page - 1) * limit;
+
+        const status = typeof req.query.status === 'string' ? req.query.status.trim().toLowerCase() : 'all';
+        const plan = typeof req.query.plan === 'string' ? req.query.plan.trim().toLowerCase() : '';
+        const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+
+        const filter = {};
+        if (status === 'active') {
+            filter.isActive = true;
+        } else if (status === 'inactive') {
+            filter.isActive = false;
+        }
+
+        if (plan) {
+            filter['subscription.plan'] = plan;
+        }
+
+        if (search) {
+            const searchRegex = new RegExp(escapeRegex(search), 'i');
+            filter.$or = [
+                { schoolName: searchRegex },
+                { schoolCode: searchRegex },
+                { email: searchRegex },
+                { phone: searchRegex }
+            ];
+        }
+
+        const [schools, total] = await Promise.all([
+            School.find(filter)
+                .select('-__v')
+                .populate('principal', 'name email phone role')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            School.countDocuments(filter)
+        ]);
+
+        res.json({
+            success: true,
+            data: schools,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.max(Math.ceil(total / limit), 1),
+                hasNextPage: skip + schools.length < total,
+                hasPrevPage: page > 1
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
+};
+
+const sendSuperAdminError = (res, code, message, error) => {
+    const details = process.env.NODE_ENV === 'production' ? undefined : error?.message;
+    return res.status(500).json({
+        success: false,
+        code,
+        message,
+        data: details ? { details } : null
+    });
 };
 
 exports.getSchool = async (req, res) => {
@@ -281,36 +338,271 @@ exports.getSchool = async (req, res) => {
 };
 
 exports.updateSchool = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
-        const updates = { ...req.body };
+        const updates = { ...(req.body || {}) };
         delete updates._id;
-        const school = await School.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true }).select('-__v');
-        if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+        delete updates.createdAt;
+        delete updates.updatedAt;
+        delete updates.createdBy;
+        delete updates.principal;
+
+        const school = await School.findById(req.params.id).session(session);
+        if (!school) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(404).json({ success: false, message: 'School not found' });
+        }
+
+        const previousSchoolCode = school.schoolCode;
+        const previousSchoolName = school.schoolName;
+
+        if (typeof updates.schoolCode === 'string' && updates.schoolCode.trim()) {
+            const normalizedSchoolCode = updates.schoolCode.trim().toUpperCase();
+
+            if (normalizedSchoolCode !== previousSchoolCode) {
+                const exists = await School.findOne({
+                    _id: { $ne: school._id },
+                    schoolCode: normalizedSchoolCode
+                }).session(session);
+
+                if (exists) {
+                    await session.abortTransaction();
+                    session.endSession();
+                    return res.status(400).json({ success: false, message: 'School code already exists' });
+                }
+            }
+
+            school.schoolCode = normalizedSchoolCode;
+        }
+
+        if (typeof updates.schoolName === 'string' && updates.schoolName.trim()) {
+            school.schoolName = updates.schoolName.trim();
+        }
+
+        if (typeof updates.address === 'string') school.address = updates.address.trim();
+        if (typeof updates.phone === 'string') school.phone = updates.phone.trim();
+        if (typeof updates.email === 'string') school.email = updates.email.trim().toLowerCase();
+        if (typeof updates.schoolType === 'string') school.schoolType = updates.schoolType;
+        if (typeof updates.isActive === 'boolean') school.isActive = updates.isActive;
+        if (typeof updates.isVerified === 'boolean') school.isVerified = updates.isVerified;
+
+        if (updates.subscription && typeof updates.subscription === 'object') {
+            const subscriptionPatch = updates.subscription;
+            school.subscription = {
+                ...school.subscription,
+                ...subscriptionPatch
+            };
+        }
+
+        if (typeof updates.plan === 'string' && SUBSCRIPTION_PRESETS[updates.plan]) {
+            school.subscription.plan = updates.plan;
+            school.subscription.billingCycle = SUBSCRIPTION_PRESETS[updates.plan].billingCycle;
+            school.features = SUBSCRIPTION_PRESETS[updates.plan].features;
+        }
+
+        if (typeof updates.billingCycle === 'string') {
+            school.subscription.billingCycle = updates.billingCycle;
+        }
+
+        if (typeof updates.subscriptionStatus === 'string') {
+            school.subscription.status = updates.subscriptionStatus;
+        }
+
+        if (updates.subscriptionStartDate) {
+            school.subscription.startDate = new Date(updates.subscriptionStartDate);
+        }
+
+        if (updates.subscriptionEndDate) {
+            school.subscription.endDate = new Date(updates.subscriptionEndDate);
+        }
+
+        await school.save({ session });
+
+        const schoolCodeChanged = school.schoolCode !== previousSchoolCode;
+        const schoolNameChanged = school.schoolName !== previousSchoolName;
+        if (schoolCodeChanged || schoolNameChanged) {
+            const userPatch = {};
+            const studentPatch = {};
+
+            if (schoolCodeChanged) {
+                userPatch.schoolCode = school.schoolCode;
+                studentPatch.schoolCode = school.schoolCode;
+            }
+
+            if (schoolNameChanged) {
+                userPatch.schoolName = school.schoolName;
+            }
+
+            await Promise.all([
+                Object.keys(userPatch).length
+                    ? User.updateMany({ schoolCode: previousSchoolCode }, { $set: userPatch }).session(session)
+                    : Promise.resolve(),
+                Object.keys(studentPatch).length
+                    ? Student.updateMany({ schoolCode: previousSchoolCode }, { $set: studentPatch }).session(session)
+                    : Promise.resolve()
+            ]);
+        }
+
+        const normalizedPlan = school.subscription?.plan;
+        if (normalizedPlan && SUBSCRIPTION_PRESETS[normalizedPlan]) {
+            const planConfig = SUBSCRIPTION_PRESETS[normalizedPlan];
+            await Subscription.findOneAndUpdate(
+                { schoolId: school._id },
+                {
+                    $set: {
+                        plan: normalizedPlan,
+                        status: school.subscription?.status || 'active',
+                        billingCycle: school.subscription?.billingCycle || planConfig.billingCycle,
+                        startDate: school.subscription?.startDate || new Date(),
+                        endDate: school.subscription?.endDate || new Date(),
+                        autoRenew: normalizedPlan !== 'trial',
+                        limits: {
+                            maxUsers: Number.isFinite(planConfig.limits.maxUsers) ? planConfig.limits.maxUsers : 999999999,
+                            maxStudents: Number.isFinite(planConfig.limits.maxStudents) ? planConfig.limits.maxStudents : 999999999,
+                            maxTeachers: Number.isFinite(planConfig.limits.maxTeachers) ? planConfig.limits.maxTeachers : 999999999,
+                            maxClasses: Number.isFinite(planConfig.limits.maxClasses) ? planConfig.limits.maxClasses : 999999999,
+                            maxStorage: Number.isFinite(planConfig.limits.maxStorage) ? planConfig.limits.maxStorage : 999999999,
+                            maxApiCalls: Number.isFinite(planConfig.limits.maxApiCalls) ? planConfig.limits.maxApiCalls : 999999999
+                        },
+                        features: planConfig.features
+                    },
+                    $setOnInsert: {
+                        paymentMethod: 'card',
+                        amount: {
+                            currency: 'USD',
+                            amount: Number.isFinite(planConfig.amount) ? planConfig.amount : 0,
+                            discount: 0,
+                            tax: 0,
+                            total: Number.isFinite(planConfig.amount) ? planConfig.amount : 0
+                        },
+                        usage: {
+                            users: 0,
+                            students: 0,
+                            teachers: 0,
+                            classes: 0,
+                            storage: 0,
+                            apiCalls: 0
+                        }
+                    }
+                },
+                { new: true, upsert: true, session, setDefaultsOnInsert: true }
+            );
+        }
+
+        await session.commitTransaction();
+        session.endSession();
+
         await createAudit(req.user?._id || null, 'UPDATE_SCHOOL', { schoolId: school._id }, req);
-        res.json({ success: true, data: school });
+        const updatedSchool = await School.findById(school._id)
+            .select('-__v')
+            .populate('principal', 'name email phone role');
+
+        res.json({ success: true, data: updatedSchool });
     } catch (err) {
+        await session.abortTransaction();
+        session.endSession();
         res.status(500).json({ success: false, message: err.message });
     }
 };
 
 exports.deleteSchool = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
-        const school = await School.findByIdAndDelete(req.params.id);
-        if (!school) return res.status(404).json({ success: false, message: 'School not found' });
+        const school = await School.findById(req.params.id).session(session);
+        if (!school) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(404).json({ success: false, message: 'School not found' });
+        }
+
+        const schoolCode = school.schoolCode;
+        const schoolId = school._id;
+
+        const [userDeleteResult, studentDeleteResult, subscriptionDeleteResult] = await Promise.all([
+            User.deleteMany({ schoolCode }).session(session),
+            Student.deleteMany({ schoolCode }).session(session),
+            Subscription.deleteMany({ schoolId }).session(session)
+        ]);
+
+        await School.deleteOne({ _id: schoolId }).session(session);
+
+        await session.commitTransaction();
+        session.endSession();
+
         await createAudit(req.user?._id || null, 'DELETE_SCHOOL', { schoolId: req.params.id }, req);
-        res.json({ success: true, message: 'School deleted' });
+        res.json({
+            success: true,
+            message: 'School deleted',
+            data: {
+                schoolId,
+                schoolCode,
+                deletedUsers: userDeleteResult.deletedCount || 0,
+                deletedStudents: studentDeleteResult.deletedCount || 0,
+                deletedSubscriptions: subscriptionDeleteResult.deletedCount || 0
+            }
+        });
     } catch (err) {
+        await session.abortTransaction();
+        session.endSession();
         res.status(500).json({ success: false, message: err.message });
     }
 };
 
 exports.getAllUsers = async (req, res) => {
     try {
-        const { role } = req.query;
-        const query = {};
+        const page = clampNumber(req.query.page, { min: 1, max: 100000, fallback: 1 });
+        const limit = clampNumber(req.query.limit, { min: 1, max: 500, fallback: 50 });
+        const skip = (page - 1) * limit;
+
+        const query = { role: { $ne: 'super_admin' } };
+        const role = typeof req.query.role === 'string' ? req.query.role.trim().toLowerCase() : '';
+        const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+        const schoolCode = typeof req.query.schoolCode === 'string' ? req.query.schoolCode.trim().toUpperCase() : '';
+        const isActive = typeof req.query.isActive === 'string' ? req.query.isActive.trim().toLowerCase() : '';
+        const isBlocked = typeof req.query.isBlocked === 'string' ? req.query.isBlocked.trim().toLowerCase() : '';
+
         if (role) query.role = role;
-        const users = await User.find(query).select('-password -refreshToken -twoFactorSecret');
-        res.json({ success: true, data: users });
+        if (schoolCode) query.schoolCode = schoolCode;
+        if (isActive === 'true') query.isActive = true;
+        if (isActive === 'false') query.isActive = false;
+        if (isBlocked === 'true') query.isBlocked = true;
+        if (isBlocked === 'false') query.isBlocked = false;
+
+        if (search) {
+            const searchRegex = new RegExp(escapeRegex(search), 'i');
+            query.$or = [
+                { name: searchRegex },
+                { email: searchRegex },
+                { schoolCode: searchRegex }
+            ];
+        }
+
+        const [users, total] = await Promise.all([
+            User.find(query)
+                .select('-password -refreshToken -twoFactorSecret -sessions')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            User.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            data: users,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.max(Math.ceil(total / limit), 1),
+                hasNextPage: skip + users.length < total,
+                hasPrevPage: page > 1
+            }
+        });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -435,6 +727,14 @@ exports.updateSystemSettings = async (req, res) => {
     }
 };
 
+const clampNumber = (value, { min = 1, max = Number.MAX_SAFE_INTEGER, fallback = 1 } = {}) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.min(Math.max(Math.floor(numeric), min), max);
+};
+
+const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 function getMonthWindow(baseDate = new Date()) {
     const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
     const end = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 1);
@@ -526,9 +826,9 @@ async function buildSuperAdminMetrics() {
         monthlyNewSchools
     ] = await Promise.all([
         School.countDocuments(),
-        School.countDocuments({ isActive: { $ne: false } }),
-        User.countDocuments(),
-        User.countDocuments({ isActive: { $ne: false }, isBlocked: { $ne: true } }),
+        School.countDocuments({ isActive: { $ne: false }, 'subscription.status': 'active' }),
+        User.countDocuments({ role: { $ne: 'super_admin' } }),
+        User.countDocuments({ role: { $ne: 'super_admin' }, isActive: { $ne: false }, isBlocked: { $ne: true } }),
         User.countDocuments({ role: 'principal' }),
         User.countDocuments({ role: 'teacher' }),
         countStudents(),
@@ -567,23 +867,25 @@ async function buildSuperAdminMetrics() {
     const totalRevenue = totalRevenueAggregate[0]?.total || 0;
     const monthlyIncome = monthlyIncomeAggregate[0]?.total || 0;
 
-    console.log('[SuperAdmin] Metrics:', {
-        totalSchools,
-        activeSchools,
-        inactiveSchools,
-        totalUsers,
-        activeUsers,
-        totalPrincipals,
-        totalTeachers,
-        totalStudents,
-        activeStudents,
-        newSchoolsThisMonth,
-        newStudentsThisMonth,
-        newTeachersThisMonth,
-        activeSubscriptions,
-        totalRevenue,
-        monthlyIncome
-    });
+    if (process.env.NODE_ENV !== 'production') {
+        console.log('[SuperAdmin] Metrics:', {
+            totalSchools,
+            activeSchools,
+            inactiveSchools,
+            totalUsers,
+            activeUsers,
+            totalPrincipals,
+            totalTeachers,
+            totalStudents,
+            activeStudents,
+            newSchoolsThisMonth,
+            newStudentsThisMonth,
+            newTeachersThisMonth,
+            activeSubscriptions,
+            totalRevenue,
+            monthlyIncome
+        });
+    }
 
     return {
         totalSchools,
@@ -616,18 +918,18 @@ async function buildSuperAdminMetrics() {
 exports.getSystemAnalytics = async (req, res) => {
     try {
         const metrics = await buildSuperAdminMetrics();
-        res.json({ success: true, data: metrics });
+        res.json({ success: true, code: 'SUPER_ADMIN_STATISTICS_FETCHED', message: 'Statistics fetched successfully', data: metrics });
     } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
+        return sendSuperAdminError(res, 'SUPER_ADMIN_STATISTICS_FETCH_FAILED', 'Failed to fetch statistics', err);
     }
 };
 
 exports.getSuperAdminDashboard = async (req, res) => {
     try {
         const metrics = await buildSuperAdminMetrics();
-        res.json({ success: true, data: metrics });
+        res.json({ success: true, code: 'SUPER_ADMIN_DASHBOARD_FETCHED', message: 'Dashboard data fetched successfully', data: metrics });
     } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
+        return sendSuperAdminError(res, 'SUPER_ADMIN_DASHBOARD_FETCH_FAILED', 'Failed to fetch dashboard data', err);
     }
 };
 

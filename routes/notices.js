@@ -111,7 +111,7 @@ router.post('/class/create',
 // Get my created notices
 router.get('/my/created', 
     authorize('principal', 'teacher', 'super_admin'),
-    noticeController.getNotices
+    noticeController.getMyNotices
 );
 
 /**
@@ -121,13 +121,13 @@ router.get('/my/created',
 // Get notices for student/parent
 router.get('/student/view', 
     authorize('student', 'parent'),
-    noticeController.getNotices
+    noticeController.getStudentNotices
 );
 
 // Get unread notices
 router.get('/student/unread', 
     authorize('student', 'parent'),
-    noticeController.getNotices
+    noticeController.getUnreadNotices
 );
 
 module.exports = router;

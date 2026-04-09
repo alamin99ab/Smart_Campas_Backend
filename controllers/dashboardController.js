@@ -7,6 +7,7 @@ const Student = require('../models/Student');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const superAdminController = require('./superAdminController');
+const accountantController = require('./accountantController');
 
 /**
  * @desc    Get Super Admin Dashboard
@@ -57,7 +58,7 @@ exports.getPrincipalDashboard = async (req, res) => {
         // Get fee collected (this month)
         const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
         const feeCollected = await require('../models/PaymentHistory').aggregate([
-            { $match: { schoolCode, paymentDate: { $gte: startOfMonth } } },
+            { $match: { schoolCode, createdAt: { $gte: startOfMonth } } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
         
@@ -176,11 +177,25 @@ exports.getStudentDashboard = async (req, res) => {
         const upcomingExams = 0;
         
         // Get notices count
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
         const notices = await Notice.countDocuments({
-            schoolCode,
-            $or: [
-                { targetRoles: 'student' },
-                { isPublic: true }
+            $and: [
+                { $or: [{ schoolId }, { isGlobal: true }] },
+                { isDeleted: false },
+                { status: 'active' },
+                { isPublished: true },
+                { publishDate: { $lte: new Date() } },
+                { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
+                {
+                    $or: [
+                        { targetType: 'all' },
+                        { targetType: 'student' },
+                        { targetType: 'role', targetRoles: { $in: ['student'] } },
+                        { targetRoles: { $in: ['student'] } },
+                        { targetRoles: { $size: 0 } },
+                        { targetRoles: { $exists: false } }
+                    ]
+                }
             ]
         });
         
@@ -224,53 +239,94 @@ exports.getParentDashboard = async (req, res) => {
     try {
         const parentId = req.user._id;
         const schoolCode = req.user.schoolCode;
-        
-        const parent = await User.findById(parentId);
-        const children = parent.children || [];
-        
-        // Get aggregated data for children
-        let totalAttendance = '—';
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const parentEmail = String(req.user.email || '').trim();
+
+        const parent = await User.findById(parentId).select('name email');
+        const linkedStudents = await Student.find({
+            schoolCode,
+            isActive: true,
+            $or: [
+                { parentId },
+                ...(parentEmail
+                    ? [{ 'guardian.email': new RegExp(`^${parentEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }]
+                    : [])
+            ]
+        }).select('_id');
+
+        const childIds = linkedStudents.map((row) => row._id);
+
+        let totalAttendance = 'N/A';
         let totalResults = 0;
         let totalFeeDue = 0;
-        let totalNotices = 0;
-        
-        if (children.length > 0) {
-            // For each child, get attendance and other data
-            const childIds = children.map(c => c.studentId);
-            
-            // Get attendance records for children (last 30 days)
+
+        if (childIds.length > 0) {
+            const AdvancedAttendance = require('../models/AdvancedAttendance');
+            const Result = require('../models/Result');
+            const Fee = require('../models/Fee');
+
             const thirtyDaysAgo = new Date();
             thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            
-            const attendanceRecords = await require('../models/Attendance').find({
-                student: { $in: childIds },
+
+            const attendanceRecords = await AdvancedAttendance.find({
+                schoolId,
+                studentId: { $in: childIds },
+                attendanceType: 'student',
                 date: { $gte: thirtyDaysAgo }
-            });
-            
+            }).select('status');
+
             const totalDays = attendanceRecords.length;
-            const presentDays = attendanceRecords.filter(r => r.status === 'present').length;
-            totalAttendance = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) + '%' : '—';
-            
-            // Get notices
-            totalNotices = await Notice.countDocuments({
+            const presentDays = attendanceRecords.filter((row) => row.status === 'present').length;
+            totalAttendance = totalDays > 0 ? `${Math.round((presentDays / totalDays) * 100)}%` : 'N/A';
+
+            totalResults = await Result.countDocuments({
                 schoolCode,
-                $or: [
-                    { targetRoles: 'parent' },
-                    { isPublic: true }
-                ]
+                studentId: { $in: childIds },
+                isPublished: true
             });
+
+            const fees = await Fee.find({
+                schoolCode,
+                studentId: { $in: childIds }
+            }).select('amountDue amountPaid');
+
+            totalFeeDue = fees.reduce(
+                (sum, fee) => sum + Math.max(0, Number(fee.amountDue || 0) - Number(fee.amountPaid || 0)),
+                0
+            );
         }
-        
+
+        const totalNotices = await Notice.countDocuments({
+            $and: [
+                { $or: [{ schoolId }, { isGlobal: true }] },
+                { isDeleted: false },
+                { status: 'active' },
+                { isPublished: true },
+                { publishDate: { $lte: new Date() } },
+                { $or: [{ expiryDate: { $gt: new Date() } }, { expiryDate: null }] },
+                {
+                    $or: [
+                        { targetType: 'all' },
+                        { targetType: 'parent' },
+                        { targetType: 'role', targetRoles: { $in: ['parent'] } },
+                        { targetRoles: { $in: ['parent'] } },
+                        { targetRoles: { $size: 0 } },
+                        { targetRoles: { $exists: false } }
+                    ]
+                }
+            ]
+        });
+
         res.status(200).json({
             success: true,
             data: {
-                attendance: totalAttendance || '—',
+                attendance: totalAttendance || 'N/A',
                 results: totalResults || 0,
                 feeDue: totalFeeDue || 0,
                 notices: totalNotices || 0,
-                childrenCount: children.length,
-                name: parent.name,
-                email: parent.email
+                childrenCount: childIds.length,
+                name: parent?.name || req.user.name,
+                email: parent?.email || req.user.email
             }
         });
     } catch (error) {
@@ -288,78 +344,7 @@ exports.getParentDashboard = async (req, res) => {
  * @access  Accountant only
  */
 exports.getAccountantDashboard = async (req, res) => {
-    try {
-        const schoolCode = req.user.schoolCode;
-        
-        // Get fee statistics
-        const totalStudents = await User.countDocuments({ schoolCode, role: 'student' });
-        
-        // Get monthly collection (this month)
-        const today = new Date();
-        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-        
-        const PaymentHistory = require('../models/PaymentHistory');
-        const monthlyPayments = await PaymentHistory.aggregate([
-            {
-                $match: {
-                    schoolCode,
-                    paymentDate: { $gte: startOfMonth, $lte: endOfMonth }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$amount' },
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-        
-        // Get total outstanding
-        const Fee = require('../models/Fee');
-        const outstanding = await Fee.aggregate([
-            {
-                $match: {
-                    schoolCode,
-                    status: { $ne: 'paid' }
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: '$amount' }
-                }
-            }
-        ]);
-        
-        // Get paid students count
-        const paidStudents = await Fee.countDocuments({
-            schoolCode,
-            status: 'paid'
-        });
-        
-        res.status(200).json({
-            success: true,
-            data: {
-                totalStudents: totalStudents || 0,
-                monthlyCollection: monthlyPayments[0]?.total || 0,
-                monthlyPayments: monthlyPayments[0]?.count || 0,
-                totalOutstanding: outstanding[0]?.total || 0,
-                studentFeeStats: {
-                    paid: paidStudents || 0,
-                    unpaid: totalStudents - paidStudents || 0
-                },
-                schoolCode
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
+    return accountantController.getAccountantDashboard(req, res);
 };
 
 exports.getDashboard = async (req, res) => {

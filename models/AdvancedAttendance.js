@@ -383,6 +383,13 @@ advancedAttendanceSchema.methods.sendAlertNotifications = async function() {
     await this.save();
 };
 
+const asObjectId = (value) => {
+    if (!value) return null;
+    if (value instanceof mongoose.Types.ObjectId) return value;
+    if (!mongoose.Types.ObjectId.isValid(value)) return null;
+    return new mongoose.Types.ObjectId(value);
+};
+
 // Static methods
 advancedAttendanceSchema.statics.getStudentAttendanceReport = async function(
     schoolId, 
@@ -391,14 +398,21 @@ advancedAttendanceSchema.statics.getStudentAttendanceReport = async function(
     startDate,
     endDate
 ) {
+    const schoolObjectId = asObjectId(schoolId);
+    const studentObjectId = asObjectId(studentId);
+    const sessionObjectId = academicSessionId ? asObjectId(academicSessionId) : null;
+    if (!schoolObjectId || !studentObjectId) {
+        throw new Error('Invalid schoolId or studentId');
+    }
+
     const matchStage = {
-        schoolId: new mongoose.Types.ObjectId(schoolId),
-        studentId: new mongoose.Types.ObjectId(studentId),
+        schoolId: schoolObjectId,
+        studentId: studentObjectId,
         attendanceType: 'student'
     };
     
-    if (academicSessionId) {
-        matchStage.academicSessionId = new mongoose.Types.ObjectId(academicSessionId);
+    if (academicSessionId && sessionObjectId) {
+        matchStage.academicSessionId = sessionObjectId;
     }
     
     if (startDate && endDate) {
@@ -453,16 +467,28 @@ advancedAttendanceSchema.statics.getClassAttendanceReport = async function(
     sectionId,
     date
 ) {
+    const schoolObjectId = asObjectId(schoolId);
+    const classObjectId = asObjectId(classId);
+    const targetDate = new Date(date);
+    if (!schoolObjectId || !classObjectId || Number.isNaN(targetDate.getTime())) {
+        throw new Error('Invalid schoolId, classId, or date');
+    }
+
+    const dayStart = new Date(targetDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
     const query = {
-        schoolId,
-        classId,
-        date: new Date(date),
+        schoolId: schoolObjectId,
+        classId: classObjectId,
+        date: { $gte: dayStart, $lt: dayEnd },
         attendanceType: 'student'
     };
 
     if (sectionId) {
         if (mongoose.Types.ObjectId.isValid(sectionId)) {
-            query.sectionId = mongoose.Types.ObjectId(sectionId);
+            query.sectionId = new mongoose.Types.ObjectId(sectionId);
         } else {
             query.section = String(sectionId).trim().toUpperCase();
         }
@@ -495,14 +521,21 @@ advancedAttendanceSchema.statics.getTeacherAttendanceReport = async function(
     teacherId,
     academicSessionId
 ) {
+    const schoolObjectId = asObjectId(schoolId);
+    const teacherObjectId = asObjectId(teacherId);
+    const sessionObjectId = academicSessionId ? asObjectId(academicSessionId) : null;
+    if (!schoolObjectId || !teacherObjectId) {
+        throw new Error('Invalid schoolId or teacherId');
+    }
+
     const matchStage = {
-        schoolId: new mongoose.Types.ObjectId(schoolId),
-        teacherId: new mongoose.Types.ObjectId(teacherId),
+        schoolId: schoolObjectId,
+        teacherId: teacherObjectId,
         attendanceType: 'teacher'
     };
     
-    if (academicSessionId) {
-        matchStage.academicSessionId = new mongoose.Types.ObjectId(academicSessionId);
+    if (academicSessionId && sessionObjectId) {
+        matchStage.academicSessionId = sessionObjectId;
     }
     
     const report = await this.aggregate([
@@ -555,6 +588,17 @@ advancedAttendanceSchema.statics.getAttendanceAnalytics = async function(
     endDate,
     groupBy = 'day'
 ) {
+    const schoolObjectId = asObjectId(schoolId);
+    if (!schoolObjectId) {
+        throw new Error('Invalid schoolId');
+    }
+
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate ? new Date(startDate) : new Date(end.getTime() - (30 * 24 * 60 * 60 * 1000));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        throw new Error('Invalid startDate or endDate');
+    }
+
     const groupStage = {};
     
     switch (groupBy) {
@@ -572,10 +616,10 @@ advancedAttendanceSchema.statics.getAttendanceAnalytics = async function(
     const analytics = await this.aggregate([
         {
             $match: {
-                schoolId: new mongoose.Types.ObjectId(schoolId),
+                schoolId: schoolObjectId,
                 date: {
-                    $gte: new Date(startDate),
-                    $lte: new Date(endDate)
+                    $gte: start,
+                    $lte: end
                 }
             }
         },

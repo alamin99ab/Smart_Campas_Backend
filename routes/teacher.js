@@ -21,6 +21,7 @@ const {
     getMySubstituteAssignments
 } = require('../controllers/leaveController');
 const resultController = require('../controllers/resultController');
+const { getMyAssignments } = require('../controllers/teacherAssignmentController');
 
 // Import middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -38,7 +39,6 @@ router.use(addSchoolScope);
 // 👨‍🏫 Step 8: Teacher Login is handled by /api/auth/login (public endpoint), not by tenant-protected internal route
 
 // All other routes require teacher authentication
-router.use(protect);
 router.use(authorize('teacher'));
 
 /**
@@ -87,6 +87,7 @@ router.put('/password', require('../controllers/teacherController').changePasswo
 
 router.get('/my-classes', require('../controllers/teacherController').getMyClasses);
 router.get('/my-subjects', require('../controllers/teacherController').getMySubjects);
+router.get('/me/assignments', getMyAssignments);
 router.get('/my-routine', require('../controllers/teacherController').getMyRoutine);
 router.get('/my-students', require('../controllers/teacherController').getMyStudents);
 

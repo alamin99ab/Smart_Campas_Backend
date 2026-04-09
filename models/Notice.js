@@ -257,19 +257,26 @@ noticeSchema.methods.incrementView = async function(userId) {
     // Track unique views
     const Notification = require('./Notification');
     const existingView = await Notification.findOne({
-        userId,
-        noticeId: this._id,
-        type: 'notice_view'
+        recipient: userId,
+        type: 'notice',
+        'data.noticeId': String(this._id),
+        'data.event': 'notice_view'
     });
     
     if (!existingView) {
         this.analytics.uniqueViews += 1;
         await Notification.create({
-            userId,
-            noticeId: this._id,
-            type: 'notice_view',
-            message: 'Viewed notice: ' + this.title,
-            readStatus: 'read'
+            recipient: userId,
+            title: 'Notice viewed',
+            body: `Viewed notice: ${this.title}`,
+            type: 'notice',
+            schoolCode: this.schoolCode,
+            data: {
+                noticeId: String(this._id),
+                event: 'notice_view'
+            },
+            read: true,
+            readAt: new Date()
         });
     }
     
@@ -292,11 +299,17 @@ noticeSchema.methods.addAcknowledgment = async function(userId, ipAddress, userA
         // Create notification
         const Notification = require('./Notification');
         await Notification.create({
-            userId,
-            noticeId: this._id,
-            type: 'notice_acknowledgment',
-            message: 'Acknowledged notice: ' + this.title,
-            readStatus: 'read'
+            recipient: userId,
+            title: 'Notice acknowledged',
+            body: `Acknowledged notice: ${this.title}`,
+            type: 'notice',
+            schoolCode: this.schoolCode,
+            data: {
+                noticeId: String(this._id),
+                event: 'notice_acknowledgment'
+            },
+            read: true,
+            readAt: new Date()
         });
     }
     
@@ -328,33 +341,42 @@ noticeSchema.statics.findActiveNotices = function(schoolId, userRole, userId, cl
     const query = {
         isDeleted: false,
         status: 'active',
+        isPublished: true,
         publishDate: { $lte: now },
-        $or: [
-            { expiryDate: null },
-            { expiryDate: { $gt: now } }
+        $and: [
+            {
+                $or: [
+                    { expiryDate: null },
+                    { expiryDate: { $gt: now } }
+                ]
+            }
         ]
     };
     
     if (schoolId) {
-        query.schoolId = schoolId;
+        query.$and.push({ $or: [{ schoolId }, { isGlobal: true }] });
     } else {
         query.isGlobal = true;
     }
     
-    // Apply role-based filtering
-    query.$or = [
+    const audienceFilters = [
         { targetType: 'all' },
         { targetType: 'role', targetRoles: userRole },
-        { targetType: userRole }
+        { targetType: userRole },
+        { targetRoles: { $in: [userRole] } },
+        { targetRoles: { $size: 0 } },
+        { targetRoles: { $exists: false } }
     ];
     
     // Add class-specific filtering for students
     if (classId && ['student', 'parent'].includes(userRole)) {
-        query.$or.push(
+        audienceFilters.push(
             { targetType: 'class', 'targetClasses.classId': classId },
             { targetType: 'section', 'targetSections.sectionId': classId }
         );
     }
+
+    query.$and.push({ $or: audienceFilters });
     
     return this.find(query)
         .populate('createdBy', 'name email')
@@ -480,36 +502,46 @@ noticeSchema.statics.createNotificationsForNotice = async function(notice) {
         // School-specific notice
         targetUsers = await User.find({
             schoolId: notice.schoolId,
-            role: { $in: notice.targetRoles || ['teacher', 'student', 'parent'] }
+            role: { $in: notice.targetRoles || ['teacher', 'student', 'parent'] },
+            isActive: true
         });
         
         // Apply class/section filtering
         if (notice.targetType === 'class' && notice.targetClasses.length > 0) {
-            const Student = require('./Student');
-            const classIds = notice.targetClasses.map(tc => tc.classId);
-            const studentsInClasses = await Student.find({
-                classId: { $in: classIds }
-            }).distinct('userId');
-            
-            targetUsers = targetUsers.filter(user => 
-                studentsInClasses.includes(user._id) || user.role !== 'student'
-            );
+            const classIds = notice.targetClasses
+                .map((tc) => tc.classId)
+                .filter(Boolean)
+                .map((id) => String(id));
+
+            if (classIds.length > 0) {
+                targetUsers = targetUsers.filter((user) => {
+                    if (user.role !== 'student') return true;
+                    const userClassId = user.classId ? String(user.classId) : null;
+                    return userClassId ? classIds.includes(userClassId) : false;
+                });
+            }
         }
     }
     
-    // Create notifications
-    const notifications = targetUsers.map(user => ({
-        userId: user._id,
-        schoolId: notice.schoolId,
-        noticeId: notice._id,
+    const uniqueRecipients = [...new Set(targetUsers.map((user) => String(user._id)))];
+    if (!uniqueRecipients.length) return [];
+
+    const notifications = uniqueRecipients.map((recipient) => ({
+        recipient,
+        schoolCode: notice.schoolCode || undefined,
         type: 'notice',
         title: notice.title,
-        message: notice.description.substring(0, 100) + '...',
-        priority: notice.priority,
-        readStatus: 'unread'
+        body: String(notice.description || '').substring(0, 220),
+        link: `/notices/${notice._id}`,
+        data: {
+            noticeId: String(notice._id),
+            noticeType: notice.noticeType,
+            targetType: notice.targetType
+        },
+        read: false
     }));
     
-    await Notification.insertMany(notifications);
+    return Notification.insertMany(notifications, { ordered: false });
 };
 
 // Pre-save middleware

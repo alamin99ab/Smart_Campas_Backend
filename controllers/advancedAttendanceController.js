@@ -43,6 +43,29 @@ const ensureActiveAcademicSession = async (schoolId, schoolCode, creatorId) => {
     return session;
 };
 
+const getTenantContext = (req, res) => {
+    const schoolId = req.tenant?.schoolId;
+    const schoolCode = req.tenant?.schoolCode || req.user?.schoolCode;
+
+    if (!schoolId || !schoolCode) {
+        res.status(400).json({
+            success: false,
+            message: 'School tenant context is required'
+        });
+        return null;
+    }
+
+    return { schoolId, schoolCode };
+};
+
+const toObjectId = (value, fieldName) => {
+    if (!value || !mongoose.Types.ObjectId.isValid(value)) {
+        return { error: `${fieldName} is invalid` };
+    }
+
+    return { value: new mongoose.Types.ObjectId(value) };
+};
+
 /**
  * @desc    Mark Student Attendance (Teacher)
  * @route   POST /api/attendance/student/mark
@@ -58,11 +81,12 @@ exports.markStudentAttendance = async (req, res) => {
             date,
             attendanceData // Array of { studentId, status, notes }
         } = req.body;
+        const normalizedPeriod = Number.isFinite(Number(periodNumber)) ? Number(periodNumber) : 1;
 
         const sectionValue = sectionId ? String(sectionId).trim() : undefined;
         const sectionName = sectionValue ? sectionValue.toUpperCase() : undefined;
         const sectionObjectId = sectionValue && mongoose.Types.ObjectId.isValid(sectionValue)
-            ? mongoose.Types.ObjectId(sectionValue)
+            ? new mongoose.Types.ObjectId(sectionValue)
             : undefined;
 
         // Core validation
@@ -75,13 +99,18 @@ exports.markStudentAttendance = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid attendanceData: studentId and status required for each record' });
         }
 
-        if (!req.tenant) {
-            return res.status(403).json({ success: false, message: 'Tenant context missing; ensure schoolCode is present on the user/token.' });
-        }
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
 
-        const schoolId = req.tenant.schoolId;
-        const schoolCode = req.user.schoolCode;
+        const { schoolId, schoolCode } = tenant;
         const teacherId = req.user.id;
+        const parsedDate = new Date(date);
+        if (Number.isNaN(parsedDate.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid attendance date'
+            });
+        }
 
         // Validate class and subject within tenant
         const classInfo = await Class.findOne({ _id: classId, schoolCode });
@@ -103,30 +132,59 @@ exports.markStudentAttendance = async (req, res) => {
         }
 
         // Convert to ObjectIds for consistent querying
-        const classObjectId = mongoose.Types.ObjectId(classId);
-        const subjectObjectId = mongoose.Types.ObjectId(subjectId);
+        const classObjectId = new mongoose.Types.ObjectId(classId);
+        const subjectObjectId = new mongoose.Types.ObjectId(subjectId);
+        const classIdString = String(classObjectId);
+        const subjectIdString = String(subjectObjectId);
 
-        const hasAssignment = await TeacherAssignment.findOne({
-            teacher: teacherId,
-            subject: subjectObjectId,
-            classes: { $in: [classObjectId] },
-            schoolCode,
-            isActive: true
-        });
+        const matchingAssignments = await TeacherAssignment.aggregate([
+            {
+                $match: {
+                    schoolCode,
+                    isActive: true
+                }
+            },
+            {
+                $addFields: {
+                    teacherAsString: { $toString: '$teacher' },
+                    subjectAsString: { $toString: '$subject' },
+                    classesAsString: {
+                        $map: {
+                            input: '$classes',
+                            as: 'classRef',
+                            in: { $toString: '$$classRef' }
+                        }
+                    }
+                }
+            },
+            {
+                $match: {
+                    teacherAsString: String(teacherId),
+                    subjectAsString: subjectIdString,
+                    classesAsString: classIdString
+                }
+            },
+            { $limit: 1 },
+            { $project: { _id: 1 } }
+        ]);
+
+        const hasAssignment = matchingAssignments.length > 0;
 
         if (!hasAssignment) {
             // Debug logging for troubleshooting
-            console.log('Teacher assignment check failed:', {
-                teacherId,
-                subjectId: subjectObjectId,
-                classId: classObjectId,
-                schoolCode,
-                foundAssignments: await TeacherAssignment.find({
-                    teacher: teacherId,
+            if (process.env.NODE_ENV !== 'production') {
+                console.log('Teacher assignment check failed:', {
+                    teacherId,
+                    subjectId: subjectObjectId,
+                    classId: classObjectId,
                     schoolCode,
-                    isActive: true
-                }).select('subject classes subjectName').lean()
-            });
+                    foundAssignments: await TeacherAssignment.find({
+                        teacher: teacherId,
+                        schoolCode,
+                        isActive: true
+                    }).select('subject classes subjectName').lean()
+                });
+            }
             return res.status(403).json({
                 success: false,
                 message: 'You are not assigned to teach this class/subject combination'
@@ -154,11 +212,11 @@ exports.markStudentAttendance = async (req, res) => {
             // Check if attendance already exists
             const attendanceQuery = {
                 schoolId,
-                studentId: mongoose.Types.ObjectId(studentId),
-                classId,
-                subjectId,
-                date: new Date(date),
-                periodNumber
+                studentId: new mongoose.Types.ObjectId(studentId),
+                classId: classObjectId,
+                subjectId: subjectObjectId,
+                date: parsedDate,
+                periodNumber: normalizedPeriod
             };
             if (sectionObjectId) {
                 attendanceQuery.sectionId = sectionObjectId;
@@ -186,13 +244,13 @@ exports.markStudentAttendance = async (req, res) => {
                     schoolId,
                     academicSessionId: academicSession._id,
                     attendanceType: 'student',
-                    studentId: mongoose.Types.ObjectId(studentId),
-                    classId,
+                    studentId: new mongoose.Types.ObjectId(studentId),
+                    classId: classObjectId,
                     sectionId: sectionObjectId,
                     section: sectionObjectId ? undefined : sectionName,
-                    subjectId,
-                    periodNumber,
-                    date: new Date(date),
+                    subjectId: subjectObjectId,
+                    periodNumber: normalizedPeriod,
+                    date: parsedDate,
                     status,
                     notes,
                     lateMinutes,
@@ -342,7 +400,10 @@ function mapLegacyStatus(status) {
 exports.teacherAttendance = async (req, res) => {
     try {
         const { type, time, location, notes, classId, studentId, attendanceDate, status } = req.body;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
         const teacherId = req.user.id;
 
         if (!type || !['check-in', 'check-out'].includes(type)) {
@@ -472,10 +533,20 @@ exports.getStudentAttendanceReport = async (req, res) => {
     try {
         const studentId = req.params.studentId || req.user.id;
         const { academicSessionId, startDate, endDate } = req.query;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
+
+        if (!mongoose.Types.ObjectId.isValid(studentId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid studentId'
+            });
+        }
 
         // Check authorization
-        if (req.user.role === 'student' && req.user.id !== studentId) {
+        if (req.user.role === 'student' && String(req.user.id) !== String(studentId)) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
@@ -531,13 +602,30 @@ exports.getStudentAttendanceReport = async (req, res) => {
 exports.getClassAttendanceReport = async (req, res) => {
     try {
         const { classId, sectionId, date } = req.params;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
+        if (!mongoose.Types.ObjectId.isValid(classId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid classId'
+            });
+        }
+
+        const parsedDate = new Date(date);
+        if (Number.isNaN(parsedDate.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid date'
+            });
+        }
 
         const report = await AdvancedAttendance.getClassAttendanceReport(
             schoolId,
             classId,
             sectionId,
-            date
+            parsedDate.toISOString()
         );
 
         res.status(200).json({
@@ -562,7 +650,10 @@ exports.getTeacherAttendanceReport = async (req, res) => {
     try {
         const teacherId = req.params.teacherId || req.user.id;
         const { academicSessionId } = req.query;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
 
         if (!mongoose.Types.ObjectId.isValid(teacherId)) {
             return res.status(400).json({
@@ -572,7 +663,7 @@ exports.getTeacherAttendanceReport = async (req, res) => {
         }
 
         // Check authorization
-        if (req.user.role === 'teacher' && req.user.id !== teacherId) {
+        if (req.user.role === 'teacher' && String(req.user.id) !== String(teacherId)) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
@@ -612,12 +703,23 @@ exports.getTeacherAttendanceReport = async (req, res) => {
 exports.getAttendanceAnalytics = async (req, res) => {
     try {
         const { startDate, endDate, groupBy = 'day', type = 'all' } = req.query;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId, schoolCode } = tenant;
+        const end = endDate ? new Date(endDate) : new Date();
+        const start = startDate ? new Date(startDate) : new Date(end.getTime() - (30 * 24 * 60 * 60 * 1000));
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid startDate or endDate'
+            });
+        }
 
         const analytics = await AdvancedAttendance.getAttendanceAnalytics(
             schoolId,
-            startDate,
-            endDate,
+            start.toISOString(),
+            end.toISOString(),
             groupBy
         );
 
@@ -628,8 +730,8 @@ exports.getAttendanceAnalytics = async (req, res) => {
             averageStudentAttendance,
             averageTeacherAttendance
         ] = await Promise.all([
-            User.countDocuments({ schoolId, role: 'student', isActive: true }),
-            User.countDocuments({ schoolId, role: 'teacher', isActive: true }),
+            User.countDocuments({ schoolCode, role: 'student', isActive: true }),
+            User.countDocuments({ schoolCode, role: 'teacher', isActive: true }),
             AdvancedAttendance.aggregate([
                 { $match: { schoolId: new mongoose.Types.ObjectId(schoolId), attendanceType: 'student' } },
                 { $group: { _id: null, avgRate: { $avg: '$monthlyStats.percentage' } } }
@@ -669,7 +771,10 @@ exports.getAttendanceAnalytics = async (req, res) => {
 exports.getAttendanceAlerts = async (req, res) => {
     try {
         const { severity, acknowledged } = req.query;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
 
         // Build filter
         const filter = {
@@ -740,7 +845,10 @@ exports.getAttendanceAlerts = async (req, res) => {
 exports.acknowledgeAlert = async (req, res) => {
     try {
         const { attendanceId, alertId } = req.params;
-        const schoolId = req.tenant.schoolId;
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId } = tenant;
 
         const attendance = await AdvancedAttendance.findOne({
             _id: attendanceId,
@@ -806,15 +914,10 @@ exports.acknowledgeAlert = async (req, res) => {
  */
 exports.getTodayAttendance = async (req, res) => {
     try {
-        const schoolId = req.tenant?.schoolId;
-        const schoolCode = req.user.schoolCode;
-        
-        if (!schoolId) {
-            return res.status(400).json({
-                success: false,
-                message: 'School context not found'
-            });
-        }
+        const tenant = getTenantContext(req, res);
+        if (!tenant) return;
+
+        const { schoolId, schoolCode } = tenant;
 
         // Get today's date range
         const today = new Date();
@@ -850,7 +953,7 @@ exports.getTodayAttendance = async (req, res) => {
             status.push({
                 class: classDoc.className || 'Class',
                 section: classDoc.section || 'N/A',
-                totalStudents: classDoc.totalStudents || 0,
+                totalStudents: classDoc.currentStudents || classDoc.totalStudents || 0,
                 taken: !!attendanceRecords,
                 attendanceId: attendanceRecords?._id,
                 takenBy: attendanceRecords ? {
