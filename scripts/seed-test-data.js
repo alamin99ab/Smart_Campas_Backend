@@ -779,87 +779,123 @@ async function seedTestData() {
             });
         });
 
-        const examSeeds = [
+        const examBlueprints = [
             {
-                _id: objectId(),
-                schoolCode,
                 name: 'Midterm Examination',
-                examName: 'Midterm Examination',
                 examType: 'Midterm',
-                year: now.getFullYear(),
-                startDate: addDays(now, 10),
-                endDate: addDays(now, 14),
-                subjects: SUBJECT_DEFINITIONS.map((subject) => subject.name),
-                classes: CLASS_LEVELS.map((level) => `Class ${level}`),
-                totalMarks: 100,
-                description: 'Midterm exam schedule for seeded demo data.',
-                isActive: true,
-                createdBy: principalId,
-                createdAt,
-                updatedAt: now,
-                seedTag: SEED_TAG
+                startOffsetDays: 10,
+                endOffsetDays: 14,
+                scheduleLevel: 10
             },
             {
-                _id: objectId(),
-                schoolCode,
                 name: 'Final Examination',
-                examName: 'Final Examination',
                 examType: 'Final',
-                year: now.getFullYear(),
-                startDate: addDays(now, 45),
-                endDate: addDays(now, 52),
-                subjects: SUBJECT_DEFINITIONS.map((subject) => subject.name),
-                classes: CLASS_LEVELS.map((level) => `Class ${level}`),
-                totalMarks: 100,
-                description: 'Final exam schedule for seeded demo data.',
-                isActive: true,
-                createdBy: principalId,
-                createdAt,
-                updatedAt: now,
-                seedTag: SEED_TAG
+                startOffsetDays: 45,
+                endOffsetDays: 52,
+                scheduleLevel: 9
             }
         ];
 
-        const examIdByName = new Map(examSeeds.map((examSeed) => [examSeed.name, examSeed._id]));
-        payload.exams.push(...examSeeds);
+        const orderedClassDocsForExams = [...classDocs].sort((a, b) => {
+            if (a.classLevel !== b.classLevel) return a.classLevel - b.classLevel;
+            return String(a.section || '').localeCompare(String(b.section || ''));
+        });
 
-        examSeeds.forEach((examSeed, examSeedIndex) => {
-            const displayLevel = CLASS_LEVELS[CLASS_LEVELS.length - 1 - examSeedIndex];
-            const displaySubject = subjectsByLevel.get(displayLevel)[examSeedIndex];
-            const slots = SUBJECT_DEFINITIONS.slice(0, 5).map((subjectDef, slotIndex) => {
-                const subjectDoc = subjectsByLevel.get(displayLevel)[slotIndex];
+        // Map used later by results so each student result links to an exam in the same class.
+        const examIdByClassAndName = new Map();
+
+        examBlueprints.forEach((blueprint, blueprintIndex) => {
+            orderedClassDocsForExams.forEach((classDoc, classIndex) => {
+                const classSubjects = subjectsByLevel.get(classDoc.classLevel) || [];
+
+                classSubjects.forEach((subjectDoc, subjectIndex) => {
+                    const examId = objectId();
+                    const examDate = addDays(
+                        now,
+                        blueprint.startOffsetDays + classIndex + subjectIndex + blueprintIndex
+                    );
+
+                    payload.exams.push({
+                        _id: examId,
+                        schoolCode,
+                        academicYear,
+                        name: blueprint.name,
+                        examName: blueprint.name,
+                        examType: blueprint.examType,
+                        classId: classDoc._id,
+                        subjectId: subjectDoc._id,
+                        date: examDate,
+                        duration: 120,
+                        totalMarks: 100,
+                        year: now.getFullYear(),
+                        startDate: addDays(now, blueprint.startOffsetDays),
+                        endDate: addDays(now, blueprint.endOffsetDays),
+                        classes: [classDoc.className],
+                        subjects: [subjectDoc.subjectName],
+                        description: `${blueprint.name} for ${classDoc.className} ${classDoc.section} - ${subjectDoc.subjectName}.`,
+                        isActive: true,
+                        resultsPublished: false,
+                        publishedDate: null,
+                        createdBy: principalId,
+                        createdAt,
+                        updatedAt: now,
+                        seedTag: SEED_TAG
+                    });
+
+                    const key = `${String(classDoc._id)}:${blueprint.name}`;
+                    if (!examIdByClassAndName.has(key)) {
+                        examIdByClassAndName.set(key, examId);
+                    }
+                });
+            });
+        });
+
+        examBlueprints.forEach((blueprint) => {
+            const displayClass =
+                orderedClassDocsForExams.find(
+                    (classDoc) =>
+                        classDoc.classLevel === blueprint.scheduleLevel && String(classDoc.section || '').toUpperCase() === 'A'
+                ) ||
+                orderedClassDocsForExams.find((classDoc) => classDoc.classLevel === blueprint.scheduleLevel) ||
+                orderedClassDocsForExams[0];
+
+            const displaySubjects = subjectsByLevel.get(displayClass.classLevel) || [];
+            const slots = SUBJECT_DEFINITIONS.slice(0, 5).map((_, slotIndex) => {
+                const subjectDoc = displaySubjects[slotIndex % displaySubjects.length];
                 return {
-                    date: addDays(examSeed.startDate, slotIndex),
+                    date: addDays(now, blueprint.startOffsetDays + slotIndex),
                     startTime: '10:00',
                     endTime: '12:00',
                     subjectId: subjectDoc._id,
                     subjectName: subjectDoc.subjectName,
-                    classLevel: String(displayLevel),
-                    section: slotIndex % 2 === 0 ? 'A' : 'B',
-                    roomNumber: `${displayLevel}${slotIndex % 2 === 0 ? 'A' : 'B'}-10${(slotIndex % 2) + 1}`,
+                    classLevel: String(displayClass.classLevel),
+                    section: displayClass.section,
+                    roomNumber: `${displayClass.classLevel}${displayClass.section}-10${(slotIndex % 2) + 1}`,
                     fullMarks: 100,
                     passMarks: 33
                 };
             });
 
+            const linkedExamId = examIdByClassAndName.get(`${String(displayClass._id)}:${blueprint.name}`);
+
             payload.examSchedules.push({
                 _id: objectId(),
                 schoolId,
                 schoolCode,
-                examId: examSeed._id,
-                examName: examSeed.name,
-                name: examSeed.name,
-                description: examSeed.description,
-                examType: examSeed.examType,
+                examId: linkedExamId,
+                examName: blueprint.name,
+                name: blueprint.name,
+                description: `${blueprint.name} schedule for seeded demo data.`,
+                examType: blueprint.examType,
                 academicSessionId,
                 academicYear,
                 slots,
                 class: {
-                    name: `Class ${displayLevel}`,
-                    section: 'A'
+                    name: displayClass.className,
+                    section: displayClass.section
                 },
                 subject: {
-                    name: displaySubject.subjectName
+                    name: displaySubjects[0]?.subjectName || 'N/A'
                 },
                 date: slots[0].date,
                 duration: 120,
@@ -1132,9 +1168,11 @@ async function seedTestData() {
                 legacyStudent.totalDue = studentTotalDue;
 
                 ['Midterm Examination', 'Final Examination'].forEach((examName, examOffset) => {
-                    const linkedExamId = examIdByName.get(examName);
+                    const linkedExamId = examIdByClassAndName.get(`${String(classDoc._id)}:${examName}`);
                     if (!linkedExamId) {
-                        throw new Error(`Seed exam linkage missing for ${examName} in ${schoolCode}`);
+                        throw new Error(
+                            `Seed exam linkage missing for ${examName} in ${schoolCode} (${classDoc.className} ${classDoc.section})`
+                        );
                     }
 
                     const resultKey = `${studentId.toString()}:${linkedExamId.toString()}:${schoolCode}`;
@@ -1397,6 +1435,60 @@ async function seedTestData() {
                 createdBy: principalId,
                 updatedBy: principalId,
                 isDeleted: false,
+                createdAt,
+                updatedAt: now,
+                seedTag: SEED_TAG
+            },
+            {
+                _id: objectId(),
+                schoolId,
+                schoolCode,
+                title: `${schoolName} Admission Open Notice`,
+                description: 'Admissions for the upcoming academic session are now open on the school portal.',
+                content: 'Admissions for the upcoming academic session are now open on the school portal.',
+                noticeType: 'general',
+                category: 'general',
+                targetType: 'all',
+                targetRoles: ['teacher', 'student', 'parent', 'accountant'],
+                priority: 'medium',
+                isPublic: true,
+                isGlobal: false,
+                publishDate: addDays(now, -2),
+                publishedAt: addDays(now, -2),
+                isPublished: true,
+                status: 'active',
+                isActive: true,
+                isDeleted: false,
+                expiryDate: addDays(now, 45),
+                createdBy: principalId,
+                updatedBy: principalId,
+                createdAt,
+                updatedAt: now,
+                seedTag: SEED_TAG
+            },
+            {
+                _id: objectId(),
+                schoolId,
+                schoolCode,
+                title: `${schoolName} Public Exam Update`,
+                description: 'Final examination publication timeline and guardian instructions are available for all visitors.',
+                content: 'Final examination publication timeline and guardian instructions are available for all visitors.',
+                noticeType: 'exam',
+                category: 'exam',
+                targetType: 'all',
+                targetRoles: ['teacher', 'student', 'parent', 'accountant'],
+                priority: 'high',
+                isPublic: true,
+                isGlobal: false,
+                publishDate: addDays(now, -1),
+                publishedAt: addDays(now, -1),
+                isPublished: true,
+                status: 'active',
+                isActive: true,
+                isDeleted: false,
+                expiryDate: addDays(now, 60),
+                createdBy: principalId,
+                updatedBy: principalId,
                 createdAt,
                 updatedAt: now,
                 seedTag: SEED_TAG
