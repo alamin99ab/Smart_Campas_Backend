@@ -18,6 +18,7 @@ const Assignment = require('../models/Assignment');
 const Subject = require('../models/Subject');
 const AdvancedAttendance = require('../models/AdvancedAttendance');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
+const { USER_SAFE_RESPONSE_PROJECTION, sanitizeUserForResponse } = require('../utils/safeUserResponse');
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_INDEX = DAY_NAMES.reduce((acc, day, index) => {
@@ -643,7 +644,7 @@ exports.getProfile = async (req, res) => {
 
         const student = await User.findById(studentId)
             .populate('classId', 'className section classLevel')
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .select('-__v');
 
         if (!student) {
@@ -655,7 +656,7 @@ exports.getProfile = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: student
+            data: sanitizeUserForResponse(student)
         });
 
     } catch (error) {
@@ -1263,7 +1264,7 @@ exports.downloadStudyMaterial = async (req, res) => {
 exports.getStudentProfile = async (req, res) => {
     try {
         const studentId = req.user.id;
-        const student = await User.findById(studentId).select('-password');
+        const student = await User.findById(studentId).select(USER_SAFE_RESPONSE_PROJECTION);
         
         if (!student) {
             return res.status(404).json({
@@ -1274,7 +1275,7 @@ exports.getStudentProfile = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: student
+            data: sanitizeUserForResponse(student)
         });
     } catch (error) {
         res.status(500).json({
@@ -1299,7 +1300,7 @@ exports.updateStudentProfile = async (req, res) => {
             studentId,
             { name, email, phone, address },
             { new: true, runValidators: true }
-        ).select('-password');
+        ).select(USER_SAFE_RESPONSE_PROJECTION);
 
         if (!student) {
             return res.status(404).json({
@@ -1311,7 +1312,7 @@ exports.updateStudentProfile = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Profile updated successfully',
-            data: student
+            data: sanitizeUserForResponse(student)
         });
     } catch (error) {
         res.status(500).json({

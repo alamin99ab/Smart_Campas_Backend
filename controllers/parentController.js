@@ -13,12 +13,66 @@ const Result = require('../models/Result');
 const Fee = require('../models/Fee');
 const Notice = require('../models/Notice');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
+const { USER_SAFE_RESPONSE_PROJECTION, sanitizeUserForResponse } = require('../utils/safeUserResponse');
 
 function guardianEmailRegex(email) {
     const e = String(email || '').trim();
     if (!e) return null;
     const safe = e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`^${safe}$`, 'i');
+}
+
+function escapeRegex(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function getParentNoticeAudienceScope(req) {
+    const schoolId = req.tenant?.schoolId || req.user?.schoolId || null;
+    const schoolCode = String(req.tenant?.schoolCode || req.user?.schoolCode || '')
+        .trim()
+        .toUpperCase();
+    const parentId = req.user?._id || req.user?.id;
+    const parentEmail = String(req.user?.email || '').trim();
+    const gRe = guardianEmailRegex(parentEmail);
+
+    const [linkedStudents, linkedStudentUsers] = await Promise.all([
+        Student.find({
+            schoolCode,
+            isActive: true,
+            $or: [{ parentId }, ...(gRe ? [{ 'guardian.email': gRe }] : [])]
+        })
+            .select('studentClass section')
+            .lean(),
+        parentEmail
+            ? User.find({
+                  role: 'student',
+                  schoolCode,
+                  'parentInfo.email': new RegExp(`^${escapeRegex(parentEmail)}$`, 'i')
+              })
+                  .select('classId section')
+                  .lean()
+            : []
+    ]);
+
+    const classIds = [
+        ...new Set(linkedStudentUsers.map((row) => (row.classId ? String(row.classId) : null)).filter(Boolean))
+    ];
+    const classNames = [
+        ...new Set(
+            linkedStudents
+                .map((row) => String(row.studentClass || '').trim())
+                .filter(Boolean)
+        )
+    ];
+    const sectionNames = [
+        ...new Set(
+            [...linkedStudents, ...linkedStudentUsers]
+                .map((row) => String(row.section || '').trim())
+                .filter(Boolean)
+        )
+    ];
+
+    return { schoolId, classIds, classNames, sectionNames };
 }
 
 /**
@@ -301,6 +355,89 @@ exports.getChildren = async (req, res) => {
 };
 
 /**
+ * @desc    Get parent notices (school + child scoped)
+ * @route   GET /api/parent/notices
+ * @access  Parent only
+ */
+exports.getParentNotices = async (req, res) => {
+    try {
+        const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const skip = (pageNum - 1) * limitNum;
+
+        const { schoolId, classIds, classNames, sectionNames } = await getParentNoticeAudienceScope(req);
+        const now = new Date();
+
+        const query = {
+            $and: [
+                { isDeleted: false },
+                { status: 'active' },
+                { isPublished: true },
+                { publishDate: { $lte: now } },
+                { $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] },
+                schoolId ? { $or: [{ schoolId }, { isGlobal: true }] } : { isGlobal: true },
+                {
+                    $or: [
+                        { targetType: 'all' },
+                        { targetType: 'parent' },
+                        { targetType: 'role', targetRoles: { $in: ['parent'] } },
+                        { targetRoles: { $in: ['parent'] } },
+                        { targetRoles: { $size: 0 } },
+                        { targetRoles: { $exists: false } },
+                        ...(classIds.length
+                            ? [
+                                  { targetType: 'class', 'targetClasses.classId': { $in: classIds } },
+                                  { targetType: 'section', 'targetSections.sectionId': { $in: classIds } }
+                              ]
+                            : []),
+                        ...(classNames.length
+                            ? [{ targetType: 'class', 'targetClasses.className': { $in: classNames } }]
+                            : []),
+                        ...(sectionNames.length
+                            ? [{ targetType: 'section', 'targetSections.sectionName': { $in: sectionNames } }]
+                            : [])
+                    ]
+                }
+            ]
+        };
+
+        const [notices, total] = await Promise.all([
+            Notice.find(query)
+                .select(
+                    'title description noticeType priority isPinned pinOrder publishDate expiryDate targetType targetRoles targetClasses targetSections createdAt updatedAt'
+                )
+                .populate('createdBy', 'name role')
+                .sort({ isPinned: -1, pinOrder: 1, publishDate: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            Notice.countDocuments(query)
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            code: 'PARENT_NOTICES_FETCHED',
+            message: 'Parent notices fetched successfully',
+            data: notices,
+            notices,
+            pagination: {
+                total,
+                totalPages: Math.ceil(total / limitNum),
+                currentPage: pageNum,
+                limit: limitNum
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            code: 'PARENT_NOTICES_FETCH_FAILED',
+            message: 'Failed to fetch parent notices',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Get child attendance
  * @route   GET /api/parent/attendance/:studentId
  * @access  Parent only
@@ -512,7 +649,7 @@ exports.getParentProfile = async (req, res) => {
         const parentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
-        const parent = await User.findById(parentId).select('-password');
+        const parent = await User.findById(parentId).select(USER_SAFE_RESPONSE_PROJECTION);
         
         if (!parent) {
             return res.status(404).json({
@@ -523,7 +660,7 @@ exports.getParentProfile = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: parent
+            data: sanitizeUserForResponse(parent)
         });
     } catch (error) {
         res.status(500).json({
@@ -548,7 +685,7 @@ exports.updateParentProfile = async (req, res) => {
             parentId,
             { name, email, phone, address },
             { new: true, runValidators: true }
-        ).select('-password');
+        ).select(USER_SAFE_RESPONSE_PROJECTION);
 
         if (!parent) {
             return res.status(404).json({
@@ -560,7 +697,7 @@ exports.updateParentProfile = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Profile updated successfully',
-            data: parent
+            data: sanitizeUserForResponse(parent)
         });
     } catch (error) {
         res.status(500).json({

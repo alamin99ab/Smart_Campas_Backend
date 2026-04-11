@@ -12,6 +12,7 @@ const Subscription = require('../models/Subscription');
 const AuditLog = require('../models/AuditLog');
 const Student = require('../models/Student');
 const passwordService = require('../services/passwordResetService');
+const { USER_SAFE_RESPONSE_PROJECTION, sanitizeUserForResponse } = require('../utils/safeUserResponse');
 
 const SUBSCRIPTION_PRESETS = {
     trial: {
@@ -584,7 +585,7 @@ exports.getAllUsers = async (req, res) => {
 
         const [users, total] = await Promise.all([
             User.find(query)
-                .select('-password -refreshToken -twoFactorSecret -sessions')
+                .select(USER_SAFE_RESPONSE_PROJECTION)
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit),
@@ -593,7 +594,7 @@ exports.getAllUsers = async (req, res) => {
 
         res.json({
             success: true,
-            data: users,
+            data: users.map((user) => sanitizeUserForResponse(user)),
             pagination: {
                 page,
                 limit,
@@ -650,9 +651,9 @@ exports.createUser = async (req, res) => {
 
 exports.getUserDetails = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id).select('-password -refreshToken -twoFactorSecret');
+        const user = await User.findById(req.params.id).select(USER_SAFE_RESPONSE_PROJECTION);
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-        res.json({ success: true, data: user });
+        res.json({ success: true, data: sanitizeUserForResponse(user) });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
@@ -663,10 +664,10 @@ exports.updateUser = async (req, res) => {
         const updates = { ...req.body };
         delete updates.password; // Password updates via reset endpoint only
         if (updates.role === 'super_admin') return res.status(403).json({ success: false, message: 'Assigning super_admin role via API is not allowed.' });
-        const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true }).select('-password -refreshToken -twoFactorSecret');
+        const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true }).select(USER_SAFE_RESPONSE_PROJECTION);
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
         await createAudit(req.user?._id || null, 'UPDATE_USER', { userId: user._id }, req);
-        res.json({ success: true, data: user });
+        res.json({ success: true, data: sanitizeUserForResponse(user) });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }

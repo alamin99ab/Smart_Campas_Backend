@@ -21,6 +21,10 @@ const PaymentHistory = require('../models/PaymentHistory');
 const Attendance = require('../models/Attendance');
 const PDFDocument = require('pdfkit');
 const { assignTeacherSubjectToClasses, AssignmentServiceError } = require('../services/teacherAssignmentService');
+const {
+    USER_SAFE_RESPONSE_PROJECTION,
+    sanitizeUserForResponse
+} = require('../utils/safeUserResponse');
 
 const toFiniteNumber = (value, fallback = 0) => {
     const number = Number(value);
@@ -141,7 +145,7 @@ exports.getUsers = async (req, res) => {
         }
 
         const users = await User.find(query)
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit));
@@ -150,7 +154,7 @@ exports.getUsers = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: users,
+            data: users.map((user) => sanitizeUserForResponse(user)),
             pagination: {
                 page: parseInt(page),
                 limit: parseInt(limit),
@@ -1240,8 +1244,7 @@ exports.createTeacher = async (req, res) => {
             createdBy: req.user.id
         });
 
-        const teacherData = teacher.toObject();
-        delete teacherData.password;
+        const teacherData = sanitizeUserForResponse(teacher);
 
         res.status(201).json({
             success: true,
@@ -1267,12 +1270,12 @@ exports.getTeachers = async (req, res) => {
         const schoolCode = req.user.schoolCode;
         
         const teachers = await User.find({ schoolCode, role: 'teacher' })
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .sort({ createdAt: -1 });
 
         res.status(200).json({
             success: true,
-            data: teachers
+            data: teachers.map((teacher) => sanitizeUserForResponse(teacher))
         });
     } catch (error) {
         res.status(500).json({
@@ -1298,7 +1301,7 @@ exports.updateTeacher = async (req, res) => {
             { _id: id, schoolCode, role: 'teacher' },
             { name, email, subjects, classes, phone, address },
             { new: true, runValidators: true }
-        ).select('-password');
+        ).select(USER_SAFE_RESPONSE_PROJECTION);
 
         if (!teacher) {
             return res.status(404).json({
@@ -1310,7 +1313,7 @@ exports.updateTeacher = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Teacher updated successfully',
-            data: teacher
+            data: sanitizeUserForResponse(teacher)
         });
     } catch (error) {
         res.status(500).json({
@@ -1530,8 +1533,7 @@ exports.createStudent = async (req, res) => {
             createdBy: req.user.id
         });
 
-        const studentData = student.toObject();
-        delete studentData.password;
+        const studentData = sanitizeUserForResponse(student);
 
         // Mirror to Student collection for analytics/parent dashboards
         try {
@@ -1597,11 +1599,11 @@ exports.getStudents = async (req, res) => {
         
         const students = await User.find(query)
             .populate('classId', 'className section classLevel')
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .sort({ createdAt: -1 });
 
         const normalizedStudents = students.map((student) => {
-            const studentData = student.toObject();
+            const studentData = sanitizeUserForResponse(student);
             if (studentData.classId?.className && !studentData.studentClass) {
                 studentData.studentClass = studentData.classId.section
                     ? `${studentData.classId.className} - ${studentData.classId.section}`
@@ -1646,7 +1648,7 @@ exports.getStudentFullProfile = async (req, res) => {
             role: 'student'
         })
             .populate('classId', 'className section classLevel')
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .lean();
 
         const studentLedgerQuery = Student.findOne({
@@ -1690,7 +1692,7 @@ exports.getStudentFullProfile = async (req, res) => {
 
             studentUser = await User.findOne(userQuery)
                 .populate('classId', 'className section classLevel')
-                .select('-password')
+                .select(USER_SAFE_RESPONSE_PROJECTION)
                 .lean();
         }
 
@@ -1987,7 +1989,7 @@ const getStudentExportBundle = async (schoolCode, id) => {
         role: 'student'
     })
         .populate('classId', 'className section classLevel')
-        .select('-password')
+        .select(USER_SAFE_RESPONSE_PROJECTION)
         .lean();
 
     const studentLedgerQuery = Student.findOne({
@@ -2028,7 +2030,7 @@ const getStudentExportBundle = async (schoolCode, id) => {
         }
         studentUser = await User.findOne(userQuery)
             .populate('classId', 'className section classLevel')
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .lean();
     }
 
@@ -2550,7 +2552,7 @@ exports.updateStudent = async (req, res) => {
             { _id: id, schoolCode, role: 'student' },
             { name, email, classId, section, rollNumber, parentInfo },
             { new: true, runValidators: true }
-        ).select('-password');
+        ).select(USER_SAFE_RESPONSE_PROJECTION);
 
         if (!student) {
             return res.status(404).json({
@@ -2562,7 +2564,7 @@ exports.updateStudent = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Student updated successfully',
-            data: student
+            data: sanitizeUserForResponse(student)
         });
     } catch (error) {
         res.status(500).json({
@@ -2770,12 +2772,12 @@ exports.getParents = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
         const parents = await User.find({ schoolCode, role: 'parent' })
-            .select('-password')
+            .select(USER_SAFE_RESPONSE_PROJECTION)
             .sort({ createdAt: -1 });
 
         res.status(200).json({
             success: true,
-            data: parents
+            data: parents.map((parent) => sanitizeUserForResponse(parent))
         });
     } catch (error) {
         res.status(500).json({

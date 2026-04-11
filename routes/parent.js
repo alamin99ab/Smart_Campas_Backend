@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/authMiddleware');
-const { ensureTenantIsolation, checkFeatureAccess } = require('../middleware/multiTenant');
+const { ensureTenantIsolation } = require('../middleware/multiTenant');
 
 // Apply middleware to all routes
 router.use(protect);
@@ -23,6 +23,8 @@ const parentController = require('../controllers/parentController');
 router.get('/dashboard', parentController.getParentDashboard);
 
 router.get('/children', parentController.getChildren);
+
+router.get('/notices', parentController.getParentNotices);
 
 router.get('/attendance/:studentId', parentController.getChildAttendance);
 

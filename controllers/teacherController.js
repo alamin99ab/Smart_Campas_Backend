@@ -17,6 +17,7 @@ const Routine = require('../models/Routine');
 const TeacherAssignment = require('../models/TeacherAssignment');
 const TeacherAbsenceRequest = require('../models/TeacherAbsenceRequest');
 const { findTemporarySubstitutePermission } = require('./teacherAbsenceController');
+const { USER_SAFE_RESPONSE_PROJECTION, sanitizeUserForResponse } = require('../utils/safeUserResponse');
 
 const normalizeSection = (value) => String(value || '').trim().toUpperCase();
 
@@ -523,7 +524,7 @@ function calculateGrade(marksObtained, totalMarks, passingMarks) {
 exports.getTeacherProfile = async (req, res) => {
     try {
         const teacherId = req.user.id;
-        const teacher = await User.findById(teacherId).select('-password');
+        const teacher = await User.findById(teacherId).select(USER_SAFE_RESPONSE_PROJECTION);
         
         if (!teacher) {
             return res.status(404).json({
@@ -534,7 +535,7 @@ exports.getTeacherProfile = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: teacher
+            data: sanitizeUserForResponse(teacher)
         });
     } catch (error) {
         res.status(500).json({
@@ -559,7 +560,7 @@ exports.updateTeacherProfile = async (req, res) => {
             teacherId,
             { name, email, phone, address, qualifications },
             { new: true, runValidators: true }
-        ).select('-password');
+        ).select(USER_SAFE_RESPONSE_PROJECTION);
 
         if (!teacher) {
             return res.status(404).json({
@@ -571,7 +572,7 @@ exports.updateTeacherProfile = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Profile updated successfully',
-            data: teacher
+            data: sanitizeUserForResponse(teacher)
         });
     } catch (error) {
         res.status(500).json({
@@ -942,7 +943,7 @@ exports.getMyStudents = async (req, res) => {
             }
 
             students = await User.find(studentQuery)
-                .select('-password')
+                .select(USER_SAFE_RESPONSE_PROJECTION)
                 .lean();
         }
 

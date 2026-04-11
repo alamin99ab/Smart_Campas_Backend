@@ -11,6 +11,7 @@ const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
 const { sendEmail } = require('../utils/emailService');
 const { sendSMS } = require('../utils/smsService');
+const { USER_SAFE_RESPONSE_PROJECTION, sanitizeUserForResponse } = require('../utils/safeUserResponse');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -780,8 +781,7 @@ exports.getUserProfile = async (req, res) => {
                     isEnvBased: true,
                     emailVerified: true,
                     isApproved: true,
-                    activeSessions: 0,
-                    devices: []
+                    activeSessions: 0
                 }
             });
         }
@@ -791,15 +791,14 @@ exports.getUserProfile = async (req, res) => {
         }
 
         // Use Mongoose pattern
-        const selectFields = '-password -refreshToken -emailVerificationToken -resetPasswordToken -twoFactorSecret';
-        const user = await User.findById(req.user._id).select(selectFields);
+        const user = await User.findById(req.user._id).select(USER_SAFE_RESPONSE_PROJECTION);
 
         if (!user) {
             return sendAuthError(res, 404, 'User not found', 'USER_NOT_FOUND');
         }
 
-        const activeSessions = user.sessions?.length || 0;
-        const devices = user.devices || [];
+        const sessionCounter = await User.findById(req.user._id).select('sessions').lean();
+        const activeSessions = Array.isArray(sessionCounter?.sessions) ? sessionCounter.sessions.length : 0;
         let school = null;
         if (user.schoolCode) {
             school = await School.findOne({ schoolCode: user.schoolCode }).select('schoolName subscription logo address phone email');
@@ -808,7 +807,7 @@ exports.getUserProfile = async (req, res) => {
         await createAuditLog(user._id, 'PROFILE_VIEW', {}, req);
 
         // Use Mongoose toObject method
-        const userData = user.toObject();
+        const userData = sanitizeUserForResponse(user);
 
         return sendAuthSuccess(res, {
             code: 'PROFILE_FETCHED',
@@ -816,7 +815,6 @@ exports.getUserProfile = async (req, res) => {
             data: {
                 ...userData,
                 activeSessions,
-                devices,
                 ...(school && { school })
             }
         });
@@ -1337,11 +1335,22 @@ exports.getSessions = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('sessions devices');
         const currentDeviceId = req.headers['x-device-id'];
+        const safeSessions = (user?.sessions || []).map((session) => ({
+            device: session.device || 'Unknown device',
+            deviceId: session.deviceId || null,
+            ip: session.ip || null,
+            lastActive: session.lastActive || null
+        }));
+        const safeDevices = (user?.devices || []).map((device) => ({
+            deviceId: device.deviceId || null,
+            name: device.name || 'Unknown device',
+            lastActive: device.lastActive || null
+        }));
 
         res.json({
             currentDeviceId,
-            sessions: user.sessions || [],
-            devices: user.devices || []
+            sessions: safeSessions,
+            devices: safeDevices
         });
 
     } catch (error) {
