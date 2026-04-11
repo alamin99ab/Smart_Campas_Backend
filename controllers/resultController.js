@@ -1,13 +1,127 @@
 // controllers/resultController.js
+const mongoose = require('mongoose');
 const Result = require('../models/Result');
 const Student = require('../models/Student');
 const School = require('../models/School');
+const Class = require('../models/Class');
+const Exam = require('../models/Exam');
+const Subject = require('../models/Subject');
+const TeacherAssignment = require('../models/TeacherAssignment');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
 const AuditLog = require('../models/AuditLog');
 const PDFDocument = require('pdfkit');
 const Excel = require('exceljs');
 const { sendEmail } = require('../utils/emailService');
 const { sendSMS } = require('../utils/smsService');
+
+const normalizeObjectIdString = (value) => {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    return mongoose.Types.ObjectId.isValid(raw) ? raw : null;
+};
+
+const guardianEmailRegex = (email) => {
+    const value = String(email || '').trim();
+    if (!value) return null;
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}$`, 'i');
+};
+
+const getParentLinkedStudentIdStrings = async (user) => {
+    if (user?.role !== 'parent' || !user?.schoolCode) return [];
+    const parentId = normalizeObjectIdString(user._id || user.id);
+    const emailRegex = guardianEmailRegex(user.email);
+    const conditions = [];
+    if (parentId) conditions.push({ parentId });
+    if (emailRegex) conditions.push({ 'guardian.email': emailRegex });
+    if (!conditions.length) return [];
+
+    const rows = await Student.find({
+        schoolCode: user.schoolCode,
+        isActive: true,
+        $or: conditions
+    }).select('_id').lean();
+
+    return rows.map((row) => String(row._id));
+};
+
+const getTeacherResultScopes = async (user) => {
+    const schoolCode = user?.schoolCode;
+    const teacherId = normalizeObjectIdString(user?._id || user?.id);
+    if (!schoolCode || !teacherId) return [];
+
+    const assignments = await TeacherAssignment.find({
+        schoolCode,
+        teacher: teacherId,
+        isActive: true
+    }).select('classes').lean();
+
+    const classIds = [...new Set(assignments.flatMap((assignment) => assignment.classes || []).map((id) => String(id)))];
+    if (!classIds.length) return [];
+
+    const classes = await Class.find({
+        _id: { $in: classIds },
+        schoolCode
+    }).select('className section').lean();
+
+    return classes
+        .filter((row) => row.className)
+        .map((row) => ({
+            studentClass: row.className,
+            ...(row.section ? { section: row.section } : {})
+        }));
+};
+
+const isTeacherAllowedForClassSection = ({ studentClass, section }, scopes) => {
+    const className = String(studentClass || '').trim();
+    const normalizedSection = section ? String(section).trim().toUpperCase() : null;
+    return scopes.some((scope) => {
+        if (scope.studentClass !== className) return false;
+        if (!scope.section) return true;
+        return String(scope.section).trim().toUpperCase() === normalizedSection;
+    });
+};
+
+const isValidObjectId = (value) => {
+    return mongoose.Types.ObjectId.isValid(String(value || ''));
+};
+
+const toObjectId = (value) => {
+    return isValidObjectId(value) ? new mongoose.Types.ObjectId(String(value)) : null;
+};
+
+const findTeacherAssignment = async (teacherId, schoolCode, classId, subjectId) => {
+    if (!teacherId || !classId || !subjectId) return null;
+    return await TeacherAssignment.findOne({
+        teacher: teacherId,
+        schoolCode,
+        isActive: true,
+        classes: classId,
+        subject: subjectId
+    }).lean();
+};
+
+const getTeacherAccessibleClassConditions = async (teacherId, schoolCode) => {
+    const assignments = await TeacherAssignment.find({
+        teacher: teacherId,
+        schoolCode,
+        isActive: true
+    }).populate('classes', 'className section').lean();
+
+    const conditions = [];
+    assignments.forEach((assignment) => {
+        (assignment.classes || []).forEach((cls) => {
+            if (!cls?.className) return;
+            conditions.push({
+                studentClass: cls.className,
+                ...(cls.section ? { section: cls.section } : {})
+            });
+        });
+    });
+
+    return conditions;
+};
 
 // Helper: Calculate Grade
 const calculateGrade = (marks, gradingSystem = 'standard') => {
@@ -65,8 +179,9 @@ exports.uploadResult = async (req, res) => {
 
         const school = await School.findOne({ schoolCode: normalizedSchoolCode }).select('academicSettings.currentSession');
         const derivedAcademicYear = req.body.academicYear || student.academicYear || school?.academicSettings?.currentSession;
-        const isPublished = req.body.isPublished !== undefined ? !!req.body.isPublished : true;
-        const publishedAt = isPublished ? new Date() : null;
+        // New workflow: results are created as draft and require principal publish action.
+        const isPublished = false;
+        const publishedAt = null;
 
         // Validate each subject
         for (let sub of subjects) {
@@ -111,7 +226,6 @@ exports.uploadResult = async (req, res) => {
             totalMarks,
             gpa,
             remarks,
-            publishedBy: isPublished ? req.user._id : undefined,
             isPublished,
             publishedAt,
             isActive: true
@@ -125,14 +239,15 @@ exports.uploadResult = async (req, res) => {
         // Audit log
         await AuditLog.create({
             user: req.user._id,
-            action: 'RESULT_PUBLISHED',
+            action: 'RESULT_CREATED_DRAFT',
             details: { studentId, examName, totalMarks, gpa },
             ip: req.ip,
             userAgent: req.headers['user-agent']
         });
 
         res.status(201).json({ 
-            message: 'Result published successfully', 
+            success: true,
+            message: 'Result saved as draft. Principal must publish it for public visibility.',
             result: await result.populate('studentId', 'name fatherName motherName')
         });
 
@@ -159,11 +274,14 @@ exports.updateResult = async (req, res) => {
         }
 
         // Check school ownership
-        if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
+        if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'super_admin') {
             return res.status(403).json({ message: 'Access denied' });
         }
         if (result.isLocked) {
             return res.status(403).json({ message: 'Result is locked. Principal must unlock to edit.' });
+        }
+        if (req.user.role === 'teacher' && result.isPublished) {
+            return res.status(403).json({ success: false, message: 'Published results can only be edited by principal/admin' });
         }
 
         // Update fields
@@ -185,11 +303,12 @@ exports.updateResult = async (req, res) => {
         if (gradingSystem) result.gradingSystem = gradingSystem;
         if (req.body.academicYear) result.academicYear = req.body.academicYear;
         if (req.body.isPublished !== undefined) {
+            if (!['principal', 'admin', 'super_admin'].includes(req.user.role)) {
+                return res.status(403).json({ success: false, message: 'Only principal/admin can change publish status' });
+            }
             result.isPublished = !!req.body.isPublished;
             result.publishedAt = result.isPublished ? (result.publishedAt || new Date()) : null;
-            if (result.isPublished && !result.publishedBy) {
-                result.publishedBy = req.user._id;
-            }
+            result.publishedBy = result.isPublished ? (result.publishedBy || req.user._id) : null;
         }
 
         result.updatedBy = req.user._id;
@@ -217,15 +336,16 @@ exports.updateResult = async (req, res) => {
     }
 };
 
-// @desc    Search result (public for students/parents)
+// @desc    Search result (internal school-scoped lookup)
 // @route   POST /api/results/search
-// @access  Public
+// @access  Private
 exports.searchResult = async (req, res) => {
     try {
-        const { schoolCode, studentClass, roll, examName } = req.body;
+        const { studentClass, roll, examName } = req.body;
+        const schoolCode = String(req.user?.schoolCode || '').toUpperCase();
 
         if (!schoolCode || !studentClass || !roll || !examName) {
-            return res.status(400).json({ message: 'School code, class, roll, and exam name are required' });
+            return res.status(400).json({ message: 'Class, roll, and exam name are required' });
         }
 
         // Case-insensitive search
@@ -245,7 +365,7 @@ exports.searchResult = async (req, res) => {
         await AuditLog.create({
             user: null,
             action: 'RESULT_SEARCHED',
-            details: { schoolCode, studentClass, roll, examName },
+            details: { schoolCode, studentClass, roll, examName, searchedBy: req.user?._id || req.user?.id },
             ip: req.ip,
             userAgent: req.headers['user-agent']
         }).catch(err => console.error('Audit log error:', err));
@@ -273,17 +393,92 @@ exports.getResults = async (req, res) => {
             page = 1, 
             limit = 20 
         } = req.query;
-
-        let query = { schoolCode: req.user.schoolCode };
+        const role = req.user?.role;
+        const schoolCode = req.user?.schoolCode;
+        let query = { schoolCode };
+        let teacherScopes = [];
 
         if (className) query.studentClass = className;
         if (section) query.section = section;
         if (examName) query.examName = { $regex: examName, $options: 'i' };
-        if (studentId) query.studentId = studentId;
         if (fromDate || toDate) {
             query.examDate = {};
             if (fromDate) query.examDate.$gte = new Date(fromDate);
             if (toDate) query.examDate.$lte = new Date(toDate);
+        }
+
+        if (role === 'teacher') {
+            teacherScopes = await getTeacherResultScopes(req.user);
+            if (!teacherScopes.length) {
+                const emptyPayload = { results: [], total: 0, totalPages: 1, currentPage: parseInt(page, 10) || 1 };
+                return res.json({
+                    success: true,
+                    message: 'Results fetched successfully',
+                    data: emptyPayload,
+                    ...emptyPayload
+                });
+            }
+            query.$or = teacherScopes;
+
+            if (studentId) {
+                const sid = normalizeObjectIdString(studentId);
+                if (!sid) {
+                    return res.status(400).json({ success: false, message: 'Invalid studentId filter' });
+                }
+                const student = await Student.findOne({ _id: sid, schoolCode }).select('studentClass section').lean();
+                if (!student) {
+                    return res.status(404).json({ success: false, message: 'Student not found' });
+                }
+                if (!isTeacherAllowedForClassSection(student, teacherScopes)) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+                query.studentId = sid;
+            }
+        } else if (role === 'student') {
+            const studentOid = await resolveStudentObjectIdFromUser(req.user);
+            if (!studentOid) {
+                const emptyPayload = { results: [], total: 0, totalPages: 1, currentPage: parseInt(page, 10) || 1 };
+                return res.json({
+                    success: true,
+                    message: 'Results fetched successfully',
+                    data: emptyPayload,
+                    ...emptyPayload
+                });
+            }
+
+            if (studentId && String(studentId) !== String(studentOid)) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+            query.studentId = studentOid;
+            query.isPublished = true;
+        } else if (role === 'parent') {
+            const linkedStudentIds = await getParentLinkedStudentIdStrings(req.user);
+            if (!linkedStudentIds.length) {
+                const emptyPayload = { results: [], total: 0, totalPages: 1, currentPage: parseInt(page, 10) || 1 };
+                return res.json({
+                    success: true,
+                    message: 'Results fetched successfully',
+                    data: emptyPayload,
+                    ...emptyPayload
+                });
+            }
+
+            if (studentId) {
+                const sid = normalizeObjectIdString(studentId);
+                if (!sid || !linkedStudentIds.includes(String(sid))) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+                query.studentId = sid;
+            } else {
+                query.studentId = { $in: linkedStudentIds };
+            }
+            query.isPublished = true;
+        } else if (studentId) {
+            const sid = normalizeObjectIdString(studentId);
+            if (!sid) {
+                return res.status(400).json({ success: false, message: 'Invalid studentId filter' });
+            }
+            query.studentId = sid;
         }
 
         const skip = (page - 1) * limit;
@@ -332,12 +527,49 @@ exports.getResultById = async (req, res) => {
             return res.status(404).json({ message: 'Result not found' });
         }
 
-        // Check school access for non-public requests
-        if (result.schoolCode !== req.user?.schoolCode && req.user?.role !== 'admin' && !req.query.public) {
-            return res.status(403).json({ message: 'Access denied' });
+        const role = req.user?.role;
+        const userSchoolCode = req.user?.schoolCode;
+        const resultStudentId = String(result.studentId?._id || result.studentId);
+
+        if (role === 'super_admin') {
+            return res.json(result);
         }
 
-        res.json(result);
+        if (role === 'principal' || role === 'admin') {
+            if (result.schoolCode !== userSchoolCode) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+            return res.json(result);
+        }
+
+        if (role === 'teacher') {
+            if (result.schoolCode !== userSchoolCode) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+            const scopes = await getTeacherResultScopes(req.user);
+            if (!isTeacherAllowedForClassSection({ studentClass: result.studentClass, section: result.section }, scopes)) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+            return res.json(result);
+        }
+
+        if (role === 'student') {
+            const studentOid = await resolveStudentObjectIdFromUser(req.user);
+            if (!studentOid || String(studentOid) !== resultStudentId || !result.isPublished) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+            return res.json(result);
+        }
+
+        if (role === 'parent') {
+            const linkedStudentIds = await getParentLinkedStudentIdStrings(req.user);
+            if (!linkedStudentIds.includes(resultStudentId) || !result.isPublished) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+            return res.json(result);
+        }
+
+        return res.status(403).json({ success: false, message: 'Access denied' });
 
     } catch (error) {
         console.error('Get result by ID error:', error);
@@ -359,7 +591,7 @@ exports.deleteResult = async (req, res) => {
             return res.status(404).json({ message: 'Result not found' });
         }
 
-        if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'admin') {
+        if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'super_admin') {
             return res.status(403).json({ message: 'Access denied' });
         }
 
@@ -391,7 +623,8 @@ exports.deleteResult = async (req, res) => {
 // @access  Private (Principal/Admin/Super_Admin)
 exports.publishResult = async (req, res) => {
     try {
-        const result = await Result.findOne({ _id: req.params.id, schoolCode: req.user.schoolCode });
+        const normalizedSchoolCode = String(req.user.schoolCode || '').toUpperCase();
+        const result = await Result.findOne({ _id: req.params.id, schoolCode: normalizedSchoolCode });
         if (!result) {
             return res.status(404).json({ success: false, message: 'Result not found' });
         }
@@ -417,6 +650,44 @@ exports.publishResult = async (req, res) => {
     } catch (error) {
         console.error('Publish result error:', error);
         res.status(500).json({ success: false, message: 'Failed to publish result' });
+    }
+};
+
+// @desc    Unpublish single result
+// @route   PUT /api/results/:id/unpublish
+// @access  Private (Principal/Admin/Super_Admin)
+exports.unpublishResult = async (req, res) => {
+    try {
+        const normalizedSchoolCode = String(req.user.schoolCode || '').toUpperCase();
+        const result = await Result.findOne({ _id: req.params.id, schoolCode: normalizedSchoolCode });
+        if (!result) {
+            return res.status(404).json({ success: false, message: 'Result not found' });
+        }
+        if (!result.isPublished) {
+            return res.status(400).json({ success: false, message: 'Result is already unpublished' });
+        }
+
+        result.isPublished = false;
+        result.publishedAt = null;
+        result.publishedBy = null;
+        await result.save();
+
+        await AuditLog.create({
+            user: req.user._id,
+            action: 'RESULT_UNPUBLISHED',
+            details: { resultId: result._id, examName: result.examName },
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+        });
+
+        res.json({
+            success: true,
+            message: 'Result unpublished successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Unpublish result error:', error);
+        res.status(500).json({ success: false, message: 'Failed to unpublish result' });
     }
 };
 
@@ -660,6 +931,38 @@ exports.downloadResultPDF = async (req, res) => {
             return res.status(404).send('Result not found');
         }
 
+        const role = req.user?.role;
+        const userSchoolCode = req.user?.schoolCode;
+        const resultStudentId = String(result.studentId?._id || result.studentId);
+
+        if (role !== 'super_admin') {
+            if (role === 'principal' || role === 'admin') {
+                if (result.schoolCode !== userSchoolCode) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+            } else if (role === 'teacher') {
+                if (result.schoolCode !== userSchoolCode) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+                const scopes = await getTeacherResultScopes(req.user);
+                if (!isTeacherAllowedForClassSection({ studentClass: result.studentClass, section: result.section }, scopes)) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+            } else if (role === 'student') {
+                const studentOid = await resolveStudentObjectIdFromUser(req.user);
+                if (!studentOid || String(studentOid) !== resultStudentId || !result.isPublished) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+            } else if (role === 'parent') {
+                const linkedStudentIds = await getParentLinkedStudentIdStrings(req.user);
+                if (!linkedStudentIds.includes(resultStudentId) || !result.isPublished) {
+                    return res.status(403).json({ success: false, message: 'Access denied' });
+                }
+            } else {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+        }
+
         // Get school info
         const school = await School.findOne({ schoolCode: result.schoolCode });
         const schoolInfo = {
@@ -847,6 +1150,120 @@ const sendResultNotification = async (student, result) => {
     }
 };
 
+const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentId, marks }) => {
+    if (!exam || !subjectId || !studentId) {
+        throw new Error('Exam, subject, and student are required');
+    }
+
+    const student = await Student.findOne({ _id: studentId, schoolCode, isActive: true });
+    if (!student) {
+        const error = new Error('Student not found in this school');
+        error.status = 404;
+        throw error;
+    }
+
+    if (String(student.studentClass).trim() !== String(exam.classId.className).trim()) {
+        const error = new Error('Student does not belong to the exam class');
+        error.status = 400;
+        throw error;
+    }
+
+    const studentSection = student.section ? String(student.section).toUpperCase() : '';
+    const examSection = exam.classId.section ? String(exam.classId.section).toUpperCase() : '';
+    if (examSection && studentSection !== examSection) {
+        const error = new Error('Student does not belong to the exam section');
+        error.status = 400;
+        throw error;
+    }
+
+    const assignment = await findTeacherAssignment(teacherId, schoolCode, exam.classId._id, subjectId);
+    if (!assignment) {
+        const error = new Error('You are not authorized to enter marks for this class and subject');
+        error.status = 403;
+        throw error;
+    }
+
+    const markValue = Number(marks);
+    if (!Number.isFinite(markValue) || markValue < 0) {
+        const error = new Error('Marks must be a non-negative number');
+        error.status = 400;
+        throw error;
+    }
+    if (exam.totalMarks !== undefined && markValue > exam.totalMarks) {
+        const error = new Error(`Marks cannot exceed the exam's total marks (${exam.totalMarks})`);
+        error.status = 400;
+        throw error;
+    }
+
+    const subjectName = exam.subjectId?.subjectName || 'Unknown Subject';
+    const grade = calculateGrade(markValue);
+    const subjectEntry = {
+        subjectId,
+        subjectName,
+        marks: markValue,
+        grade
+    };
+
+    let result = await Result.findOne({ schoolCode, studentId, examId: exam._id });
+    if (!result) {
+        result = await Result.findOne({ schoolCode, studentId, examName: exam.name });
+    }
+
+    if (result && result.isLocked) {
+        const error = new Error('Result is locked and cannot be updated');
+        error.status = 403;
+        throw error;
+    }
+    if (result && result.isPublished) {
+        const error = new Error('Published results cannot be modified by teachers');
+        error.status = 400;
+        throw error;
+    }
+
+    if (!result) {
+        result = new Result({
+            examId: exam._id,
+            studentId,
+            schoolCode,
+            studentClass: exam.classId.className,
+            section: exam.classId.section,
+            roll: student.roll,
+            examName: exam.name,
+            examDate: exam.date,
+            academicYear: exam.date ? String(exam.date.getFullYear()) : String(new Date().getFullYear()),
+            subjects: [subjectEntry],
+            totalMarks: markValue,
+            gpa: calculateGPA([subjectEntry]),
+            gradingSystem: 'standard',
+            isPublished: false,
+            isActive: true,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+    } else {
+        const subjects = result.subjects || [];
+        const existingIndex = subjects.findIndex((s) => s.subjectId && String(s.subjectId) === String(subjectId));
+        if (existingIndex >= 0) {
+            subjects[existingIndex] = {
+                ...subjects[existingIndex],
+                ...subjectEntry
+            };
+        } else {
+            subjects.push(subjectEntry);
+        }
+        result.subjects = subjects;
+        result.totalMarks = subjects.reduce((sum, curr) => sum + Number(curr.marks || 0), 0);
+        result.gpa = calculateGPA(subjects);
+        result.updatedBy = teacherId;
+        result.updatedAt = new Date();
+        result.isPublished = false;
+        result.examId = exam._id;
+    }
+
+    await result.save();
+    return await result.populate('studentId', 'name roll').populate('examId', 'name date');
+};
+
 /**
  * @desc    Enter marks
  * @route   POST /api/results/marks/enter
@@ -854,17 +1271,79 @@ const sendResultNotification = async (student, result) => {
  */
 exports.enterMarks = async (req, res) => {
     try {
-        const { examId, studentId, subjectId, marks } = req.body;
-        const teacherId = req.user.id;
+        const { examId, studentId, subjectId, marks, marksData } = req.body;
+        const teacherId = toObjectId(req.user._id || req.user.id);
+        const schoolCode = req.user.schoolCode;
 
-        const result = {
-            examId,
-            studentId,
-            subjectId,
-            marks,
-            enteredBy: teacherId,
-            enteredAt: new Date()
-        };
+        if (!teacherId || !schoolCode) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const examOid = toObjectId(examId);
+        const subjectOid = toObjectId(subjectId);
+        if (!examOid || !subjectOid) {
+            return res.status(400).json({ success: false, message: 'Valid examId and subjectId are required' });
+        }
+
+        const exam = await Exam.findOne({ _id: examOid, schoolCode, isActive: true })
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName')
+            .lean();
+
+        if (!exam) {
+            return res.status(404).json({ success: false, message: 'Exam not found' });
+        }
+
+        const examSubjectId = exam.subjectId?._id || exam.subjectId;
+        if (!examSubjectId || String(examSubjectId) !== String(subjectOid)) {
+            return res.status(400).json({ success: false, message: 'Subject does not match the selected exam' });
+        }
+
+        const results = [];
+        const errors = [];
+
+        if (Array.isArray(marksData)) {
+            if (marksData.length === 0) {
+                return res.status(400).json({ success: false, message: 'marksData array must contain at least one entry' });
+            }
+
+            for (const item of marksData) {
+                const rowStudentId = toObjectId(item.studentId);
+                try {
+                    const result = await buildMarkEntry({
+                        schoolCode,
+                        teacherId,
+                        exam,
+                        subjectId: subjectOid,
+                        studentId: rowStudentId,
+                        marks: item.marks
+                    });
+                    results.push({ studentId: rowStudentId, resultId: result._id, status: 'saved' });
+                } catch (error) {
+                    errors.push({ studentId: item.studentId, message: error.message || 'Failed to save marks' });
+                }
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: 'Marks processed',
+                data: { results, errors }
+            });
+        }
+
+        const studentOid = toObjectId(studentId);
+        if (!studentOid || marks === undefined) {
+            return res.status(400).json({ success: false, message: 'studentId and marks are required' });
+        }
+
+        const result = await buildMarkEntry({
+            schoolCode,
+            teacherId,
+            exam,
+            subjectId: subjectOid,
+            studentId: studentOid,
+            marks
+        });
 
         res.status(201).json({
             success: true,
@@ -872,9 +1351,10 @@ exports.enterMarks = async (req, res) => {
             data: result
         });
     } catch (error) {
-        res.status(500).json({
+        console.error('Enter marks error:', error);
+        res.status(error.status || 500).json({
             success: false,
-            message: 'Server error',
+            message: error.message || 'Server error',
             error: error.message
         });
     }
@@ -888,15 +1368,76 @@ exports.enterMarks = async (req, res) => {
 exports.updateMarks = async (req, res) => {
     try {
         const { resultId } = req.params;
-        const { marks } = req.body;
-        const teacherId = req.user.id;
+        const { subjectId, marks } = req.body;
+        const teacherId = toObjectId(req.user._id || req.user.id);
+        const schoolCode = req.user.schoolCode;
 
-        const result = {
-            resultId,
-            marks,
-            updatedBy: teacherId,
-            updatedAt: new Date()
-        };
+        if (!teacherId || !schoolCode) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const result = await Result.findById(resultId);
+        if (!result) {
+            return res.status(404).json({ success: false, message: 'Result not found' });
+        }
+
+        if (result.schoolCode !== schoolCode) {
+            return res.status(403).json({ success: false, message: 'Access denied' });
+        }
+
+        if (result.isLocked) {
+            return res.status(403).json({ success: false, message: 'Result is locked and cannot be updated' });
+        }
+
+        if (result.isPublished) {
+            return res.status(400).json({ success: false, message: 'Published results cannot be modified by teachers' });
+        }
+
+        const subjectOid = toObjectId(subjectId);
+        if (!subjectOid) {
+            return res.status(400).json({ success: false, message: 'Valid subjectId is required' });
+        }
+
+        const subjectEntry = result.subjects.find((s) => s.subjectId && String(s.subjectId) === String(subjectOid))
+            || (result.subjects.length === 1 ? result.subjects[0] : null);
+
+        if (!subjectEntry) {
+            return res.status(404).json({ success: false, message: 'Subject entry not found in result' });
+        }
+
+        const markValue = Number(marks);
+        if (!Number.isFinite(markValue) || markValue < 0) {
+            return res.status(400).json({ success: false, message: 'Marks must be a non-negative number' });
+        }
+
+        let exam = null;
+        if (result.examId) {
+            exam = await Exam.findOne({ _id: result.examId, schoolCode, isActive: true })
+                .populate('classId', 'className section')
+                .lean();
+        }
+
+        if (exam) {
+            if (String(exam.subjectId?._id || exam.subjectId) !== String(subjectOid)) {
+                return res.status(400).json({ success: false, message: 'Subject does not match the exam' });
+            }
+            const assignment = await findTeacherAssignment(teacherId, schoolCode, exam.classId._id, subjectOid);
+            if (!assignment) {
+                return res.status(403).json({ success: false, message: 'You are not authorized to update marks for this class and subject' });
+            }
+        }
+
+        subjectEntry.marks = markValue;
+        subjectEntry.grade = calculateGrade(markValue);
+
+        const subjects = result.subjects;
+        result.totalMarks = subjects.reduce((sum, curr) => sum + Number(curr.marks || 0), 0);
+        result.gpa = calculateGPA(subjects);
+        result.updatedBy = teacherId;
+        result.updatedAt = new Date();
+        result.isPublished = false;
+
+        await result.save();
 
         res.status(200).json({
             success: true,
@@ -904,9 +1445,10 @@ exports.updateMarks = async (req, res) => {
             data: result
         });
     } catch (error) {
-        res.status(500).json({
+        console.error('Update marks error:', error);
+        res.status(error.status || 500).json({
             success: false,
-            message: 'Server error',
+            message: error.message || 'Server error',
             error: error.message
         });
     }
@@ -920,29 +1462,86 @@ exports.updateMarks = async (req, res) => {
 exports.getExamMarks = async (req, res) => {
     try {
         const { examId } = req.params;
-        const teacherId = req.user.id;
+        const teacherId = toObjectId(req.user._id || req.user.id);
+        const schoolCode = req.user.schoolCode;
+
+        const examOid = toObjectId(examId);
+        if (!examOid) {
+            return res.status(400).json({ success: false, message: 'Invalid examId' });
+        }
+
+        const exam = await Exam.findOne({ _id: examOid, schoolCode, isActive: true })
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName')
+            .lean();
+
+        if (!exam) {
+            return res.status(404).json({ success: false, message: 'Exam not found' });
+        }
+
+        const assignment = await findTeacherAssignment(teacherId, schoolCode, exam.classId._id, exam.subjectId._id);
+        if (!assignment) {
+            return res.status(403).json({ success: false, message: 'You are not authorized to view marks for this exam' });
+        }
+
+        const studentsInClass = await Student.countDocuments({
+            schoolCode,
+            studentClass: exam.classId.className,
+            section: exam.classId.section,
+            isActive: true
+        });
+
+        const results = await Result.find({ schoolCode, examId: exam._id })
+            .populate('studentId', 'name roll')
+            .lean();
+
+        const rows = results.map((result) => {
+            const subjectEntry = result.subjects.find((s) => s.subjectId && String(s.subjectId) === String(exam.subjectId?._id || exam.subjectId));
+            return {
+                resultId: result._id,
+                studentId: result.studentId?._id,
+                name: result.studentId?.name,
+                roll: result.studentId?.roll,
+                marks: subjectEntry?.marks ?? null,
+                grade: subjectEntry?.grade ?? null,
+                totalMarks: result.totalMarks,
+                gpa: result.gpa,
+                published: result.isPublished
+            };
+        });
+
+        const markValues = rows.map((row) => Number(row.marks)).filter((value) => Number.isFinite(value));
+        const averageMarks = markValues.length ? markValues.reduce((sum, value) => sum + value, 0) / markValues.length : 0;
+        const highestMarks = markValues.length ? Math.max(...markValues) : 0;
+        const lowestMarks = markValues.length ? Math.min(...markValues) : 0;
 
         const marks = {
-            examId,
-            results: [],
+            exam: {
+                _id: exam._id,
+                name: exam.name,
+                examType: exam.examType,
+                className: exam.classId.className,
+                section: exam.classId.section,
+                subjectId: exam.subjectId?._id,
+                subjectName: exam.subjectId?.subjectName,
+                date: exam.date,
+                totalMarks: exam.totalMarks
+            },
+            results: rows,
             statistics: {
-                totalStudents: 0,
-                averageMarks: 0,
-                highestMarks: 0,
-                lowestMarks: 0
+                totalStudents: studentsInClass,
+                enteredResults: rows.length,
+                missingResults: Math.max(0, studentsInClass - rows.length),
+                averageMarks,
+                highestMarks,
+                lowestMarks
             }
         };
 
-        res.status(200).json({
-            success: true,
-            data: marks
-        });
+        res.status(200).json({ success: true, data: marks });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('Get exam marks error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
 
@@ -954,28 +1553,204 @@ exports.getExamMarks = async (req, res) => {
 exports.getSubjectMarks = async (req, res) => {
     try {
         const { subjectId } = req.params;
-        const teacherId = req.user.id;
+        const teacherId = toObjectId(req.user._id || req.user.id);
+        const schoolCode = req.user.schoolCode;
+
+        const subjectOid = toObjectId(subjectId);
+        if (!subjectOid) {
+            return res.status(400).json({ success: false, message: 'Invalid subjectId' });
+        }
+
+        const classConditions = await getTeacherAccessibleClassConditions(teacherId, schoolCode);
+        if (!classConditions.length) {
+            return res.status(403).json({ success: false, message: 'No assigned classes found' });
+        }
+
+        const results = await Result.find({
+            schoolCode,
+            'subjects.subjectId': subjectOid,
+            $or: classConditions
+        })
+            .populate('studentId', 'name roll')
+            .populate('examId', 'name')
+            .lean();
+
+        const rows = results.map((result) => {
+            const subjectEntry = result.subjects.find((s) => s.subjectId && String(s.subjectId) === String(subjectOid));
+            return {
+                resultId: result._id,
+                examId: result.examId?._id,
+                examName: result.examId?.name || result.examName,
+                studentId: result.studentId?._id,
+                name: result.studentId?.name,
+                roll: result.studentId?.roll,
+                marks: subjectEntry?.marks ?? null,
+                grade: subjectEntry?.grade ?? null,
+                totalMarks: result.totalMarks,
+                gpa: result.gpa,
+                published: result.isPublished
+            };
+        });
+
+        const markValues = rows.map((row) => Number(row.marks)).filter((value) => Number.isFinite(value));
+        const averageMarks = markValues.length ? markValues.reduce((sum, value) => sum + value, 0) / markValues.length : 0;
+        const gradeDistribution = markValues.reduce((acc, value) => {
+            const grade = calculateGrade(value);
+            acc[grade] = (acc[grade] || 0) + 1;
+            return acc;
+        }, {});
 
         const marks = {
-            subjectId,
-            results: [],
+            subjectId: subjectOid,
+            results: rows,
             statistics: {
-                totalStudents: 0,
-                averageMarks: 0,
-                gradeDistribution: {}
+                totalEntries: rows.length,
+                averageMarks,
+                gradeDistribution
             }
         };
 
-        res.status(200).json({
-            success: true,
-            data: marks
-        });
+        res.status(200).json({ success: true, data: marks });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        console.error('Get subject marks error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
 
+/**
+ * @desc    Get exams for teacher assignments
+ * @route   GET /api/teacher/exams
+ * @access  Teacher only
+ */
+exports.getTeacherExams = async (req, res) => {
+    try {
+        const teacherId = toObjectId(req.user._id || req.user.id);
+        const schoolCode = req.user.schoolCode;
+        const { classId, subjectId } = req.query;
+
+        if (!teacherId || !schoolCode) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const assignments = await TeacherAssignment.find({
+            teacher: teacherId,
+            schoolCode,
+            isActive: true
+        }).lean();
+
+        const assignedClassIds = [...new Set(assignments.flatMap((assignment) => assignment.classes || []).map((id) => String(id)))].map(toObjectId).filter(Boolean);
+        const assignedSubjectIds = [...new Set(assignments.map((assignment) => String(assignment.subject)))].map(toObjectId).filter(Boolean);
+
+        if (!assignedClassIds.length || !assignedSubjectIds.length) {
+            return res.status(200).json({ success: true, data: { exams: [] } });
+        }
+
+        const query = {
+            schoolCode,
+            isActive: true,
+            classId: { $in: assignedClassIds },
+            subjectId: { $in: assignedSubjectIds }
+        };
+
+        if (classId) {
+            const classOid = toObjectId(classId);
+            if (!classOid || !assignedClassIds.some((id) => String(id) === String(classOid))) {
+                return res.status(403).json({ success: false, message: 'Unauthorized class filter' });
+            }
+            query.classId = classOid;
+        }
+
+        if (subjectId) {
+            const subjectOid = toObjectId(subjectId);
+            if (!subjectOid || !assignedSubjectIds.some((id) => String(id) === String(subjectOid))) {
+                return res.status(403).json({ success: false, message: 'Unauthorized subject filter' });
+            }
+            query.subjectId = subjectOid;
+        }
+
+        const exams = await Exam.find(query)
+            .populate('classId', 'className section')
+            .populate('subjectId', 'subjectName subjectCode')
+            .sort({ date: -1, createdAt: -1 })
+            .lean();
+
+        const data = exams.map((exam) => ({
+            _id: exam._id,
+            name: exam.name,
+            examType: exam.examType,
+            classId: exam.classId?._id,
+            className: exam.classId?.className,
+            section: exam.classId?.section,
+            subjectId: exam.subjectId?._id,
+            subjectName: exam.subjectId?.subjectName,
+            totalMarks: exam.totalMarks,
+            date: exam.date,
+            resultsPublished: exam.resultsPublished
+        }));
+
+        res.status(200).json({ success: true, data: { exams: data } });
+    } catch (error) {
+        console.error('Get teacher exams error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};
+
+/**
+ * @desc    Get students for marks entry
+ * @route   GET /api/teacher/marks/students
+ * @access  Teacher only
+ */
+exports.getStudentsForMarks = async (req, res) => {
+    try {
+        const teacherId = toObjectId(req.user._id || req.user.id);
+        const schoolCode = req.user.schoolCode;
+        const { classId, sectionId } = req.query;
+
+        if (!teacherId || !schoolCode) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const assignments = await TeacherAssignment.find({
+            teacher: teacherId,
+            schoolCode,
+            isActive: true
+        }).lean();
+
+        const assignedClassIds = [...new Set(assignments.flatMap((assignment) => assignment.classes || []).map((id) => String(id)))];
+        if (!assignedClassIds.length) {
+            return res.status(200).json({ success: true, data: { students: [] } });
+        }
+
+        if (classId && !assignedClassIds.some((id) => String(id) === String(classId))) {
+            return res.status(403).json({ success: false, message: 'You are not authorized to view students for this class' });
+        }
+
+        const queryClassIds = classId ? [classId] : assignedClassIds;
+        const StudentModel = require('../models/Student');
+        const studentFilter = {
+            schoolCode,
+            isActive: true,
+            classId: { $in: queryClassIds }
+        };
+        if (sectionId) {
+            studentFilter.section = sectionId;
+        }
+
+        const students = await StudentModel.find(studentFilter)
+            .select('name roll section studentClass')
+            .lean();
+
+        const mapped = students.map((student) => ({
+            _id: String(student._id),
+            name: student.name,
+            rollNumber: student.roll,
+            className: student.studentClass,
+            section: student.section
+        }));
+
+        res.status(200).json({ success: true, data: { students: mapped, totalStudents: mapped.length } });
+    } catch (error) {
+        console.error('Get students for marks error:', error);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+};

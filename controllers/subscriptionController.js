@@ -201,6 +201,17 @@ exports.createSubscription = async (req, res) => {
 exports.getSubscription = async (req, res) => {
     try {
         const { schoolId } = req.params;
+        const role = req.user?.role;
+        const requesterSchoolId = String(req.user?.schoolId || '');
+
+        if (role !== 'super_admin') {
+            if (!requesterSchoolId || requesterSchoolId !== String(schoolId)) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+        }
 
         const subscription = await Subscription.findOne({ schoolId })
             .populate('schoolId', 'schoolName schoolCode');

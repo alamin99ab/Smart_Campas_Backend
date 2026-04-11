@@ -3,6 +3,7 @@
  * Industry-level Principal management for Smart Campus System
  */
 
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
@@ -14,7 +15,96 @@ const AcademicSession = require('../models/AcademicSession');
 const Section = require('../models/Section');
 const Room = require('../models/Room');
 const Exam = require('../models/Exam');
+const Result = require('../models/Result');
+const Fee = require('../models/Fee');
+const PaymentHistory = require('../models/PaymentHistory');
+const Attendance = require('../models/Attendance');
+const PDFDocument = require('pdfkit');
 const { assignTeacherSubjectToClasses, AssignmentServiceError } = require('../services/teacherAssignmentService');
+
+const toFiniteNumber = (value, fallback = 0) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+};
+
+const toSafeDateIso = (value) => {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return null;
+    return date.toISOString();
+};
+
+const normalizeSection = (value) => {
+    if (value === undefined || value === null) return '';
+    return String(value).trim().toUpperCase();
+};
+
+const round2 = (value) => Number(toFiniteNumber(value).toFixed(2));
+
+const monthLabel = (month, year) => {
+    const monthNumber = toFiniteNumber(month, 0);
+    const normalizedYear = toFiniteNumber(year, 0);
+    if (monthNumber < 1 || monthNumber > 12 || normalizedYear <= 0) return `${month}/${year}`;
+    const date = new Date(normalizedYear, monthNumber - 1, 1);
+    return `${date.toLocaleString('en-US', { month: 'short' })} ${normalizedYear}`;
+};
+
+const makeHttpError = (status, message) => {
+    const error = new Error(message);
+    error.status = status;
+    return error;
+};
+
+const sanitizeFilenamePart = (value, fallback = 'student') => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return fallback;
+    const cleaned = raw.replace(/[^a-z0-9-_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    return cleaned || fallback;
+};
+
+const formatPdfDate = (value) => {
+    if (!value) return 'N/A';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleDateString('en-GB');
+};
+
+const formatPdfDateTime = (value) => {
+    if (!value) return 'N/A';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleString('en-GB');
+};
+
+const formatPdfCurrency = (value) => toFiniteNumber(value).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+});
+
+const ensurePdfSpace = (doc, requiredHeight = 30) => {
+    if (doc.y + requiredHeight > doc.page.height - doc.page.margins.bottom) {
+        doc.addPage();
+    }
+};
+
+const drawPdfHeader = ({ doc, schoolName, title, subtitle }) => {
+    doc
+        .font('Helvetica-Bold')
+        .fontSize(18)
+        .text(schoolName || 'Smart Campus', { align: 'center' });
+    doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .text(title, { align: 'center' });
+    if (subtitle) {
+        doc
+            .font('Helvetica')
+            .fontSize(10)
+            .fillColor('#555555')
+            .text(subtitle, { align: 'center' })
+            .fillColor('#000000');
+    }
+    doc.moveDown(1);
+};
 
 /**
  * @desc    Get all users in principal's school
@@ -1530,6 +1620,918 @@ exports.getStudents = async (req, res) => {
             message: 'Server error',
             error: error.message
         });
+    }
+};
+
+/**
+ * @desc    Get one student's full profile for principal dashboard
+ * @route   GET /api/principal/students/:id/profile
+ * @access  Principal only
+ */
+exports.getStudentFullProfile = async (req, res) => {
+    try {
+        const schoolCode = req.user.schoolCode;
+        const { id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(String(id || ''))) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid student id'
+            });
+        }
+
+        const studentUserQuery = User.findOne({
+            _id: id,
+            schoolCode,
+            role: 'student'
+        })
+            .populate('classId', 'className section classLevel')
+            .select('-password')
+            .lean();
+
+        const studentLedgerQuery = Student.findOne({
+            _id: id,
+            schoolCode
+        }).lean();
+
+        let [studentUser, studentLedger] = await Promise.all([studentUserQuery, studentLedgerQuery]);
+
+        if (studentUser && !studentLedger) {
+            const rollFromUser = String(studentUser.rollNumber || '').trim();
+            const classNameFromUser = studentUser.classId?.className ? String(studentUser.classId.className).trim() : '';
+            const sectionFromUser = normalizeSection(studentUser.section || studentUser.classId?.section);
+
+            if (rollFromUser) {
+                const ledgerQuery = {
+                    schoolCode,
+                    roll: rollFromUser,
+                    ...(classNameFromUser ? { studentClass: classNameFromUser } : {}),
+                    ...(sectionFromUser ? { section: sectionFromUser } : {})
+                };
+                studentLedger = await Student.findOne(ledgerQuery).lean();
+
+                if (!studentLedger && ledgerQuery.section) {
+                    delete ledgerQuery.section;
+                    studentLedger = await Student.findOne(ledgerQuery).lean();
+                }
+            }
+        }
+
+        if (!studentUser && studentLedger) {
+            const userQuery = {
+                schoolCode,
+                role: 'student',
+                rollNumber: String(studentLedger.roll || '').trim()
+            };
+
+            if (studentLedger.section) {
+                userQuery.section = String(studentLedger.section);
+            }
+
+            studentUser = await User.findOne(userQuery)
+                .populate('classId', 'className section classLevel')
+                .select('-password')
+                .lean();
+        }
+
+        if (!studentUser && !studentLedger) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found in your school'
+            });
+        }
+
+        const resolvedStudentId = studentLedger?._id ? String(studentLedger._id) : null;
+        const className = String(studentUser?.classId?.className || studentLedger?.studentClass || '').trim();
+        const section = normalizeSection(studentUser?.section || studentUser?.classId?.section || studentLedger?.section);
+        const rollNumber = String(studentUser?.rollNumber || studentLedger?.roll || '').trim();
+
+        let results = [];
+        let fees = [];
+        let payments = [];
+        let attendanceSummary = {
+            totalRecords: 0,
+            present: 0,
+            absent: 0,
+            late: 0,
+            holiday: 0,
+            attendancePercentage: 0
+        };
+        let recentAttendance = [];
+
+        if (resolvedStudentId) {
+            const resultsPromise = Result.find({
+                schoolCode,
+                studentId: resolvedStudentId,
+                isActive: { $ne: false }
+            })
+                .sort({ examDate: -1, createdAt: -1 })
+                .select('examId examName academicYear examDate subjects totalMarks gpa remarks isPublished publishedAt createdAt updatedAt')
+                .lean();
+
+            const feesPromise = Fee.find({
+                schoolCode,
+                studentId: resolvedStudentId
+            })
+                .sort({ year: -1, month: -1, createdAt: -1 })
+                .lean();
+
+            const paymentsPromise = PaymentHistory.find({
+                schoolCode,
+                studentId: resolvedStudentId
+            })
+                .populate('receivedBy', 'name role')
+                .sort({ createdAt: -1 })
+                .limit(25)
+                .lean();
+
+            const attendanceMatch = {
+                schoolCode,
+                'records.studentId': new mongoose.Types.ObjectId(resolvedStudentId)
+            };
+
+            const attendanceSummaryPromise = Attendance.aggregate([
+                { $match: attendanceMatch },
+                { $unwind: '$records' },
+                { $match: { 'records.studentId': new mongoose.Types.ObjectId(resolvedStudentId) } },
+                {
+                    $group: {
+                        _id: null,
+                        totalRecords: { $sum: 1 },
+                        present: {
+                            $sum: {
+                                $cond: [{ $eq: ['$records.status', 'Present'] }, 1, 0]
+                            }
+                        },
+                        absent: {
+                            $sum: {
+                                $cond: [{ $eq: ['$records.status', 'Absent'] }, 1, 0]
+                            }
+                        },
+                        late: {
+                            $sum: {
+                                $cond: [{ $eq: ['$records.status', 'Late'] }, 1, 0]
+                            }
+                        },
+                        holiday: {
+                            $sum: {
+                                $cond: [{ $eq: ['$records.status', 'Holiday'] }, 1, 0]
+                            }
+                        }
+                    }
+                }
+            ]);
+
+            const recentAttendancePromise = Attendance.find(attendanceMatch)
+                .select('date subject records')
+                .sort({ date: -1, createdAt: -1 })
+                .limit(25)
+                .lean();
+
+            const [resultRows, feeRows, paymentRows, attendanceSummaryRows, attendanceRows] = await Promise.all([
+                resultsPromise,
+                feesPromise,
+                paymentsPromise,
+                attendanceSummaryPromise,
+                recentAttendancePromise
+            ]);
+
+            results = resultRows;
+            fees = feeRows;
+            payments = paymentRows;
+
+            const attendanceBase = attendanceSummaryRows?.[0];
+            if (attendanceBase) {
+                const totalRecords = toFiniteNumber(attendanceBase.totalRecords);
+                const present = toFiniteNumber(attendanceBase.present);
+                const late = toFiniteNumber(attendanceBase.late);
+                attendanceSummary = {
+                    totalRecords,
+                    present,
+                    absent: toFiniteNumber(attendanceBase.absent),
+                    late,
+                    holiday: toFiniteNumber(attendanceBase.holiday),
+                    attendancePercentage: totalRecords > 0 ? round2(((present + late) / totalRecords) * 100) : 0
+                };
+            }
+
+            recentAttendance = attendanceRows
+                .map((row) => {
+                    const studentRecord = (row.records || []).find((record) => String(record.studentId) === resolvedStudentId);
+                    if (!studentRecord) return null;
+                    return {
+                        attendanceId: row._id,
+                        date: row.date,
+                        subject: row.subject || null,
+                        status: studentRecord.status || 'Not Marked',
+                        remarks: studentRecord.remarks || ''
+                    };
+                })
+                .filter(Boolean);
+        }
+
+        const feeSummary = fees.reduce((acc, fee) => {
+            const amountDue = toFiniteNumber(fee.amountDue);
+            const amountPaid = toFiniteNumber(fee.amountPaid);
+            const dueAmount = Math.max(0, amountDue - amountPaid);
+            acc.totalInvoices += 1;
+            acc.totalAmountDue += amountDue;
+            acc.totalAmountPaid += amountPaid;
+            acc.totalOutstanding += dueAmount;
+            if (fee.status === 'Paid') acc.paidInvoices += 1;
+            else if (fee.status === 'Partial') acc.partialInvoices += 1;
+            else acc.unpaidInvoices += 1;
+            return acc;
+        }, {
+            totalInvoices: 0,
+            totalAmountDue: 0,
+            totalAmountPaid: 0,
+            totalOutstanding: 0,
+            paidInvoices: 0,
+            partialInvoices: 0,
+            unpaidInvoices: 0
+        });
+
+        feeSummary.totalAmountDue = round2(feeSummary.totalAmountDue);
+        feeSummary.totalAmountPaid = round2(feeSummary.totalAmountPaid);
+        feeSummary.totalOutstanding = round2(feeSummary.totalOutstanding);
+
+        const gpaValues = results
+            .map((row) => Number(row.gpa))
+            .filter((value) => Number.isFinite(value));
+
+        const resultSummary = {
+            totalResults: results.length,
+            publishedResults: results.filter((row) => row.isPublished).length,
+            draftResults: results.filter((row) => !row.isPublished).length,
+            averageGpa: gpaValues.length ? round2(gpaValues.reduce((sum, value) => sum + value, 0) / gpaValues.length) : 0,
+            lastExamDate: results.length ? toSafeDateIso(results[0].examDate) : null
+        };
+
+        res.status(200).json({
+            success: true,
+            data: {
+                student: {
+                    userId: studentUser?._id || null,
+                    studentId: studentLedger?._id || null,
+                    name: studentUser?.name || studentLedger?.name || null,
+                    email: studentUser?.email || null,
+                    phone: studentUser?.phone || studentLedger?.phone || '',
+                    address: studentUser?.address || studentLedger?.address || '',
+                    profileImage: studentUser?.profileImage || studentLedger?.photo?.url || null,
+                    schoolId: studentUser?.schoolId || null,
+                    schoolCode,
+                    classId: studentUser?.classId?._id || null,
+                    className: className || null,
+                    classLevel: studentUser?.classId?.classLevel || null,
+                    section: section || null,
+                    rollNumber: rollNumber || null,
+                    parentInfo: studentUser?.parentInfo || null,
+                    guardian: studentLedger?.guardian || null,
+                    fatherName: studentLedger?.fatherName || null,
+                    motherName: studentLedger?.motherName || null,
+                    isApproved: studentUser?.isApproved ?? null,
+                    isActive: (studentUser?.isActive ?? studentLedger?.isActive ?? null),
+                    createdAt: toSafeDateIso(studentUser?.createdAt || studentLedger?.createdAt),
+                    updatedAt: toSafeDateIso(studentUser?.updatedAt || studentLedger?.updatedAt)
+                },
+                linkage: {
+                    userRecordFound: Boolean(studentUser?._id),
+                    studentLedgerFound: Boolean(studentLedger?._id),
+                    dataStudentId: studentLedger?._id || null
+                },
+                attendance: {
+                    summary: attendanceSummary,
+                    recent: recentAttendance.map((row) => ({
+                        ...row,
+                        date: toSafeDateIso(row.date)
+                    }))
+                },
+                fees: {
+                    summary: {
+                        ...feeSummary,
+                        lastPaymentAt: toSafeDateIso(payments[0]?.createdAt)
+                    },
+                    details: fees.map((fee) => ({
+                        feeId: fee._id,
+                        month: fee.month,
+                        year: fee.year,
+                        monthLabel: monthLabel(fee.month, fee.year),
+                        amountDue: toFiniteNumber(fee.amountDue),
+                        amountPaid: toFiniteNumber(fee.amountPaid),
+                        dueAmount: round2(Math.max(0, toFiniteNumber(fee.amountDue) - toFiniteNumber(fee.amountPaid))),
+                        status: fee.status,
+                        updatedAt: toSafeDateIso(fee.updatedAt || fee.createdAt)
+                    })),
+                    recentPayments: payments.map((payment) => ({
+                        paymentId: payment._id,
+                        feeId: payment.feeId || null,
+                        month: payment.month,
+                        year: payment.year,
+                        monthLabel: monthLabel(payment.month, payment.year),
+                        amount: toFiniteNumber(payment.amount),
+                        paymentMethod: payment.paymentMethod || 'Cash',
+                        transactionId: payment.transactionId || null,
+                        remarks: payment.remarks || '',
+                        receivedBy: payment.receivedBy ? {
+                            id: payment.receivedBy._id,
+                            name: payment.receivedBy.name,
+                            role: payment.receivedBy.role || null
+                        } : null,
+                        createdAt: toSafeDateIso(payment.createdAt)
+                    }))
+                },
+                results: {
+                    summary: resultSummary,
+                    history: results.map((row) => ({
+                        resultId: row._id,
+                        examId: row.examId || null,
+                        examName: row.examName,
+                        academicYear: row.academicYear || null,
+                        examDate: toSafeDateIso(row.examDate),
+                        totalMarks: toFiniteNumber(row.totalMarks),
+                        gpa: toFiniteNumber(row.gpa),
+                        isPublished: Boolean(row.isPublished),
+                        publishedAt: toSafeDateIso(row.publishedAt),
+                        remarks: row.remarks || '',
+                        subjects: (row.subjects || []).map((subject) => ({
+                            subjectId: subject.subjectId || null,
+                            subjectName: subject.subjectName,
+                            marks: toFiniteNumber(subject.marks),
+                            grade: subject.grade || null
+                        })),
+                        createdAt: toSafeDateIso(row.createdAt),
+                        updatedAt: toSafeDateIso(row.updatedAt)
+                    }))
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error getting principal student profile:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch student profile',
+            error: error.message
+        });
+    }
+};
+
+const getStudentExportBundle = async (schoolCode, id) => {
+    if (!mongoose.Types.ObjectId.isValid(String(id || ''))) {
+        throw makeHttpError(400, 'Invalid student id');
+    }
+
+    const studentUserQuery = User.findOne({
+        _id: id,
+        schoolCode,
+        role: 'student'
+    })
+        .populate('classId', 'className section classLevel')
+        .select('-password')
+        .lean();
+
+    const studentLedgerQuery = Student.findOne({
+        _id: id,
+        schoolCode
+    }).lean();
+
+    let [studentUser, studentLedger] = await Promise.all([studentUserQuery, studentLedgerQuery]);
+
+    if (studentUser && !studentLedger) {
+        const rollFromUser = String(studentUser.rollNumber || '').trim();
+        const classNameFromUser = String(studentUser.classId?.className || '').trim();
+        const sectionFromUser = normalizeSection(studentUser.section || studentUser.classId?.section);
+
+        if (rollFromUser) {
+            const ledgerQuery = {
+                schoolCode,
+                roll: rollFromUser,
+                ...(classNameFromUser ? { studentClass: classNameFromUser } : {}),
+                ...(sectionFromUser ? { section: sectionFromUser } : {})
+            };
+            studentLedger = await Student.findOne(ledgerQuery).lean();
+            if (!studentLedger && ledgerQuery.section) {
+                delete ledgerQuery.section;
+                studentLedger = await Student.findOne(ledgerQuery).lean();
+            }
+        }
+    }
+
+    if (!studentUser && studentLedger) {
+        const userQuery = {
+            schoolCode,
+            role: 'student',
+            rollNumber: String(studentLedger.roll || '').trim()
+        };
+        if (studentLedger.section) {
+            userQuery.section = String(studentLedger.section);
+        }
+        studentUser = await User.findOne(userQuery)
+            .populate('classId', 'className section classLevel')
+            .select('-password')
+            .lean();
+    }
+
+    if (!studentUser && !studentLedger) {
+        throw makeHttpError(404, 'Student not found in your school');
+    }
+
+    const resolvedStudentId = studentLedger?._id ? String(studentLedger._id) : null;
+
+    let results = [];
+    let fees = [];
+    let payments = [];
+    let attendanceSummary = {
+        totalRecords: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        holiday: 0,
+        attendancePercentage: 0
+    };
+    let recentAttendance = [];
+
+    if (resolvedStudentId) {
+        const attendanceMatch = {
+            schoolCode,
+            'records.studentId': new mongoose.Types.ObjectId(resolvedStudentId)
+        };
+
+        const [resultRows, feeRows, paymentRows, attendanceSummaryRows, attendanceRows] = await Promise.all([
+            Result.find({
+                schoolCode,
+                studentId: resolvedStudentId,
+                isActive: { $ne: false }
+            })
+                .sort({ examDate: -1, createdAt: -1 })
+                .select('examName academicYear examDate subjects totalMarks gpa remarks isPublished publishedAt')
+                .lean(),
+            Fee.find({
+                schoolCode,
+                studentId: resolvedStudentId
+            })
+                .sort({ year: -1, month: -1, createdAt: -1 })
+                .lean(),
+            PaymentHistory.find({
+                schoolCode,
+                studentId: resolvedStudentId
+            })
+                .populate('receivedBy', 'name role')
+                .sort({ createdAt: -1 })
+                .limit(25)
+                .lean(),
+            Attendance.aggregate([
+                { $match: attendanceMatch },
+                { $unwind: '$records' },
+                { $match: { 'records.studentId': new mongoose.Types.ObjectId(resolvedStudentId) } },
+                {
+                    $group: {
+                        _id: null,
+                        totalRecords: { $sum: 1 },
+                        present: { $sum: { $cond: [{ $eq: ['$records.status', 'Present'] }, 1, 0] } },
+                        absent: { $sum: { $cond: [{ $eq: ['$records.status', 'Absent'] }, 1, 0] } },
+                        late: { $sum: { $cond: [{ $eq: ['$records.status', 'Late'] }, 1, 0] } },
+                        holiday: { $sum: { $cond: [{ $eq: ['$records.status', 'Holiday'] }, 1, 0] } }
+                    }
+                }
+            ]),
+            Attendance.find(attendanceMatch)
+                .select('date subject records')
+                .sort({ date: -1, createdAt: -1 })
+                .limit(30)
+                .lean()
+        ]);
+
+        results = resultRows;
+        fees = feeRows;
+        payments = paymentRows;
+
+        const summaryBase = attendanceSummaryRows?.[0];
+        if (summaryBase) {
+            const totalRecords = toFiniteNumber(summaryBase.totalRecords);
+            const present = toFiniteNumber(summaryBase.present);
+            const late = toFiniteNumber(summaryBase.late);
+            attendanceSummary = {
+                totalRecords,
+                present,
+                absent: toFiniteNumber(summaryBase.absent),
+                late,
+                holiday: toFiniteNumber(summaryBase.holiday),
+                attendancePercentage: totalRecords > 0 ? round2(((present + late) / totalRecords) * 100) : 0
+            };
+        }
+
+        recentAttendance = attendanceRows
+            .map((row) => {
+                const studentRecord = (row.records || []).find((record) => String(record.studentId) === resolvedStudentId);
+                if (!studentRecord) return null;
+                return {
+                    date: toSafeDateIso(row.date),
+                    subject: row.subject || null,
+                    status: studentRecord.status || 'Not Marked',
+                    remarks: studentRecord.remarks || ''
+                };
+            })
+            .filter(Boolean);
+    }
+
+    const feeSummary = fees.reduce((acc, fee) => {
+        const amountDue = toFiniteNumber(fee.amountDue);
+        const amountPaid = toFiniteNumber(fee.amountPaid);
+        const dueAmount = Math.max(0, amountDue - amountPaid);
+        acc.totalInvoices += 1;
+        acc.totalAmountDue += amountDue;
+        acc.totalAmountPaid += amountPaid;
+        acc.totalOutstanding += dueAmount;
+        if (fee.status === 'Paid') acc.paidInvoices += 1;
+        else if (fee.status === 'Partial') acc.partialInvoices += 1;
+        else acc.unpaidInvoices += 1;
+        return acc;
+    }, {
+        totalInvoices: 0,
+        totalAmountDue: 0,
+        totalAmountPaid: 0,
+        totalOutstanding: 0,
+        paidInvoices: 0,
+        partialInvoices: 0,
+        unpaidInvoices: 0
+    });
+
+    const gpaValues = results.map((row) => Number(row.gpa)).filter((value) => Number.isFinite(value));
+
+    return {
+        student: {
+            name: studentUser?.name || studentLedger?.name || 'Student',
+            email: studentUser?.email || 'N/A',
+            phone: studentUser?.phone || studentLedger?.phone || 'N/A',
+            address: studentUser?.address || studentLedger?.address || 'N/A',
+            className: studentUser?.classId?.className || studentLedger?.studentClass || 'N/A',
+            section: studentUser?.section || studentUser?.classId?.section || studentLedger?.section || 'N/A',
+            rollNumber: studentUser?.rollNumber || studentLedger?.roll || 'N/A',
+            parentName: studentUser?.parentInfo?.name || studentLedger?.guardian?.name || 'N/A',
+            parentEmail: studentUser?.parentInfo?.email || studentLedger?.guardian?.email || 'N/A',
+            parentPhone: studentUser?.parentInfo?.phone || studentLedger?.guardian?.phone || 'N/A',
+            updatedAt: toSafeDateIso(studentUser?.updatedAt || studentLedger?.updatedAt)
+        },
+        results: {
+            summary: {
+                totalResults: results.length,
+                publishedResults: results.filter((row) => row.isPublished).length,
+                draftResults: results.filter((row) => !row.isPublished).length,
+                averageGpa: gpaValues.length ? round2(gpaValues.reduce((sum, value) => sum + value, 0) / gpaValues.length) : 0
+            },
+            history: results.map((row) => ({
+                examName: row.examName || 'Exam',
+                academicYear: row.academicYear || 'N/A',
+                examDate: toSafeDateIso(row.examDate),
+                totalMarks: toFiniteNumber(row.totalMarks),
+                gpa: toFiniteNumber(row.gpa),
+                isPublished: Boolean(row.isPublished),
+                remarks: row.remarks || '',
+                subjects: (row.subjects || []).map((subject) => ({
+                    subjectName: subject.subjectName,
+                    marks: toFiniteNumber(subject.marks),
+                    grade: subject.grade || 'N/A'
+                }))
+            }))
+        },
+        fees: {
+            summary: {
+                totalInvoices: feeSummary.totalInvoices,
+                paidInvoices: feeSummary.paidInvoices,
+                partialInvoices: feeSummary.partialInvoices,
+                unpaidInvoices: feeSummary.unpaidInvoices,
+                totalAmountDue: round2(feeSummary.totalAmountDue),
+                totalAmountPaid: round2(feeSummary.totalAmountPaid),
+                totalOutstanding: round2(feeSummary.totalOutstanding)
+            },
+            details: fees.map((fee) => ({
+                monthLabel: monthLabel(fee.month, fee.year),
+                amountDue: toFiniteNumber(fee.amountDue),
+                amountPaid: toFiniteNumber(fee.amountPaid),
+                dueAmount: round2(Math.max(0, toFiniteNumber(fee.amountDue) - toFiniteNumber(fee.amountPaid))),
+                status: fee.status
+            })),
+            recentPayments: payments.map((payment) => ({
+                monthLabel: monthLabel(payment.month, payment.year),
+                amount: toFiniteNumber(payment.amount),
+                paymentMethod: payment.paymentMethod || 'Cash',
+                createdAt: toSafeDateIso(payment.createdAt)
+            }))
+        },
+        attendance: {
+            summary: attendanceSummary,
+            recent: recentAttendance
+        }
+    };
+};
+
+const getStudentPdfContext = async (schoolCode, studentId) => {
+    const [bundle, school] = await Promise.all([
+        getStudentExportBundle(schoolCode, studentId),
+        School.findOne({ schoolCode }).select('schoolName').lean()
+    ]);
+
+    return {
+        bundle,
+        schoolName: school?.schoolName || schoolCode,
+        filenameToken: `${sanitizeFilenamePart(bundle.student.name, 'student')}_${sanitizeFilenamePart(bundle.student.rollNumber, 'roll')}`
+    };
+};
+
+/**
+ * @desc    Download student profile summary PDF
+ * @route   GET /api/principal/students/:id/export/profile-pdf
+ * @access  Principal only
+ */
+exports.downloadStudentProfilePDF = async (req, res) => {
+    try {
+        const { bundle, schoolName, filenameToken } = await getStudentPdfContext(req.user.schoolCode, req.params.id);
+        const filename = `student_profile_${filenameToken}.pdf`;
+
+        const doc = new PDFDocument({ margin: 48, size: 'A4' });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        doc.pipe(res);
+
+        drawPdfHeader({
+            doc,
+            schoolName,
+            title: 'Student Profile Summary',
+            subtitle: `Generated: ${formatPdfDateTime(new Date().toISOString())}`
+        });
+
+        const rows = [
+            ['Student Name', bundle.student.name],
+            ['Email', bundle.student.email],
+            ['Phone', bundle.student.phone],
+            ['Address', bundle.student.address],
+            ['Class', bundle.student.className],
+            ['Section', bundle.student.section],
+            ['Roll Number', bundle.student.rollNumber],
+            ['Parent Name', bundle.student.parentName],
+            ['Parent Email', bundle.student.parentEmail],
+            ['Parent Phone', bundle.student.parentPhone],
+            ['Last Updated', formatPdfDateTime(bundle.student.updatedAt)]
+        ];
+
+        doc.font('Helvetica-Bold').fontSize(12).text('Profile Information');
+        doc.moveDown(0.4);
+        rows.forEach(([label, value]) => {
+            ensurePdfSpace(doc, 18);
+            doc.font('Helvetica-Bold').fontSize(10).text(`${label}:`, { continued: true });
+            doc.font('Helvetica').fontSize(10).text(` ${value || 'N/A'}`);
+        });
+
+        doc.moveDown(0.8);
+        doc.font('Helvetica-Bold').fontSize(12).text('Academic & Financial Snapshot');
+        doc.moveDown(0.4);
+        const snapshot = [
+            ['Total Results', String(bundle.results.summary.totalResults)],
+            ['Published Results', String(bundle.results.summary.publishedResults)],
+            ['Average GPA', String(bundle.results.summary.averageGpa)],
+            ['Attendance Rate', `${toFiniteNumber(bundle.attendance.summary.attendancePercentage)}%`],
+            ['Total Invoices', String(bundle.fees.summary.totalInvoices)],
+            ['Outstanding Fees', formatPdfCurrency(bundle.fees.summary.totalOutstanding)]
+        ];
+        snapshot.forEach(([label, value]) => {
+            ensurePdfSpace(doc, 18);
+            doc.font('Helvetica-Bold').fontSize(10).text(`${label}:`, { continued: true });
+            doc.font('Helvetica').fontSize(10).text(` ${value}`);
+        });
+
+        doc.end();
+    } catch (error) {
+        const status = error.status || 500;
+        const message = status === 500 ? 'Failed to generate student profile PDF' : error.message;
+        if (status === 500) {
+            console.error('Profile PDF export error:', error);
+        }
+        if (!res.headersSent) {
+            res.status(status).json({ success: false, message });
+        }
+    }
+};
+
+/**
+ * @desc    Download student result report PDF
+ * @route   GET /api/principal/students/:id/export/result-pdf
+ * @access  Principal only
+ */
+exports.downloadStudentResultPDF = async (req, res) => {
+    try {
+        const { bundle, schoolName, filenameToken } = await getStudentPdfContext(req.user.schoolCode, req.params.id);
+        const filename = `student_results_${filenameToken}.pdf`;
+
+        const doc = new PDFDocument({ margin: 40, size: 'A4' });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        doc.pipe(res);
+
+        drawPdfHeader({
+            doc,
+            schoolName,
+            title: 'Student Result Report',
+            subtitle: `${bundle.student.name} | Roll: ${bundle.student.rollNumber}`
+        });
+
+        const summaryRows = [
+            `Total Results: ${bundle.results.summary.totalResults}`,
+            `Published: ${bundle.results.summary.publishedResults}`,
+            `Draft: ${bundle.results.summary.draftResults}`,
+            `Average GPA: ${bundle.results.summary.averageGpa}`
+        ];
+        doc.font('Helvetica-Bold').fontSize(11).text('Summary');
+        summaryRows.forEach((line) => {
+            ensurePdfSpace(doc, 16);
+            doc.font('Helvetica').fontSize(10).text(line);
+        });
+
+        doc.moveDown(0.8);
+        doc.font('Helvetica-Bold').fontSize(11).text('Result History');
+        doc.moveDown(0.3);
+
+        if (!bundle.results.history.length) {
+            doc.font('Helvetica').fontSize(10).text('No result history found for this student.');
+        } else {
+            bundle.results.history.forEach((row, index) => {
+                ensurePdfSpace(doc, 60);
+                doc.font('Helvetica-Bold').fontSize(10).text(
+                    `${index + 1}. ${row.examName} (${row.academicYear})`
+                );
+                doc.font('Helvetica').fontSize(9).text(
+                    `Date: ${formatPdfDate(row.examDate)} | Marks: ${row.totalMarks} | GPA: ${row.gpa} | Status: ${row.isPublished ? 'Published' : 'Draft'}`
+                );
+                if (row.subjects?.length) {
+                    row.subjects.forEach((subject) => {
+                        ensurePdfSpace(doc, 14);
+                        doc.font('Helvetica').fontSize(9).text(
+                            `   - ${subject.subjectName}: ${subject.marks} (${subject.grade || 'N/A'})`
+                        );
+                    });
+                }
+                if (row.remarks) {
+                    ensurePdfSpace(doc, 14);
+                    doc.font('Helvetica-Oblique').fontSize(9).text(`   Remarks: ${row.remarks}`);
+                }
+                doc.moveDown(0.3);
+            });
+        }
+
+        doc.end();
+    } catch (error) {
+        const status = error.status || 500;
+        const message = status === 500 ? 'Failed to generate student result PDF' : error.message;
+        if (status === 500) {
+            console.error('Result PDF export error:', error);
+        }
+        if (!res.headersSent) {
+            res.status(status).json({ success: false, message });
+        }
+    }
+};
+
+/**
+ * @desc    Download student fee report PDF
+ * @route   GET /api/principal/students/:id/export/fee-pdf
+ * @access  Principal only
+ */
+exports.downloadStudentFeePDF = async (req, res) => {
+    try {
+        const { bundle, schoolName, filenameToken } = await getStudentPdfContext(req.user.schoolCode, req.params.id);
+        const filename = `student_fees_${filenameToken}.pdf`;
+
+        const doc = new PDFDocument({ margin: 40, size: 'A4' });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        doc.pipe(res);
+
+        drawPdfHeader({
+            doc,
+            schoolName,
+            title: 'Student Fee Report',
+            subtitle: `${bundle.student.name} | Roll: ${bundle.student.rollNumber}`
+        });
+
+        const summaryRows = [
+            `Total Invoices: ${bundle.fees.summary.totalInvoices}`,
+            `Paid Invoices: ${bundle.fees.summary.paidInvoices}`,
+            `Partial Invoices: ${bundle.fees.summary.partialInvoices}`,
+            `Unpaid Invoices: ${bundle.fees.summary.unpaidInvoices}`,
+            `Total Due: ${formatPdfCurrency(bundle.fees.summary.totalAmountDue)}`,
+            `Total Paid: ${formatPdfCurrency(bundle.fees.summary.totalAmountPaid)}`,
+            `Outstanding: ${formatPdfCurrency(bundle.fees.summary.totalOutstanding)}`
+        ];
+        doc.font('Helvetica-Bold').fontSize(11).text('Summary');
+        summaryRows.forEach((line) => {
+            ensurePdfSpace(doc, 16);
+            doc.font('Helvetica').fontSize(10).text(line);
+        });
+
+        doc.moveDown(0.8);
+        doc.font('Helvetica-Bold').fontSize(11).text('Fee Details');
+        doc.moveDown(0.3);
+
+        if (!bundle.fees.details.length) {
+            doc.font('Helvetica').fontSize(10).text('No fee records found for this student.');
+        } else {
+            bundle.fees.details.forEach((fee, index) => {
+                ensurePdfSpace(doc, 16);
+                doc.font('Helvetica').fontSize(9).text(
+                    `${index + 1}. ${fee.monthLabel} | Due: ${formatPdfCurrency(fee.amountDue)} | Paid: ${formatPdfCurrency(fee.amountPaid)} | Outstanding: ${formatPdfCurrency(fee.dueAmount)} | Status: ${fee.status}`
+                );
+            });
+        }
+
+        doc.moveDown(0.8);
+        doc.font('Helvetica-Bold').fontSize(11).text('Recent Payments');
+        doc.moveDown(0.3);
+
+        if (!bundle.fees.recentPayments.length) {
+            doc.font('Helvetica').fontSize(10).text('No payment history found.');
+        } else {
+            bundle.fees.recentPayments.slice(0, 20).forEach((payment, index) => {
+                ensurePdfSpace(doc, 16);
+                doc.font('Helvetica').fontSize(9).text(
+                    `${index + 1}. ${payment.monthLabel} | Amount: ${formatPdfCurrency(payment.amount)} | Method: ${payment.paymentMethod} | Date: ${formatPdfDateTime(payment.createdAt)}`
+                );
+            });
+        }
+
+        doc.end();
+    } catch (error) {
+        const status = error.status || 500;
+        const message = status === 500 ? 'Failed to generate student fee PDF' : error.message;
+        if (status === 500) {
+            console.error('Fee PDF export error:', error);
+        }
+        if (!res.headersSent) {
+            res.status(status).json({ success: false, message });
+        }
+    }
+};
+
+/**
+ * @desc    Download student attendance report PDF
+ * @route   GET /api/principal/students/:id/export/attendance-pdf
+ * @access  Principal only
+ */
+exports.downloadStudentAttendancePDF = async (req, res) => {
+    try {
+        const { bundle, schoolName, filenameToken } = await getStudentPdfContext(req.user.schoolCode, req.params.id);
+        const filename = `student_attendance_${filenameToken}.pdf`;
+
+        const doc = new PDFDocument({ margin: 40, size: 'A4' });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        doc.pipe(res);
+
+        drawPdfHeader({
+            doc,
+            schoolName,
+            title: 'Student Attendance Report',
+            subtitle: `${bundle.student.name} | Roll: ${bundle.student.rollNumber}`
+        });
+
+        const summaryRows = [
+            `Total Records: ${bundle.attendance.summary.totalRecords}`,
+            `Present: ${bundle.attendance.summary.present}`,
+            `Late: ${bundle.attendance.summary.late}`,
+            `Absent: ${bundle.attendance.summary.absent}`,
+            `Holiday: ${bundle.attendance.summary.holiday}`,
+            `Attendance Rate: ${bundle.attendance.summary.attendancePercentage}%`
+        ];
+        doc.font('Helvetica-Bold').fontSize(11).text('Summary');
+        summaryRows.forEach((line) => {
+            ensurePdfSpace(doc, 16);
+            doc.font('Helvetica').fontSize(10).text(line);
+        });
+
+        doc.moveDown(0.8);
+        doc.font('Helvetica-Bold').fontSize(11).text('Recent Attendance');
+        doc.moveDown(0.3);
+
+        if (!bundle.attendance.recent.length) {
+            doc.font('Helvetica').fontSize(10).text('No attendance records found for this student.');
+        } else {
+            bundle.attendance.recent.slice(0, 30).forEach((entry, index) => {
+                ensurePdfSpace(doc, 16);
+                doc.font('Helvetica').fontSize(9).text(
+                    `${index + 1}. ${formatPdfDate(entry.date)} | Subject: ${entry.subject || 'N/A'} | Status: ${entry.status} | Remarks: ${entry.remarks || '-'}`
+                );
+            });
+        }
+
+        doc.end();
+    } catch (error) {
+        const status = error.status || 500;
+        const message = status === 500 ? 'Failed to generate student attendance PDF' : error.message;
+        if (status === 500) {
+            console.error('Attendance PDF export error:', error);
+        }
+        if (!res.headersSent) {
+            res.status(status).json({ success: false, message });
+        }
     }
 };
 

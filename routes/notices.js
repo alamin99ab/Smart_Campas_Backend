@@ -45,6 +45,12 @@ router.put('/:id',
     noticeController.updateNotice
 );
 
+// Publish notice
+router.post('/:id/publish',
+    authorize('principal', 'teacher', 'super_admin'),
+    noticeController.publishNotice
+);
+
 // Delete notice (Creator, Principal, Super Admin)
 router.delete('/:id', 
     authorize('principal', 'teacher', 'super_admin'),

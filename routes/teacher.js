@@ -59,6 +59,8 @@ router.post('/marks/enter', checkFeatureAccess('exam'), resultController.enterMa
 router.put('/marks/update/:resultId', checkFeatureAccess('exam'), resultController.updateMarks);
 router.get('/marks/exam/:examId', resultController.getExamMarks);
 router.get('/marks/subject/:subjectId', resultController.getSubjectMarks);
+router.get('/marks/students', resultController.getStudentsForMarks);
+router.get('/exams', resultController.getTeacherExams);
 
 /**
  * 🔁 SUBSTITUTE FLOW

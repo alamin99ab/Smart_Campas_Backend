@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 const AdvancedAttendance = require('../models/AdvancedAttendance');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
+const Student = require('../models/Student');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const AcademicSession = require('../models/AcademicSession');
@@ -14,6 +15,7 @@ const TeacherAssignment = require('../models/TeacherAssignment');
 const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
+const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
 
 /**
  * Ensure there is an active academic session for the current school.
@@ -531,22 +533,34 @@ exports.teacherAttendance = async (req, res) => {
  */
 exports.getStudentAttendanceReport = async (req, res) => {
     try {
-        const studentId = req.params.studentId || req.user.id;
+        const incomingStudentId = req.params.studentId || req.user.id;
         const { academicSessionId, startDate, endDate } = req.query;
         const tenant = getTenantContext(req, res);
         if (!tenant) return;
 
         const { schoolId } = tenant;
 
-        if (!mongoose.Types.ObjectId.isValid(studentId)) {
+        let targetStudentId = incomingStudentId;
+
+        if (req.user.role === 'student') {
+            const resolvedStudentId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+            if (!resolvedStudentId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Unable to resolve student identity'
+                });
+            }
+            targetStudentId = resolvedStudentId;
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(targetStudentId)) {
             return res.status(400).json({
                 success: false,
                 message: 'Invalid studentId'
             });
         }
 
-        // Check authorization
-        if (req.user.role === 'student' && String(req.user.id) !== String(studentId)) {
+        if (req.user.role === 'student' && String(incomingStudentId) !== String(req.user.id) && String(incomingStudentId) !== String(targetStudentId)) {
             return res.status(403).json({
                 success: false,
                 message: 'Access denied'
@@ -555,26 +569,24 @@ exports.getStudentAttendanceReport = async (req, res) => {
 
         const report = await AdvancedAttendance.getStudentAttendanceReport(
             schoolId,
-            studentId,
+            targetStudentId,
             academicSessionId,
             startDate,
             endDate
         );
 
-        // Get student details
-        const student = await User.findById(studentId).select('name email rollNumber');
+        const student = await Student.findById(targetStudentId).select('name roll studentClass section');
 
-        // Calculate overall statistics
-        const totalStats = report.reduce((acc, month) => ({
-            totalDays: acc.totalDays + month.totalDays,
-            presentDays: acc.presentDays + month.presentDays,
-            absentDays: acc.absentDays + month.absentDays,
-            leaveDays: acc.leaveDays + month.leaveDays,
-            lateDays: acc.lateDays + month.lateDays
+        const totalStats = (report || []).reduce((acc, month) => ({
+            totalDays: acc.totalDays + (month.totalDays || 0),
+            presentDays: acc.presentDays + (month.presentDays || 0),
+            absentDays: acc.absentDays + (month.absentDays || 0),
+            leaveDays: acc.leaveDays + (month.leaveDays || 0),
+            lateDays: acc.lateDays + (month.lateDays || 0)
         }), { totalDays: 0, presentDays: 0, absentDays: 0, leaveDays: 0, lateDays: 0 });
 
-        totalStats.percentage = totalStats.totalDays > 0 
-            ? Math.round((totalStats.presentDays / totalStats.totalDays) * 100) 
+        totalStats.percentage = totalStats.totalDays > 0
+            ? Math.round((totalStats.presentDays / totalStats.totalDays) * 100)
             : 0;
 
         res.status(200).json({

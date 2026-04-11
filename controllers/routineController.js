@@ -3,10 +3,71 @@ const AuditLog = require('../models/AuditLog');
 const Teacher = require('../models/Teacher');
 const User = require('../models/User');
 const { createNotification } = require('../utils/createNotification');
+const mongoose = require('mongoose');
+
+const WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const normalizeWeekDay = (value) => {
+    if (!value) return null;
+    const key = String(value).trim().toLowerCase();
+    if (!key) return null;
+    const match = WEEK_DAYS.find((day) => day.toLowerCase() === key);
+    return match || null;
+};
+
+const normalizeSection = (value) => {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).trim();
+    return normalized ? normalized.toUpperCase() : null;
+};
+
+const normalizePeriods = (periods) => {
+    if (!Array.isArray(periods) || periods.length === 0) {
+        throw new Error('At least one period is required');
+    }
+
+    return periods.map((period, index) => {
+        const periodNumber = Number(period?.period ?? period?.periodNumber ?? index + 1);
+        if (!Number.isInteger(periodNumber) || periodNumber < 1) {
+            throw new Error(`Invalid period number at row ${index + 1}`);
+        }
+
+        const subjectRaw = period?.subject || period?.subjectName;
+        const subject = subjectRaw ? String(subjectRaw).trim() : '';
+        if (!subject) {
+            throw new Error(`Subject is required for period ${periodNumber}`);
+        }
+
+        const startTime = period?.startTime ? String(period.startTime).trim() : '';
+        const endTime = period?.endTime ? String(period.endTime).trim() : '';
+        if (!startTime || !endTime) {
+            throw new Error(`Start and end time are required for period ${periodNumber}`);
+        }
+
+        const normalizedPeriod = {
+            period: periodNumber,
+            subject,
+            startTime,
+            endTime
+        };
+
+        const roomRaw = period?.room || period?.roomNumber;
+        if (roomRaw !== undefined && roomRaw !== null && String(roomRaw).trim()) {
+            normalizedPeriod.room = String(roomRaw).trim();
+        }
+
+        // Keep teacher only when a valid ObjectId is provided.
+        const teacherRaw = period?.teacher || period?.teacherId;
+        if (teacherRaw && mongoose.Types.ObjectId.isValid(teacherRaw)) {
+            normalizedPeriod.teacher = new mongoose.Types.ObjectId(teacherRaw);
+        }
+
+        return normalizedPeriod;
+    });
+};
 
 async function checkRoutineConflicts(schoolCode, day, periods, academicYear, excludeRoutineId = null) {
     const errors = [];
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const teacherPeriodCount = {};
     const periodTeacherMap = {};
     const periodRoomMap = {};
@@ -112,46 +173,140 @@ exports.checkConflicts = async (req, res) => {
 exports.createRoutine = async (req, res) => {
     try {
         if (req.user.role !== 'principal' && req.user.role !== 'admin' && req.user.role !== 'teacher') {
-            return res.status(403).json({ success: false, message: 'Access denied' });
+            return res.status(403).json({
+                success: false,
+                code: 'FORBIDDEN',
+                message: 'Access denied',
+                data: null
+            });
         }
 
         const { studentClass, section, day, periods, academicYear, semester } = req.body;
 
         if (!studentClass || !day || !periods || !Array.isArray(periods) || !academicYear) {
-            return res.status(400).json({ success: false, message: 'Class, day, periods, and academic year are required' });
+            return res.status(400).json({
+                success: false,
+                code: 'ROUTINE_VALIDATION_ERROR',
+                message: 'Class, day, periods, and academic year are required',
+                data: null
+            });
         }
 
-        const conflicts = await checkRoutineConflicts(req.user.schoolCode, day, periods, academicYear);
-        if (conflicts.length > 0) {
-            return res.status(400).json({ success: false, message: 'Routine conflicts detected', conflicts });
+        const normalizedDay = normalizeWeekDay(day);
+        if (!normalizedDay) {
+            return res.status(400).json({
+                success: false,
+                code: 'ROUTINE_DAY_INVALID',
+                message: 'Invalid day. Use full weekday name (e.g., Monday)',
+                data: null
+            });
         }
 
-        const routine = await ClassRoutine.create({
+        let normalizedPeriods;
+        try {
+            normalizedPeriods = normalizePeriods(periods);
+        } catch (validationError) {
+            return res.status(400).json({
+                success: false,
+                code: 'ROUTINE_PERIODS_INVALID',
+                message: validationError.message,
+                data: null
+            });
+        }
+
+        const normalizedClass = String(studentClass).trim();
+        const normalizedSection = normalizeSection(section);
+        const normalizedAcademicYear = String(academicYear).trim();
+
+        const existingRoutine = await ClassRoutine.findOne({
             schoolCode: req.user.schoolCode,
-            studentClass,
-            section: section || null,
-            day,
-            periods,
-            academicYear,
-            semester,
-            createdBy: req.user._id
-        });
+            studentClass: normalizedClass,
+            section: normalizedSection,
+            day: normalizedDay,
+            academicYear: normalizedAcademicYear
+        }).select('_id');
+
+        const conflicts = await checkRoutineConflicts(
+            req.user.schoolCode,
+            normalizedDay,
+            normalizedPeriods,
+            normalizedAcademicYear,
+            existingRoutine?._id || null
+        );
+        if (conflicts.length > 0) {
+            return res.status(400).json({
+                success: false,
+                code: 'ROUTINE_CONFLICTS_DETECTED',
+                message: 'Routine conflicts detected',
+                data: { conflicts }
+            });
+        }
+
+        const routinePayload = {
+            schoolCode: req.user.schoolCode,
+            studentClass: normalizedClass,
+            section: normalizedSection,
+            day: normalizedDay,
+            periods: normalizedPeriods,
+            academicYear: normalizedAcademicYear,
+            semester: semester || undefined
+        };
+
+        let routine;
+        let action;
+        if (existingRoutine) {
+            action = 'ROUTINE_UPDATED';
+            routine = await ClassRoutine.findByIdAndUpdate(
+                existingRoutine._id,
+                {
+                    ...routinePayload,
+                    updatedBy: req.user._id
+                },
+                { new: true, runValidators: true }
+            );
+        } else {
+            action = 'ROUTINE_CREATED';
+            routine = await ClassRoutine.create({
+                ...routinePayload,
+                createdBy: req.user._id
+            });
+        }
 
         await AuditLog.create({
             user: req.user._id,
-            action: 'ROUTINE_CREATED',
-            details: { routineId: routine._id, class: studentClass, day },
+            action,
+            details: {
+                routineId: routine._id,
+                class: normalizedClass,
+                day: normalizedDay,
+                createdNew: !existingRoutine
+            },
             ip: req.ip,
             userAgent: req.headers['user-agent']
         });
 
-        res.status(201).json({ success: true, data: routine });
+        return res.status(existingRoutine ? 200 : 201).json({
+            success: true,
+            code: existingRoutine ? 'ROUTINE_UPDATED' : 'ROUTINE_CREATED',
+            message: existingRoutine ? 'Routine updated successfully' : 'Routine created successfully',
+            data: routine
+        });
     } catch (err) {
         console.error('Create routine error:', err);
         if (err.code === 11000) {
-            return res.status(400).json({ success: false, message: 'Routine already exists for this class/day/year' });
+            return res.status(400).json({
+                success: false,
+                code: 'ROUTINE_DUPLICATE',
+                message: 'Routine already exists for this class/day/year',
+                data: null
+            });
         }
-        res.status(500).json({ success: false, message: 'Failed to create routine' });
+        return res.status(500).json({
+            success: false,
+            code: 'ROUTINE_CREATE_FAILED',
+            message: 'Failed to create routine',
+            data: null
+        });
     }
 };
 

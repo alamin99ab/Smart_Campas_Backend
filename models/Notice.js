@@ -107,6 +107,11 @@ const noticeSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    isPublic: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
     expiryDate: { 
         type: Date,
         default: null 
@@ -223,6 +228,7 @@ noticeSchema.index({ schoolId: 1, noticeType: 1, publishDate: -1 });
 noticeSchema.index({ schoolId: 1, priority: -1, publishDate: -1 });
 noticeSchema.index({ schoolCode: 1, status: 1, publishDate: -1 });
 noticeSchema.index({ schoolCode: 1, isPublished: 1, publishDate: -1 });
+noticeSchema.index({ schoolCode: 1, isPublic: 1, isPublished: 1, publishDate: -1 });
 noticeSchema.index({ createdBy: 1, publishDate: -1 });
 noticeSchema.index({ isGlobal: 1, publishDate: -1 });
 noticeSchema.index({ status: 1, publishDate: -1 });

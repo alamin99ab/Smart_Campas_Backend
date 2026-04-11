@@ -7,19 +7,27 @@ const express = require('express');
 const router = express.Router();
 const {
     getPublicNotices,
+    getPublicNoticeById,
     getLatestPublicNotices,
     getPublicResults,
+    searchPublicResults,
     getResultByRollNumber,
     getSchoolInfo,
     getPublicDashboard
 } = require('../controllers/publicController');
 
 // Public Notice Routes (No Login Required)
+router.get('/:schoolCode/notices/latest', getLatestPublicNotices);
+router.get('/:schoolCode/notices/:id', getPublicNoticeById);
+router.get('/:schoolCode/notices', getPublicNotices);
 router.get('/notices', getPublicNotices);
 router.get('/notices/latest', getLatestPublicNotices);
 
 // Public Result Routes (No Login Required)
+router.get('/:schoolCode/results/search', searchPublicResults);
+router.get('/:schoolCode/result/:rollNumber', getResultByRollNumber);
 router.get('/results', getPublicResults);
+router.get('/results/search', searchPublicResults);
 router.get('/result/:rollNumber', getResultByRollNumber);
 router.get('/results/lookup', getPublicResults); // explicit alias for website integrations
 

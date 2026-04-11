@@ -14,76 +14,127 @@ const { createNotification } = require('../utils/createNotification');
 // @access  Private (Principal)
 exports.getEligibleStudents = async (req, res) => {
     try {
-        const { academicYear, examName, class: studentClass, section } = req.query;
+        const { academicYear, examName, classId, class: studentClass, section } = req.query;
         const schoolCode = req.user.schoolCode;
 
-        if (!examName) {
+        if (!classId && !studentClass) {
             return res.status(400).json({
                 success: false,
-                message: 'Exam name is required to check eligibility'
+                message: 'Class selection is required to check eligibility'
             });
         }
 
-        // Get all students in the class
-        const studentQuery = { schoolCode, isActive: true };
-        if (studentClass) studentQuery.studentClass = studentClass;
-        if (section) studentQuery.section = section;
+        let sourceClassInfo;
+        if (classId) {
+            sourceClassInfo = await Class.findOne({ _id: classId, schoolCode, isActive: true });
+        }
+
+        if (!sourceClassInfo && studentClass) {
+            sourceClassInfo = await Class.findOne({
+                schoolCode,
+                className: studentClass,
+                section: section || undefined,
+                isActive: true
+            });
+        }
+
+        if (!sourceClassInfo) {
+            return res.status(404).json({
+                success: false,
+                message: 'Selected class not found'
+            });
+        }
+
+        const studentQuery = {
+            schoolCode,
+            isActive: true,
+            studentClass: sourceClassInfo.className
+        };
+
+        if (section) {
+            studentQuery.section = section;
+        } else if (sourceClassInfo.section) {
+            studentQuery.section = sourceClassInfo.section;
+        }
 
         const students = await Student.find(studentQuery).sort({ roll: 1 });
 
-        // Get results for each student
-        const results = await Result.find({
+        const resultFilter = {
             schoolCode,
-            examName,
-            academicYear: academicYear || new Date().getFullYear().toString()
-        });
+            studentClass: sourceClassInfo.className,
+            section: studentQuery.section,
+            academicYear: academicYear || sourceClassInfo.academicYear || new Date().getFullYear().toString(),
+            isPublished: true
+        };
+        if (examName) {
+            resultFilter.examName = examName;
+        }
 
-        const resultMap = new Map(results.map(r => [r.studentId.toString(), r]));
+        const results = await Result.find(resultFilter).sort({ publishedAt: -1 });
 
-        // Categorize students
+        const resultMap = new Map();
+        for (const result of results) {
+            const studentId = result.studentId.toString();
+            const existing = resultMap.get(studentId);
+            if (!existing || (result.publishedAt && existing.publishedAt < result.publishedAt)) {
+                resultMap.set(studentId, result);
+            }
+        }
+
         const eligible = [];
-        const needsReview = [];
         const failed = [];
+        const needsReview = [];
 
         for (const student of students) {
             const result = resultMap.get(student._id.toString());
-            
+            const studentPayload = {
+                _id: student._id.toString(),
+                name: student.name,
+                email: student.email,
+                rollNumber: student.roll,
+                class: {
+                    _id: sourceClassInfo._id.toString(),
+                    name: sourceClassInfo.className,
+                    section: sourceClassInfo.section
+                },
+                section: {
+                    name: student.section || sourceClassInfo.section
+                },
+                results: result ? [{
+                    examName: result.examName,
+                    status: result.isPublished ? 'published' : 'pending',
+                    gpa: result.gpa,
+                    totalMarks: result.totalMarks
+                }] : []
+            };
+
             if (!result) {
-                needsReview.push({ student, reason: 'No result available' });
+                needsReview.push(studentPayload);
                 continue;
             }
 
-            // Check pass status (assuming 33% or GPA >= 1.0 is passing)
             const isPassing = result.gpa >= 1.0 || result.totalMarks >= 33;
-            
             if (isPassing) {
-                eligible.push({ 
-                    student, 
-                    currentResult: result,
-                    gpa: result.gpa,
-                    totalMarks: result.totalMarks
-                });
+                eligible.push(studentPayload);
             } else {
-                failed.push({ 
-                    student, 
-                    currentResult: result,
-                    gpa: result.gpa,
-                    totalMarks: result.totalMarks
-                });
+                failed.push(studentPayload);
             }
         }
 
         res.json({
             success: true,
             data: {
-                eligible: eligible,
-                needsReview: needsReview,
-                failed: failed,
+                eligible,
+                needsReview,
+                failed,
                 summary: {
                     total: students.length,
                     eligible: eligible.length,
                     needsReview: needsReview.length,
-                    failed: failed.length
+                    failed: failed.length,
+                    classId: sourceClassInfo._id,
+                    className: sourceClassInfo.className,
+                    section: sourceClassInfo.section
                 }
             }
         });
@@ -102,34 +153,26 @@ exports.getEligibleStudents = async (req, res) => {
 // @access  Private (Principal)
 exports.runPromotion = async (req, res) => {
     try {
-        const { 
+        const {
             academicYear,
             examName,
-            sourceClass,
-            sourceSection,
-            targetClass,
-            targetSection,
+            sourceClassId,
+            targetClassId,
             studentIds,
-            promotionType = 'passing', // 'all', 'passing', 'manual'
-            keepInSameClass = [] // students who failed but should stay
+            promotionType = 'pass', // 'all', 'pass', 'passing', 'manual'
+            keepInSameClass = []
         } = req.body;
 
         const schoolCode = req.user.schoolCode;
 
-        if (!sourceClass || !targetClass || !examName) {
+        if (!sourceClassId || !targetClassId) {
             return res.status(400).json({
                 success: false,
-                message: 'Source class, target class, and exam name are required'
+                message: 'Source class and target class are required'
             });
         }
 
-        // Get source class info
-        const sourceClassInfo = await Class.findOne({
-            schoolCode,
-            className: sourceClass,
-            section: sourceSection || 'A'
-        });
-
+        const sourceClassInfo = await Class.findOne({ _id: sourceClassId, schoolCode, isActive: true });
         if (!sourceClassInfo) {
             return res.status(404).json({
                 success: false,
@@ -137,13 +180,7 @@ exports.runPromotion = async (req, res) => {
             });
         }
 
-        // Check if target class exists
-        const targetClassInfo = await Class.findOne({
-            schoolCode,
-            className: targetClass,
-            section: targetSection || 'A'
-        });
-
+        const targetClassInfo = await Class.findOne({ _id: targetClassId, schoolCode, isActive: true });
         if (!targetClassInfo) {
             return res.status(404).json({
                 success: false,
@@ -151,12 +188,28 @@ exports.runPromotion = async (req, res) => {
             });
         }
 
-        // Verify results are published
+        if (sourceClassId === targetClassId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Source and target class must be different'
+            });
+        }
+
+        const normalizedPromotionType = promotionType === 'pass' ? 'passing' : promotionType;
+        if (!['all', 'passing', 'manual'].includes(normalizedPromotionType)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid promotion type'
+            });
+        }
+
+        const effectiveAcademicYear = academicYear || sourceClassInfo.academicYear || new Date().getFullYear().toString();
+
         const resultsPublished = await Result.findOne({
             schoolCode,
-            examName,
-            academicYear: academicYear || new Date().getFullYear().toString(),
-            isPublished: true
+            academicYear: effectiveAcademicYear,
+            isPublished: true,
+            ...(examName ? { examName } : {})
         });
 
         if (!resultsPublished) {
@@ -166,29 +219,28 @@ exports.runPromotion = async (req, res) => {
             });
         }
 
-        // Get students to promote
         let studentsToPromote = [];
-        
-        if (studentIds && studentIds.length > 0) {
-            // Manual selection
+
+        if (studentIds?.length > 0) {
             studentsToPromote = await Student.find({
                 _id: { $in: studentIds },
                 schoolCode,
                 isActive: true
             });
-        } else if (promotionType === 'all') {
+        } else if (normalizedPromotionType === 'all') {
             studentsToPromote = await Student.find({
                 schoolCode,
-                studentClass: sourceClass,
-                section: sourceSection,
+                studentClass: sourceClassInfo.className,
+                section: sourceClassInfo.section,
                 isActive: true
             });
-        } else {
-            // Get passing students only
+        } else if (normalizedPromotionType === 'passing') {
             const passingStudentIds = await Result.distinct('studentId', {
                 schoolCode,
-                examName,
-                academicYear: academicYear || new Date().getFullYear().toString(),
+                studentClass: sourceClassInfo.className,
+                section: sourceClassInfo.section,
+                academicYear: effectiveAcademicYear,
+                isPublished: true,
                 $or: [
                     { gpa: { $gte: 1.0 } },
                     { totalMarks: { $gte: 33 } }
@@ -198,9 +250,14 @@ exports.runPromotion = async (req, res) => {
             studentsToPromote = await Student.find({
                 _id: { $in: passingStudentIds },
                 schoolCode,
-                studentClass: sourceClass,
-                section: sourceSection,
+                studentClass: sourceClassInfo.className,
+                section: sourceClassInfo.section,
                 isActive: true
+            });
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: 'Student IDs are required for manual promotion'
             });
         }
 
@@ -211,7 +268,6 @@ exports.runPromotion = async (req, res) => {
             });
         }
 
-        // Update students with new class
         const promotedStudents = [];
         const errors = [];
 
@@ -220,38 +276,32 @@ exports.runPromotion = async (req, res) => {
                 const oldClass = student.studentClass;
                 const oldSection = student.section;
 
-                // Archive old academic record
                 const oldRecord = {
-                    academicYear: academicYear || new Date().getFullYear().toString(),
+                    academicYear: effectiveAcademicYear,
                     className: oldClass,
                     section: oldSection,
                     promotionDate: new Date(),
-                    promotedTo: targetClass,
-                    promotedToSection: targetSection,
-                    examName,
-                    promotionType
+                    promotedTo: targetClassInfo.className,
+                    promotedToSection: targetClassInfo.section,
+                    examName: examName || 'final',
+                    promotionType: normalizedPromotionType
                 };
 
-                // Update student
-                student.studentClass = targetClass;
-                student.section = targetSection || student.section;
-                
-                // Initialize academic history if not exists
+                student.studentClass = targetClassInfo.className;
+                student.section = targetClassInfo.section;
                 if (!student.academicHistory) {
                     student.academicHistory = [];
                 }
                 student.academicHistory.push(oldRecord);
-
                 await student.save();
 
-                // Notify parent/guardian
                 if (student.guardian?.phone) {
                     await createNotification(
                         student.addedBy,
                         'STUDENT_PROMOTED',
                         {
                             title: 'Student Promoted',
-                            message: `${student.name} has been promoted from Class ${oldClass} to Class ${targetClass}`
+                            message: `${student.name} has been promoted from Class ${oldClass} to Class ${targetClassInfo.className}`
                         },
                         schoolCode
                     );
@@ -263,8 +313,8 @@ exports.runPromotion = async (req, res) => {
                     roll: student.roll,
                     fromClass: oldClass,
                     fromSection: oldSection,
-                    toClass: targetClass,
-                    toSection: targetSection || student.section
+                    toClass: targetClassInfo.className,
+                    toSection: targetClassInfo.section
                 });
             } catch (err) {
                 errors.push({
@@ -274,20 +324,16 @@ exports.runPromotion = async (req, res) => {
             }
         }
 
-        // Update class student counts
-        if (sourceClassInfo) {
-            sourceClassInfo.currentStudents -= promotedStudents.length;
-            await sourceClassInfo.save();
-        }
-        if (targetClassInfo) {
-            targetClassInfo.currentStudents += promotedStudents.length;
-            await targetClassInfo.save();
-        }
+        sourceClassInfo.currentStudents -= promotedStudents.length;
+        if (sourceClassInfo.currentStudents < 0) sourceClassInfo.currentStudents = 0;
+        await sourceClassInfo.save();
 
-        // Update school stats
+        targetClassInfo.currentStudents += promotedStudents.length;
+        await targetClassInfo.save();
+
         const school = await School.findOne({ schoolCode });
         if (school && school.stats) {
-            // Students moving to different class level
+            // Optionally update aggregate counts here if needed.
         }
 
         res.json({
@@ -295,7 +341,7 @@ exports.runPromotion = async (req, res) => {
             message: `Successfully promoted ${promotedStudents.length} students`,
             data: {
                 promoted: promotedStudents,
-                errors: errors,
+                errors,
                 summary: {
                     totalProcessed: studentsToPromote.length,
                     successfullyPromoted: promotedStudents.length,
@@ -321,44 +367,52 @@ exports.getPromotionHistory = async (req, res) => {
         const { academicYear, page = 1, limit = 50 } = req.query;
         const schoolCode = req.user.schoolCode;
 
-        // Get students with academic history
-        const query = { 
+        const query = {
             schoolCode,
             academicHistory: { $exists: true, $ne: [] }
         };
 
         const students = await Student.find(query)
             .select('name roll studentClass section academicHistory')
-            .sort({ 'academicHistory.promotionDate': -1 })
-            .skip((page - 1) * limit)
-            .limit(parseInt(limit));
+            .lean();
 
-        const total = await Student.countDocuments(query);
-
-        // Flatten history
-        const history = [];
+        const historyMap = new Map();
         for (const student of students) {
-            if (student.academicHistory) {
-                for (const record of student.academicHistory) {
-                    if (!academicYear || record.academicYear === academicYear) {
-                        history.push({
-                            studentName: student.name,
-                            studentRoll: student.roll,
-                            currentClass: student.studentClass,
-                            currentSection: student.section,
-                            ...record
-                        });
-                    }
+            if (!student.academicHistory) continue;
+            for (const record of student.academicHistory) {
+                if (academicYear && record.academicYear !== academicYear) continue;
+                const timestamp = record.promotionDate ? new Date(record.promotionDate).toISOString() : 'unknown';
+                const key = `${timestamp}|${record.className}|${record.promotedTo}|${record.promotionType}|${record.examName || ''}`;
+                const existing = historyMap.get(key);
+                if (!existing) {
+                    historyMap.set(key, {
+                        _id: key,
+                        fromClass: record.className,
+                        toClass: record.promotedTo,
+                        promotedAt: record.promotionDate,
+                        status: 'completed',
+                        promotedCount: 1,
+                        failedCount: 0,
+                        promotionType: record.promotionType,
+                        examName: record.examName || null,
+                        academicYear: record.academicYear
+                    });
+                } else {
+                    existing.promotedCount += 1;
                 }
             }
         }
 
+        const history = Array.from(historyMap.values()).sort((a, b) => new Date(b.promotedAt) - new Date(a.promotedAt));
+        const total = history.length;
+        const pagedHistory = history.slice((page - 1) * limit, (page - 1) * limit + parseInt(limit, 10));
+
         res.json({
             success: true,
-            data: history,
+            data: pagedHistory,
             pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
+                page: parseInt(page, 10),
+                limit: parseInt(limit, 10),
                 total,
                 pages: Math.ceil(total / limit)
             }
@@ -381,37 +435,31 @@ exports.getPromotionClasses = async (req, res) => {
         const schoolCode = req.user.schoolCode;
 
         const classes = await Class.find({ schoolCode, isActive: true })
-            .select('className section capacity currentStudents')
-            .sort({ classLevel: 1, section: 1 });
+            .select('className section classLevel capacity currentStudents')
+            .sort({ classLevel: 1, section: 1 })
+            .lean();
 
-        // Group by class level
-        const classMap = new Map();
-        for (const cls of classes) {
-            if (!classMap.has(cls.className)) {
-                classMap.set(cls.className, {
-                    className: cls.className,
-                    classLevel: cls.classLevel,
-                    sections: []
-                });
-            }
-            classMap.get(cls.className).sections.push({
-                section: cls.section,
-                capacity: cls.capacity,
-                currentStudents: cls.currentStudents
-            });
-        }
+        const availableClasses = classes.map((cls) => ({
+            _id: cls._id.toString(),
+            name: cls.className,
+            className: cls.className,
+            section: cls.section,
+            classLevel: cls.classLevel,
+            capacity: cls.capacity,
+            currentStudents: cls.currentStudents,
+            label: `${cls.className} ${cls.section}`
+        }));
 
-        const availableClasses = Array.from(classMap.values());
-
-        // Suggest next class (e.g., Class 6 -> Class 7)
-        const suggestions = availableClasses.map(cls => {
-            const nextLevel = cls.classLevel + 1;
-            const nextClass = availableClasses.find(c => c.classLevel === nextLevel);
-            return {
-                from: cls.className,
-                to: nextClass ? nextClass.className : null
-            };
-        }).filter(s => s.to);
+        const suggestions = availableClasses
+            .map((cls) => {
+                const nextLevel = cls.classLevel + 1;
+                const nextClass = availableClasses.find((c) => c.classLevel === nextLevel);
+                return {
+                    from: cls.className,
+                    to: nextClass ? nextClass.className : null
+                };
+            })
+            .filter((s) => s.to);
 
         res.json({
             success: true,

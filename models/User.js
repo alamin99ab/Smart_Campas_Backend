@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true, select: false },
     role: { type: String, enum: ['super_admin', 'admin', 'principal', 'teacher', 'student', 'parent', 'accountant'], required: true },
     schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: function() { return this.role !== 'super_admin'; } },
@@ -59,6 +59,10 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.pre('save', async function() {
+    if (this.isModified('email') && typeof this.email === 'string') {
+        this.email = this.email.trim().toLowerCase();
+    }
+
     if (!this.isModified('password')) return;
     const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);

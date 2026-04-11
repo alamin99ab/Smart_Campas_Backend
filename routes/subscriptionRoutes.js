@@ -18,7 +18,7 @@ router.get('/expiring', protect, authorize('super_admin'), subscriptionControlle
 router.get('/check-expired', protect, authorize('super_admin'), subscriptionController.checkExpiredSubscriptions);
 
 // Protected routes - Super Admin or School Admin
-router.get('/:schoolId', protect, subscriptionController.getSubscription);
+router.get('/:schoolId', protect, authorize('super_admin', 'principal', 'admin'), subscriptionController.getSubscription);
 router.put('/:schoolId', protect, authorize('super_admin'), subscriptionController.updateSubscription);
 router.delete('/:schoolId', protect, authorize('super_admin'), subscriptionController.cancelSubscription);
 

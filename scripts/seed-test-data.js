@@ -820,6 +820,7 @@ async function seedTestData() {
             }
         ];
 
+        const examIdByName = new Map(examSeeds.map((examSeed) => [examSeed.name, examSeed._id]));
         payload.exams.push(...examSeeds);
 
         examSeeds.forEach((examSeed, examSeedIndex) => {
@@ -880,6 +881,7 @@ async function seedTestData() {
         const feeDocs = [];
         const paymentHistoryDocs = [];
         const resultDocs = [];
+        const seenResultCompositeKeys = new Set();
         const advancedAttendanceDocs = [];
         const attendanceDocs = [];
         const attendanceSummaryByStudent = new Map();
@@ -986,10 +988,11 @@ async function seedTestData() {
 
                 const parentDoc = parentRecord.parentDoc;
                 const rollNumber = String(studentIndex + (classOrderIndex % 2) * 10).padStart(2, '0');
+                const sectionToken = String(classDoc.section || '').toLowerCase();
                 const userStudent = {
                     _id: studentId,
                     name: `Student ${schoolIndex + 1}-${classDoc.classLevel}${classDoc.section}-${rollNumber}`,
-                    email: `student.${schoolCode.toLowerCase()}.${classDoc.classLevel}${classDoc.section}.${rollNumber}@seed.smartcampus.local`,
+                    email: `student.${schoolCode.toLowerCase()}.${classDoc.classLevel}${sectionToken}.${rollNumber}@seed.smartcampus.local`,
                     password: hashedPassword,
                     role: 'student',
                     schoolId,
@@ -1129,9 +1132,21 @@ async function seedTestData() {
                 legacyStudent.totalDue = studentTotalDue;
 
                 ['Midterm Examination', 'Final Examination'].forEach((examName, examOffset) => {
+                    const linkedExamId = examIdByName.get(examName);
+                    if (!linkedExamId) {
+                        throw new Error(`Seed exam linkage missing for ${examName} in ${schoolCode}`);
+                    }
+
+                    const resultKey = `${studentId.toString()}:${linkedExamId.toString()}:${schoolCode}`;
+                    if (seenResultCompositeKeys.has(resultKey)) {
+                        return;
+                    }
+                    seenResultCompositeKeys.add(resultKey);
+
                     const subjectMarks = buildSubjectMarks(globalStudentIndex, classDoc.classLevel, examOffset);
                     resultDocs.push({
                         _id: objectId(),
+                        examId: linkedExamId,
                         studentId,
                         schoolCode,
                         studentClass: classDoc.className,

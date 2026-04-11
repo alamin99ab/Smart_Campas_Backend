@@ -2,6 +2,10 @@
 const mongoose = require('mongoose');
 
 const resultSchema = new mongoose.Schema({
+    examId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Exam'
+    },
     studentId: { 
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'Student', 
@@ -10,6 +14,8 @@ const resultSchema = new mongoose.Schema({
     schoolCode: { 
         type: String, 
         required: true,
+        uppercase: true,
+        trim: true,
         index: true 
     },
     studentClass: { 
@@ -35,6 +41,10 @@ const resultSchema = new mongoose.Schema({
         default: Date.now 
     },
     subjects: [{
+        subjectId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Subject'
+        },
         subjectName: { type: String, required: true },
         marks: { type: Number, required: true, min: 0, max: 100 },
         grade: { type: String }
@@ -60,7 +70,7 @@ const resultSchema = new mongoose.Schema({
     },
     isPublished: { 
         type: Boolean, 
-        default: true 
+        default: false 
     },
     isActive: {
         type: Boolean,
@@ -89,9 +99,17 @@ const resultSchema = new mongoose.Schema({
 
 // Unique index: one result per student per exam
 resultSchema.index({ studentId: 1, examName: 1, schoolCode: 1 }, { unique: true });
+resultSchema.index(
+    { studentId: 1, examId: 1, schoolCode: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { examId: { $type: 'objectId' } }
+    }
+);
 
 // Indexes for search
 resultSchema.index({ schoolCode: 1, studentClass: 1, section: 1, examName: 1 });
 resultSchema.index({ schoolCode: 1, academicYear: 1, examName: 1 });
+resultSchema.index({ schoolCode: 1, studentClass: 1, roll: 1, isPublished: 1, isActive: 1 });
 
 module.exports = mongoose.model('Result', resultSchema);

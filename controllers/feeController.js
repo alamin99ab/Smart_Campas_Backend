@@ -187,6 +187,63 @@ const resolveAuthenticatedStudent = async (req) => {
     return resolveStudentFromAuth(req);
 };
 
+const guardianEmailRegex = (email) => {
+    const value = String(email || '').trim();
+    if (!value) return null;
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^${escaped}$`, 'i');
+};
+
+const getParentLinkedStudentIds = async (req) => {
+    const schoolCode = req.user?.schoolCode;
+    const parentId = req.user?._id || req.user?.id;
+    const emailRegex = guardianEmailRegex(req.user?.email);
+    const or = [];
+    if (parentId) or.push({ parentId });
+    if (emailRegex) or.push({ 'guardian.email': emailRegex });
+    if (!schoolCode || !or.length) return [];
+
+    const rows = await Student.find({
+        schoolCode,
+        isActive: true,
+        $or: or
+    }).select('_id').lean();
+
+    return rows.map((row) => String(row._id));
+};
+
+const assertStudentOwnershipForFeeAccess = async (req, targetStudentRef) => {
+    const ownStudent = await resolveAuthenticatedStudent(req);
+    if (!ownStudent) {
+        return { ok: false, status: 404, message: 'Student not found', code: 'STUDENT_NOT_FOUND' };
+    }
+
+    const targetStudent = await resolveStudentByRef(targetStudentRef, req.user.schoolCode);
+    if (!targetStudent) {
+        return { ok: false, status: 404, message: 'Student not found', code: 'STUDENT_NOT_FOUND' };
+    }
+
+    if (String(targetStudent._id) !== String(ownStudent._id)) {
+        return { ok: false, status: 403, message: 'Access denied', code: 'FORBIDDEN' };
+    }
+
+    return { ok: true, student: ownStudent };
+};
+
+const assertParentOwnershipForFeeAccess = async (req, targetStudentRef) => {
+    const targetStudent = await resolveStudentByRef(targetStudentRef, req.user.schoolCode);
+    if (!targetStudent) {
+        return { ok: false, status: 404, message: 'Student not found', code: 'STUDENT_NOT_FOUND' };
+    }
+
+    const linkedIds = await getParentLinkedStudentIds(req);
+    if (!linkedIds.includes(String(targetStudent._id))) {
+        return { ok: false, status: 403, message: 'Access denied', code: 'FORBIDDEN' };
+    }
+
+    return { ok: true, student: targetStudent };
+};
+
 const mapFeeStructure = (doc) => {
     const row = doc.toObject ? doc.toObject() : doc;
     const now = new Date();
@@ -286,8 +343,59 @@ const applyPaymentAcrossFees = async ({
 exports.getFees = async (req, res) => {
     try {
         const { page = 1, limit = 10, studentId, month, year, status } = req.query;
+        const role = req.user?.role;
         const filter = { schoolCode: req.user.schoolCode };
-        if (studentId) filter.studentId = studentId;
+
+        if (role === 'student') {
+            const ownStudent = await resolveAuthenticatedStudent(req);
+            if (!ownStudent) {
+                if (studentId) {
+                    return sendError(res, 403, 'Access denied', 'FORBIDDEN');
+                }
+                return sendSuccess(res, {
+                    code: 'FEES_FETCHED',
+                    message: 'Fees fetched successfully',
+                    data: {
+                        fees: [],
+                        summary: { totalAssessed: 0, totalPaid: 0, totalDue: 0 },
+                        pagination: { page: Math.max(toNumber(page, 1), 1), limit: Math.min(Math.max(toNumber(limit, 10), 1), 500), total: 0, pages: 1 }
+                    }
+                });
+            }
+            if (studentId && String(studentId) !== String(ownStudent._id)) {
+                return sendError(res, 403, 'Access denied', 'FORBIDDEN');
+            }
+            filter.studentId = ownStudent._id;
+        } else if (role === 'parent') {
+            const linkedStudentIds = await getParentLinkedStudentIds(req);
+            if (!linkedStudentIds.length) {
+                if (studentId) {
+                    return sendError(res, 403, 'Access denied', 'FORBIDDEN');
+                }
+                return sendSuccess(res, {
+                    code: 'FEES_FETCHED',
+                    message: 'Fees fetched successfully',
+                    data: {
+                        fees: [],
+                        summary: { totalAssessed: 0, totalPaid: 0, totalDue: 0 },
+                        pagination: { page: Math.max(toNumber(page, 1), 1), limit: Math.min(Math.max(toNumber(limit, 10), 1), 500), total: 0, pages: 1 }
+                    }
+                });
+            }
+
+            if (studentId) {
+                const target = await resolveStudentByRef(studentId, req.user.schoolCode);
+                if (!target || !linkedStudentIds.includes(String(target._id))) {
+                    return sendError(res, 403, 'Access denied', 'FORBIDDEN');
+                }
+                filter.studentId = target._id;
+            } else {
+                filter.studentId = { $in: linkedStudentIds };
+            }
+        } else if (studentId) {
+            filter.studentId = studentId;
+        }
+
         if (month && year) {
             const period = parsePeriod(month, year);
             if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
@@ -510,10 +618,23 @@ exports.getClearance = async (req, res) => {
     const { studentId } = req.params;
     const schoolCode = req.user.schoolCode;
     try {
-        const [student, school] = await Promise.all([
-            resolveStudentByRef(studentId, schoolCode),
-            School.findOne({ schoolCode }).select('schoolName')
-        ]);
+        let student = null;
+        if (req.user.role === 'student') {
+            const ownership = await assertStudentOwnershipForFeeAccess(req, studentId);
+            if (!ownership.ok) return sendError(res, ownership.status, ownership.message, ownership.code);
+            student = ownership.student;
+        } else if (req.user.role === 'parent') {
+            const ownership = await assertParentOwnershipForFeeAccess(req, studentId);
+            if (!ownership.ok) return sendError(res, ownership.status, ownership.message, ownership.code);
+            student = ownership.student;
+        } else if (['principal', 'accountant', 'admin'].includes(req.user.role)) {
+            student = await resolveStudentByRef(studentId, schoolCode);
+            if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+        } else {
+            return sendError(res, 403, 'Access denied', 'FORBIDDEN');
+        }
+
+        const school = await School.findOne({ schoolCode }).select('schoolName');
         if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
 
         const [fees, recentPayments] = await Promise.all([
@@ -556,8 +677,22 @@ exports.getStudentFeeHistory = async (req, res) => {
     const { studentId } = req.params;
     const schoolCode = req.user.schoolCode;
     try {
-        const student = await resolveStudentByRef(studentId, schoolCode);
-        if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+        let student = null;
+        if (req.user.role === 'student') {
+            const ownership = await assertStudentOwnershipForFeeAccess(req, studentId);
+            if (!ownership.ok) return sendError(res, ownership.status, ownership.message, ownership.code);
+            student = ownership.student;
+        } else if (req.user.role === 'parent') {
+            const ownership = await assertParentOwnershipForFeeAccess(req, studentId);
+            if (!ownership.ok) return sendError(res, ownership.status, ownership.message, ownership.code);
+            student = ownership.student;
+        } else if (['principal', 'accountant', 'admin'].includes(req.user.role)) {
+            student = await resolveStudentByRef(studentId, schoolCode);
+            if (!student) return sendError(res, 404, 'Student not found', 'STUDENT_NOT_FOUND');
+        } else {
+            return sendError(res, 403, 'Access denied', 'FORBIDDEN');
+        }
+
         const [fees, paymentHistory] = await Promise.all([
             Fee.find({ studentId: student._id, schoolCode }).sort({ year: -1, month: -1 }),
             PaymentHistory.find({ studentId: student._id, schoolCode }).populate('receivedBy', 'name').sort({ createdAt: -1 })

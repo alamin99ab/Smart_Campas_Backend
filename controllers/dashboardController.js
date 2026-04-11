@@ -35,16 +35,28 @@ exports.getPrincipalDashboard = async (req, res) => {
         const totalClasses = await Class.countDocuments({ schoolCode: normalizedSchoolCode });
         const totalSubjects = await Subject.countDocuments({ schoolCode: normalizedSchoolCode });
         
-        // Get today's attendance
+        // Get today's attendance counts by status
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        
-        const attendanceToday = await Attendance.countDocuments({
-            schoolCode,
-            date: { $gte: today, $lt: tomorrow }
-        });
+
+        const attendanceStatusRows = await Attendance.aggregate([
+            { $match: { schoolCode, date: { $gte: today, $lt: tomorrow } } },
+            { $unwind: '$records' },
+            { $match: { 'records.status': { $in: ['Present', 'Absent', 'Late'] } } },
+            { $group: { _id: '$records.status', count: { $sum: 1 } } }
+        ]);
+
+        const attendanceCounts = attendanceStatusRows.reduce((acc, row) => {
+            acc[row._id] = row.count;
+            return acc;
+        }, {});
+
+        const presentToday = attendanceCounts.Present || 0;
+        const absentToday = attendanceCounts.Absent || 0;
+        const lateToday = attendanceCounts.Late || 0;
+        const attendanceToday = presentToday + absentToday + lateToday;
         
         // Get active routines count
         const activeRoutines = await require('../models/ClassRoutine').countDocuments({
@@ -61,6 +73,33 @@ exports.getPrincipalDashboard = async (req, res) => {
             { $match: { schoolCode, createdAt: { $gte: startOfMonth } } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
+
+        const startOfTrend = new Date(today.getFullYear(), today.getMonth() - 11, 1);
+        const classTrendRows = await Class.aggregate([
+            { $match: { schoolCode: normalizedSchoolCode, createdAt: { $gte: startOfTrend, $lt: tomorrow } } },
+            { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }, count: { $sum: 1 } } },
+            { $sort: { '_id.year': 1, '_id.month': 1 } }
+        ]);
+        const studentTrendRows = await User.aggregate([
+            { $match: { schoolCode, role: 'student', createdAt: { $gte: startOfTrend, $lt: tomorrow } } },
+            { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }, count: { $sum: 1 } } },
+            { $sort: { '_id.year': 1, '_id.month': 1 } }
+        ]);
+
+        const classTrendMap = new Map(classTrendRows.map((row) => [`${row._id.year}-${row._id.month}`, row.count]));
+        const studentTrendMap = new Map(studentTrendRows.map((row) => [`${row._id.year}-${row._id.month}`, row.count]));
+
+        const months = [];
+        const monthsClasses = [];
+        const monthsStudents = [];
+
+        for (let i = 11; i >= 0; i -= 1) {
+            const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+            const key = `${date.getFullYear()}-${date.getMonth() + 1}`;
+            months.push(date.toLocaleString('en-US', { month: 'short' }));
+            monthsClasses.push(classTrendMap.get(key) || 0);
+            monthsStudents.push(studentTrendMap.get(key) || 0);
+        }
         
         res.status(200).json({
             success: true,
@@ -69,10 +108,16 @@ exports.getPrincipalDashboard = async (req, res) => {
                 totalTeachers,
                 totalStudents,
                 totalSubjects,
-                attendanceToday: attendanceToday || '—',
+                attendanceToday,
+                presentToday,
+                absentToday,
+                lateToday,
                 activeRoutines: activeRoutines || 0,
                 totalNotices: totalNotices || 0,
-                feeCollected: feeCollected[0]?.total || 0
+                feeCollected: feeCollected[0]?.total || 0,
+                months,
+                monthsClasses,
+                monthsStudents
             }
         });
     } catch (error) {
@@ -115,6 +160,32 @@ exports.getTeacherDashboard = async (req, res) => {
         const assignedClasses = [...new Set(assignments.flatMap(a => a.classes || []))].length || assignments.length;
         const subjects = [...new Set(assignments.map(a => a.subjectName || a.subject))];
 
+        const subjectIds = [...new Set(assignments.map(a => String(a.subject)).filter(Boolean))];
+        const Exam = require('../models/Exam');
+        const Result = require('../models/Result');
+
+        const exams = subjectIds.length && classIds.length
+            ? await Exam.find({ schoolCode, classId: { $in: classIds }, subjectId: { $in: subjectIds }, isActive: true }).populate('classId', 'section').lean()
+            : [];
+
+        const pendingMarks = await Promise.all(
+            exams.map(async (exam) => {
+                const studentCount = await User.countDocuments({
+                    schoolCode,
+                    role: 'student',
+                    classId: exam.classId?._id || exam.classId,
+                    section: exam.classId?.section || undefined
+                });
+                const enteredCount = await Result.countDocuments({
+                    schoolCode,
+                    examId: exam._id,
+                    'subjects.subjectId': exam.subjectId
+                });
+                return Math.max(0, studentCount - enteredCount);
+            })
+        );
+        const pendingMarksCount = pendingMarks.reduce((sum, count) => sum + count, 0);
+
         // Attendance marked today (advanced attendance collection)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -134,6 +205,7 @@ exports.getTeacherDashboard = async (req, res) => {
                 assignedClasses,
                 subjects,
                 attendanceMarked: attendanceMarked || 0,
+                pendingMarks: pendingMarksCount,
                 name: teacher.name,
                 email: teacher.email,
                 assignments: enrichedAssignments
@@ -317,6 +389,50 @@ exports.getParentDashboard = async (req, res) => {
             ]
         });
 
+        let performanceTrend = [];
+        if (childIds.length > 0) {
+            const AdvancedAttendance = require('../models/AdvancedAttendance');
+            const Result = require('../models/Result');
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+
+            const trendStart = new Date(today.getFullYear(), today.getMonth() - 5, 1);
+            const trendEnd = tomorrow;
+
+            const attendanceTrendRows = await AdvancedAttendance.aggregate([
+                { $match: { schoolId, studentId: { $in: childIds }, attendanceType: 'student', date: { $gte: trendStart, $lt: trendEnd } } },
+                { $group: { _id: { year: { $year: '$date' }, month: { $month: '$date' } }, total: { $sum: 1 }, present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } } } },
+                { $sort: { '_id.year': 1, '_id.month': 1 } }
+            ]);
+
+            const resultTrendRows = await Result.aggregate([
+                { $match: { schoolCode, studentId: { $in: childIds }, isPublished: true, createdAt: { $gte: trendStart, $lt: trendEnd } } },
+                { $unwind: '$subjects' },
+                { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }, totalMarks: { $sum: '$subjects.marks' }, count: { $sum: 1 } } },
+                { $sort: { '_id.year': 1, '_id.month': 1 } }
+            ]);
+
+            const attendanceMap = new Map(attendanceTrendRows.map((row) => [`${row._id.year}-${row._id.month}`, row]));
+            const resultMap = new Map(resultTrendRows.map((row) => [`${row._id.year}-${row._id.month}`, row]));
+
+            const now = new Date();
+            for (let i = 5; i >= 0; i -= 1) {
+                const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const key = `${date.getFullYear()}-${date.getMonth() + 1}`;
+                const attendanceRow = attendanceMap.get(key) || { total: 0, present: 0 };
+                const resultRow = resultMap.get(key) || { totalMarks: 0, count: 0 };
+
+                performanceTrend.push({
+                    month: date.toLocaleString('en-US', { month: 'short' }),
+                    attendance: attendanceRow.total > 0 ? Math.round((attendanceRow.present / attendanceRow.total) * 100) : 0,
+                    marks: resultRow.count > 0 ? Number((resultRow.totalMarks / resultRow.count).toFixed(2)) : 0
+                });
+            }
+        }
+
         res.status(200).json({
             success: true,
             data: {
@@ -325,6 +441,7 @@ exports.getParentDashboard = async (req, res) => {
                 feeDue: totalFeeDue || 0,
                 notices: totalNotices || 0,
                 childrenCount: childIds.length,
+                performanceTrend,
                 name: parent?.name || req.user.name,
                 email: parent?.email || req.user.email
             }

@@ -14,6 +14,9 @@ const Result = require('../models/Result');
 const Attendance = require('../models/Attendance');
 const Routine = require('../models/Routine');
 const ClassRoutine = require('../models/ClassRoutine');
+const Assignment = require('../models/Assignment');
+const Subject = require('../models/Subject');
+const AdvancedAttendance = require('../models/AdvancedAttendance');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -755,13 +758,49 @@ exports.getWeeklyRoutine = async (req, res) => {
  */
 exports.getAttendanceSummary = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+
+        if (!studentObjectId || !schoolId) {
+            return res.status(200).json({
+                success: true,
+                message: 'Attendance summary retrieved',
+                data: {
+                    totalDays: 0,
+                    presentDays: 0,
+                    absentDays: 0,
+                    leaveDays: 0,
+                    lateDays: 0,
+                    percentage: 0
+                }
+            });
+        }
+
+        const monthlyAttendance = await AdvancedAttendance.getStudentAttendanceReport(
+            schoolId,
+            studentObjectId
+        );
+
+        const summary = (monthlyAttendance || []).reduce(
+            (acc, month) => ({
+                totalDays: acc.totalDays + (month.totalDays || 0),
+                presentDays: acc.presentDays + (month.presentDays || 0),
+                absentDays: acc.absentDays + (month.absentDays || 0),
+                leaveDays: acc.leaveDays + (month.leaveDays || 0),
+                lateDays: acc.lateDays + (month.lateDays || 0)
+            }),
+            { totalDays: 0, presentDays: 0, absentDays: 0, leaveDays: 0, lateDays: 0 }
+        );
+
+        const percentage = summary.totalDays > 0 ? Math.round((summary.presentDays / summary.totalDays) * 100) : 0;
 
         res.status(200).json({
             success: true,
             message: 'Attendance summary retrieved',
-            data: { totalDays: 0, presentDays: 0, percentage: 0 }
+            data: {
+                ...summary,
+                percentage
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -779,13 +818,56 @@ exports.getAttendanceSummary = async (req, res) => {
  */
 exports.getMonthlyAttendance = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+        const { month, year, startDate, endDate } = req.query;
+
+        if (!studentObjectId || !schoolId) {
+            return res.status(200).json({
+                success: true,
+                message: 'Monthly attendance retrieved',
+                data: { monthlyData: [], monthlyReport: [] }
+            });
+        }
+
+        let filteredStartDate = startDate;
+        let filteredEndDate = endDate;
+
+        if (month && year) {
+            const parsedMonth = Number(month);
+            const parsedYear = Number(year);
+            if (!Number.isNaN(parsedMonth) && !Number.isNaN(parsedYear)) {
+                filteredStartDate = new Date(parsedYear, parsedMonth - 1, 1).toISOString();
+                filteredEndDate = new Date(parsedYear, parsedMonth, 0, 23, 59, 59, 999).toISOString();
+            }
+        }
+
+        const monthlyAttendance = await AdvancedAttendance.getStudentAttendanceReport(
+            schoolId,
+            studentObjectId,
+            null,
+            filteredStartDate,
+            filteredEndDate
+        );
+
+        const monthlyData = (monthlyAttendance || []).map((month) => ({
+            month: month._id.month,
+            year: month._id.year,
+            totalDays: month.totalDays || 0,
+            presentDays: month.presentDays || 0,
+            absentDays: month.absentDays || 0,
+            leaveDays: month.leaveDays || 0,
+            lateDays: month.lateDays || 0,
+            percentage: month.percentage ? Math.round(month.percentage) : 0
+        }));
 
         res.status(200).json({
             success: true,
             message: 'Monthly attendance retrieved',
-            data: { monthlyData: [] }
+            data: {
+                monthlyData,
+                monthlyReport: monthlyData
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -805,13 +887,69 @@ exports.getAssignments = async (req, res) => {
     try {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section classLevel')
+            .select('classId className section studentClass');
+
+        let classId = student?.classId?._id || student?.classId || null;
+
+        const studentClassName = student?.className || student?.studentClass;
+        if (!classId && studentClassName) {
+            const classDoc = await Class.findOne({
+                schoolCode,
+                className: studentClassName,
+                section: student.section
+            }).select('_id').lean();
+            classId = classDoc?._id || null;
+        }
+
+        const query = {
+            schoolCode,
+            isActive: true,
+            ...(classId ? { classId } : {})
+        };
+
+        const assignments = await Assignment.find(query)
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('classId', 'className section')
+            .populate('teacherId', 'name')
+            .sort({ dueDate: 1 })
+            .lean();
+
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+
+        const assignmentData = assignments.map((assignment) => {
+            const submission = studentObjectId
+                ? (assignment.submissions || []).find((sub) => String(sub.studentId) === String(studentObjectId))
+                : null;
+
+            return {
+                _id: assignment._id,
+                title: assignment.title,
+                description: assignment.description,
+                dueDate: assignment.dueDate,
+                maxMarks: assignment.maxMarks,
+                class: assignment.classId,
+                subject: assignment.subjectId,
+                teacher: assignment.teacherId,
+                attachments: assignment.attachments || [],
+                instructions: assignment.instructions,
+                submitted: Boolean(submission),
+                submissionStatus: submission ? (submission.graded ? 'Graded' : 'Submitted') : 'Not submitted',
+                submittedAt: submission?.submittedAt || null,
+                marks: submission?.marks || null,
+                feedback: submission?.feedback || null,
+                isOverdue: assignment.dueDate ? assignment.dueDate < new Date() : false
+            };
+        });
 
         res.status(200).json({
             success: true,
             message: 'Assignments retrieved',
-            data: []
+            data: assignmentData
         });
     } catch (error) {
+        console.error('Error fetching student assignments:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -829,13 +967,66 @@ exports.getAssignmentDetails = async (req, res) => {
     try {
         const { id } = req.params;
         const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const assignment = await Assignment.findOne({
+            _id: id,
+            schoolCode,
+            isActive: true
+        })
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('classId', 'className section')
+            .populate('teacherId', 'name');
+
+        if (!assignment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Assignment not found'
+            });
+        }
+
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section')
+            .select('classId className section studentClass');
+
+        const studentClassId = student?.classId?._id || student?.classId || null;
+        const assignmentClassId = assignment?.classId?._id || assignment?.classId || null;
+
+        if (studentClassId && assignmentClassId && String(studentClassId) !== String(assignmentClassId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to view this assignment'
+            });
+        }
+
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+        const submission = studentObjectId
+            ? (assignment.submissions || []).find((sub) => String(sub.studentId) === String(studentObjectId))
+            : null;
 
         res.status(200).json({
             success: true,
             message: 'Assignment details retrieved',
-            data: { id, title: 'Sample Assignment' }
+            data: {
+                _id: assignment._id,
+                title: assignment.title,
+                description: assignment.description,
+                dueDate: assignment.dueDate,
+                maxMarks: assignment.maxMarks,
+                class: assignment.classId,
+                subject: assignment.subjectId,
+                teacher: assignment.teacherId,
+                attachments: assignment.attachments || [],
+                instructions: assignment.instructions,
+                submitted: Boolean(submission),
+                submissionStatus: submission ? (submission.graded ? 'Graded' : 'Submitted') : 'Not submitted',
+                submittedAt: submission?.submittedAt || null,
+                marks: submission?.marks || null,
+                feedback: submission?.feedback || null
+            }
         });
     } catch (error) {
+        console.error('Error fetching assignment details:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -852,15 +1043,87 @@ exports.getAssignmentDetails = async (req, res) => {
 exports.submitAssignment = async (req, res) => {
     try {
         const { id } = req.params;
-        const { submission } = req.body;
-        const studentId = req.user.id;
+        const { submission, attachments = [] } = req.body;
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+        const schoolCode = req.user.schoolCode;
+
+        if (!studentObjectId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Unable to resolve student identity'
+            });
+        }
+
+        if (!submission && (!Array.isArray(attachments) || attachments.length === 0)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Submission content or attachments are required'
+            });
+        }
+
+        const assignment = await Assignment.findOne({
+            _id: id,
+            schoolCode,
+            isActive: true
+        });
+
+        if (!assignment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Assignment not found'
+            });
+        }
+
+        const student = await User.findById(req.user.id)
+            .populate('classId', 'className section')
+            .select('classId className section studentClass');
+
+        const studentClassId = student?.classId?._id || student?.classId || null;
+        const assignmentClassId = assignment?.classId?._id || assignment?.classId || null;
+
+        if (studentClassId && assignmentClassId && String(studentClassId) !== String(assignmentClassId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to submit this assignment'
+            });
+        }
+
+        const existingSubmission = (assignment.submissions || []).find(
+            (sub) => String(sub.studentId) === String(studentObjectId)
+        );
+
+        if (existingSubmission) {
+            existingSubmission.content = submission || existingSubmission.content;
+            existingSubmission.attachments = Array.isArray(attachments) ? attachments : existingSubmission.attachments;
+            existingSubmission.submittedAt = new Date();
+        } else {
+            assignment.submissions.push({
+                studentId: studentObjectId,
+                content: submission || '',
+                attachments: Array.isArray(attachments) ? attachments : [],
+                submittedAt: new Date()
+            });
+        }
+
+        await assignment.save();
+
+        const savedSubmission = (assignment.submissions || []).find(
+            (sub) => String(sub.studentId) === String(studentObjectId)
+        );
 
         res.status(200).json({
             success: true,
             message: 'Assignment submitted successfully',
-            data: { assignmentId: id, submittedAt: new Date() }
+            data: {
+                assignmentId: assignment._id,
+                submittedAt: savedSubmission?.submittedAt,
+                submitted: true,
+                marks: savedSubmission?.marks || null,
+                feedback: savedSubmission?.feedback || null
+            }
         });
     } catch (error) {
+        console.error('Error submitting assignment:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -879,12 +1142,59 @@ exports.getStudyMaterials = async (req, res) => {
         const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
 
+        const student = await User.findById(studentId)
+            .populate('classId', 'className section classLevel subjects')
+            .select('classId className studentClass section');
+
+        let subjectIds = [];
+        let classLevel = student?.classId?.classLevel || null;
+
+        if (student?.classId?.subjects?.length) {
+            subjectIds = student.classId.subjects
+                .filter((s) => s.subjectId)
+                .map((s) => s.subjectId);
+        }
+
+        let subjects = [];
+
+        if (subjectIds.length) {
+            subjects = await Subject.find({
+                schoolCode,
+                isActive: true,
+                _id: { $in: subjectIds }
+            }).select('subjectName subjectCode syllabus.resources');
+        }
+
+        if (!subjects.length && classLevel) {
+            subjects = await Subject.find({
+                schoolCode,
+                isActive: true,
+                classLevels: classLevel
+            }).select('subjectName subjectCode syllabus.resources');
+        }
+
+        const materials = subjects.flatMap((subject) => {
+            const resources = (subject.syllabus?.resources || []).map((resource) => ({
+                id: resource._id,
+                title: resource.title || `${subject.subjectName} Resource`,
+                type: resource.type,
+                url: resource.url,
+                description: resource.description || '',
+                isRequired: resource.isRequired || false,
+                subjectName: subject.subjectName,
+                subjectCode: subject.subjectCode,
+                subjectId: subject._id
+            }));
+            return resources;
+        });
+
         res.status(200).json({
             success: true,
             message: 'Study materials retrieved',
-            data: []
+            data: materials
         });
     } catch (error) {
+        console.error('Error fetching study materials:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -901,14 +1211,42 @@ exports.getStudyMaterials = async (req, res) => {
 exports.downloadStudyMaterial = async (req, res) => {
     try {
         const { id } = req.params;
-        const studentId = req.user.id;
+        const schoolCode = req.user.schoolCode;
+
+        const subject = await Subject.findOne(
+            { schoolCode, 'syllabus.resources._id': id },
+            { 'syllabus.resources.$': 1, subjectName: 1, subjectCode: 1 }
+        ).lean();
+
+        if (!subject || !subject.syllabus?.resources?.length) {
+            return res.status(404).json({
+                success: false,
+                message: 'Study material not found'
+            });
+        }
+
+        const resource = subject.syllabus.resources[0];
+
+        if (!resource?.url) {
+            return res.status(404).json({
+                success: false,
+                message: 'No download URL available for this study material'
+            });
+        }
 
         res.status(200).json({
             success: true,
-            message: 'Study material download link',
-            data: { downloadUrl: `https://example.com/materials/${id}` }
+            message: 'Study material download link retrieved',
+            data: {
+                downloadUrl: resource.url,
+                title: resource.title,
+                type: resource.type,
+                subjectName: subject.subjectName,
+                subjectCode: subject.subjectCode
+            }
         });
     } catch (error) {
+        console.error('Error fetching study material download link:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -1083,20 +1421,122 @@ exports.getMyRoutine = async (req, res) => {
  */
 exports.getPerformanceAnalytics = async (req, res) => {
     try {
-        const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
 
-        const performance = {
-            overallGPA: 0,
-            subjectPerformance: [],
-            trends: []
-        };
+        if (!studentObjectId) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    overallGPA: 0,
+                    averageScore: 0,
+                    totalExams: 0,
+                    subjectPerformance: [],
+                    trends: []
+                }
+            });
+        }
+
+        const results = await Result.find({
+            schoolCode,
+            studentId: studentObjectId,
+            isPublished: true
+        })
+            .populate('subjectId', 'subjectName subjectCode')
+            .populate('examType', 'name')
+            .lean();
+
+        const totalGpa = results.reduce((sum, item) => sum + (Number(item.gpa) || 0), 0);
+        const totalExams = results.length;
+        const overallGPA = totalExams > 0 ? Number((totalGpa / totalExams).toFixed(2)) : 0;
+
+        const subjectMap = new Map();
+        let totalMarks = 0;
+        let totalSubjects = 0;
+
+        results.forEach((result) => {
+            const examDate = result.examDate ? new Date(result.examDate) : null;
+            const examMonth = examDate ? examDate.getMonth() + 1 : null;
+            const examYear = examDate ? examDate.getFullYear() : null;
+
+            (result.subjects || []).forEach((subject) => {
+                const key = String(subject.subjectId || subject.subjectName || subject.subjectName || subject._id);
+                const existing = subjectMap.get(key) || {
+                    subjectId: subject.subjectId || null,
+                    subjectName: subject.subjectName || subject.subjectName || 'Unknown',
+                    subjectCode: subject.subjectCode || null,
+                    totalMarks: 0,
+                    count: 0,
+                    gradeCounts: {}
+                };
+
+                existing.totalMarks += Number(subject.marks || 0);
+                existing.count += 1;
+
+                if (subject.grade) {
+                    existing.gradeCounts[subject.grade] = (existing.gradeCounts[subject.grade] || 0) + 1;
+                }
+
+                subjectMap.set(key, existing);
+                totalMarks += Number(subject.marks || 0);
+                totalSubjects += 1;
+            });
+        });
+
+        const subjectPerformance = Array.from(subjectMap.values()).map((item) => ({
+            subjectId: item.subjectId,
+            subjectName: item.subjectName,
+            subjectCode: item.subjectCode,
+            averageMarks: item.count > 0 ? Number((item.totalMarks / item.count).toFixed(2)) : 0,
+            examCount: item.count,
+            gradeCounts: item.gradeCounts
+        }));
+
+        const trends = [];
+        const trendMap = new Map();
+
+        results.forEach((result) => {
+            if (!result.examDate) return;
+            const examDate = new Date(result.examDate);
+            const key = `${examDate.getFullYear()}-${examDate.getMonth() + 1}`;
+            const existing = trendMap.get(key) || {
+                year: examDate.getFullYear(),
+                month: examDate.getMonth() + 1,
+                totalExams: 0,
+                totalScore: 0,
+                totalPossible: 0
+            };
+
+            existing.totalExams += 1;
+            existing.totalScore += Number(result.totalMarks || 0);
+            existing.totalPossible += (result.subjects || []).reduce((sum, sub) => sum + (Number(sub.marks || 0)), 0);
+            trendMap.set(key, existing);
+        });
+
+        trendMap.forEach((value) => {
+            trends.push({
+                year: value.year,
+                month: value.month,
+                totalExams: value.totalExams,
+                averageScore: value.totalExams > 0 ? Number((value.totalScore / value.totalExams).toFixed(2)) : 0
+            });
+        });
+
+        trends.sort((a, b) => (a.year - b.year) || (a.month - b.month));
 
         res.status(200).json({
             success: true,
-            data: performance
+            data: {
+                overallGPA,
+                averageScore: totalSubjects > 0 ? Number((totalMarks / totalSubjects).toFixed(2)) : 0,
+                totalExams,
+                subjectPerformance,
+                trends
+            }
         });
     } catch (error) {
+        console.error('Error fetching student performance analytics:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -1112,19 +1552,67 @@ exports.getPerformanceAnalytics = async (req, res) => {
  */
 exports.getSubjectPerformance = async (req, res) => {
     try {
-        const studentId = req.user.id;
         const schoolCode = req.user.schoolCode;
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
 
-        const subjectPerformance = {
-            subjects: [],
-            averageMarks: 0
-        };
+        if (!studentObjectId) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    subjects: [],
+                    averageMarks: 0
+                }
+            });
+        }
+
+        const results = await Result.find({
+            schoolCode,
+            studentId: studentObjectId,
+            isPublished: true
+        }).lean();
+
+        const subjectMap = new Map();
+        let totalMarks = 0;
+        let totalCount = 0;
+
+        results.forEach((result) => {
+            (result.subjects || []).forEach((subject) => {
+                const key = String(subject.subjectId || subject.subjectName || subject._id);
+                const existing = subjectMap.get(key) || {
+                    subjectId: subject.subjectId || null,
+                    subjectName: subject.subjectName || subject.subjectName || 'Unknown',
+                    subjectCode: subject.subjectCode || null,
+                    totalMarks: 0,
+                    count: 0
+                };
+
+                existing.totalMarks += Number(subject.marks || 0);
+                existing.count += 1;
+                subjectMap.set(key, existing);
+                totalMarks += Number(subject.marks || 0);
+                totalCount += 1;
+            });
+        });
+
+        const subjects = Array.from(subjectMap.values()).map((item) => ({
+            subjectId: item.subjectId,
+            subjectName: item.subjectName,
+            subjectCode: item.subjectCode,
+            averageMarks: item.count > 0 ? Number((item.totalMarks / item.count).toFixed(2)) : 0,
+            examCount: item.count
+        }));
+
+        const averageMarks = totalCount > 0 ? Number((totalMarks / totalCount).toFixed(2)) : 0;
 
         res.status(200).json({
             success: true,
-            data: subjectPerformance
+            data: {
+                subjects,
+                averageMarks
+            }
         });
     } catch (error) {
+        console.error('Error fetching subject performance:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -1140,19 +1628,58 @@ exports.getSubjectPerformance = async (req, res) => {
  */
 exports.getAttendanceTrend = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
+        const { startDate, endDate } = req.query;
 
-        const attendanceTrend = {
-            monthlyData: [],
-            overallPercentage: 0
-        };
+        if (!studentObjectId || !schoolId) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    monthlyData: [],
+                    overallPercentage: 0
+                }
+            });
+        }
+
+        const now = new Date();
+        const sixMonthsAgo = new Date(now);
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
+
+        const attendanceRecords = await AdvancedAttendance.getStudentAttendanceReport(
+            schoolId,
+            studentObjectId,
+            null,
+            startDate || sixMonthsAgo.toISOString(),
+            endDate || now.toISOString()
+        );
+
+        const monthlyData = (attendanceRecords || []).map((month) => ({
+            month: month._id.month,
+            year: month._id.year,
+            totalDays: month.totalDays || 0,
+            presentDays: month.presentDays || 0,
+            absentDays: month.absentDays || 0,
+            leaveDays: month.leaveDays || 0,
+            lateDays: month.lateDays || 0,
+            percentage: month.percentage ? Math.round(month.percentage) : 0
+        }));
+
+        const overallPercentage = monthlyData.length
+            ? Math.round(
+                monthlyData.reduce((acc, item) => acc + (item.percentage || 0), 0) / monthlyData.length
+              )
+            : 0;
 
         res.status(200).json({
             success: true,
-            data: attendanceTrend
+            data: {
+                monthlyData,
+                overallPercentage
+            }
         });
     } catch (error) {
+        console.error('Error fetching attendance trend:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',

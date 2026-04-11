@@ -26,7 +26,7 @@ router.use(protect);
 router.use(checkSchoolStatus);
 
 // Fee management
-router.get('/', getFees);
+router.get('/', authorize('principal', 'admin', 'accountant', 'student', 'parent'), getFees);
 router.post('/structure', authorize('principal', 'admin'), createFeeStructure);
 router.get('/structure', authorize('principal', 'admin', 'accountant'), getFeeStructures);
 router.put('/structure/:id', authorize('principal', 'admin'), updateFeeStructure);
@@ -38,8 +38,8 @@ router.get('/export', authorize('principal', 'accountant'), exportFeeReport);
 router.get('/summary-pdf', authorize('principal'), generateFeeSummaryPDF);
 
 // Student specific
-router.get('/clearance/:studentId', getClearance);
-router.get('/history/:studentId', getStudentFeeHistory);
+router.get('/clearance/:studentId', authorize('principal', 'admin', 'accountant', 'student', 'parent'), getClearance);
+router.get('/history/:studentId', authorize('principal', 'admin', 'accountant', 'student', 'parent'), getStudentFeeHistory);
 
 // Special permission (Principal only)
 router.put('/special-permission/:studentId', principalOnly, giveSpecialPermission);

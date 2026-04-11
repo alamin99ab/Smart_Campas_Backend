@@ -11,6 +11,9 @@ const School = require('../models/School');
 const Student = require('../models/Student');
 
 const normalizeSchoolCode = (code = '') => code.trim().toUpperCase();
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const PUBLIC_RESULT_SELECT =
+    'examName academicYear examDate studentClass section roll subjects totalMarks gpa publishedAt isPublished schoolCode';
 
 const gradeFromPercentage = (percentage) => {
     if (percentage >= 90) return 'A+';
@@ -131,6 +134,60 @@ const validateSchool = async (schoolCode, res) => {
     return { school, normalizedCode };
 };
 
+const parsePublicResultLookupInput = (query = {}) => {
+    const className = String(query.class || query.studentClass || '').trim();
+    const rollRaw = String(query.roll || query.rollNumber || '').trim();
+    const section = query.section ? String(query.section).trim() : null;
+    const examName = query.exam ? String(query.exam).trim() : (query.examName ? String(query.examName).trim() : null);
+    const academicYear = query.academicYear ? String(query.academicYear).trim() : (query.session ? String(query.session).trim() : null);
+
+    if (!className) {
+        return { ok: false, status: 400, code: 'CLASS_REQUIRED', message: 'class is required' };
+    }
+
+    if (className.length > 80) {
+        return { ok: false, status: 400, code: 'CLASS_INVALID', message: 'class is too long' };
+    }
+
+    const roll = Number(rollRaw);
+    if (!rollRaw || !Number.isInteger(roll) || roll <= 0 || roll > 1000000) {
+        return { ok: false, status: 400, code: 'ROLL_INVALID', message: 'roll must be a positive integer' };
+    }
+
+    if (section && section.length > 20) {
+        return { ok: false, status: 400, code: 'SECTION_INVALID', message: 'section is too long' };
+    }
+
+    if (examName && examName.length > 120) {
+        return { ok: false, status: 400, code: 'EXAM_INVALID', message: 'exam is too long' };
+    }
+
+    if (academicYear && academicYear.length > 40) {
+        return { ok: false, status: 400, code: 'ACADEMIC_YEAR_INVALID', message: 'academicYear is too long' };
+    }
+
+    return {
+        ok: true,
+        data: { className, roll, section, examName, academicYear }
+    };
+};
+
+const buildPublishedResultLookupQuery = ({ normalizedCode, className, roll, section, examName, academicYear }) => {
+    const query = {
+        schoolCode: normalizedCode,
+        studentClass: className,
+        roll,
+        isPublished: true,
+        isActive: { $ne: false }
+    };
+
+    if (section) query.section = section;
+    if (examName) query.examName = { $regex: new RegExp(`^${escapeRegex(examName)}$`, 'i') };
+    if (academicYear) query.academicYear = academicYear;
+
+    return query;
+};
+
 /**
  * @desc    Get public notices (no login required)
  * @route   GET /api/public/notices
@@ -138,7 +195,8 @@ const validateSchool = async (schoolCode, res) => {
  */
 exports.getPublicNotices = async (req, res) => {
     try {
-        const validation = await validateSchool(req.query.schoolCode, res);
+        const schoolCode = req.params.schoolCode || req.query.schoolCode;
+        const validation = await validateSchool(schoolCode, res);
         if (!validation) return;
         const { school, normalizedCode } = validation;
 
@@ -156,6 +214,7 @@ exports.getPublicNotices = async (req, res) => {
                 { isDeleted: false },
                 { status: 'active' },
                 { isPublished: true },
+                { isPublic: true },
                 { publishDate: { $lte: now } },
                 { $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] }
             ]
@@ -199,152 +258,145 @@ exports.getPublicNotices = async (req, res) => {
 };
 
 /**
+ * @desc    Get a single public notice by ID
+ * @route   GET /api/public/:schoolCode/notices/:id
+ * @access  Public
+ */
+exports.getPublicNoticeById = async (req, res) => {
+    try {
+        const schoolCode = req.params.schoolCode || req.query.schoolCode;
+        const validation = await validateSchool(schoolCode, res);
+        if (!validation) return;
+        const { normalizedCode, school } = validation;
+
+        const notice = await Notice.findOne({
+            $and: [
+                { _id: req.params.id },
+                { $or: [{ schoolCode: normalizedCode }, { schoolId: school._id }] },
+                { isDeleted: false },
+                { status: 'active' },
+                { isPublished: true },
+                { isPublic: true },
+                { publishDate: { $lte: new Date() } },
+                { $or: [{ expiryDate: null }, { expiryDate: { $gt: new Date() } }] }
+            ]
+        }).lean();
+
+        if (!notice) {
+            return res.status(404).json({
+                success: false,
+                message: 'Notice not found'
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Data fetched successfully',
+            data: formatNoticeForPublic(notice)
+        });
+    } catch (error) {
+        console.error('Error getting public notice by id:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving notice',
+            error: error.message
+        });
+    }
+};
+
+/**
  * @desc    Get public results (no login required)
  * @route   GET /api/public/results
  * @access  Public
  */
 exports.getPublicResults = async (req, res) => {
     try {
-        const validation = await validateSchool(req.query.schoolCode, res);
+        const schoolCode = req.params.schoolCode || req.query.schoolCode;
+        const validation = await validateSchool(schoolCode, res);
         if (!validation) return;
         const { normalizedCode } = validation;
-
-        const {
-            class: className,
-            section,
-            exam,
-            session,
-            academicYear,
-            rollNumber,
-            studentId,
-            page = 1,
-            limit = 50
-        } = req.query;
-
-        // Student-specific lookup (secure path)
-        if (rollNumber || studentId) {
-            return handleStudentResultLookup({
-                normalizedCode,
-                rollNumber,
-                studentId,
-                className,
-                section,
-                exam,
-                academicYear: academicYear || session,
-                res
+        const parsed = parsePublicResultLookupInput(req.query);
+        if (!parsed.ok) {
+            return res.status(parsed.status).json({
+                success: false,
+                code: parsed.code,
+                message: parsed.message
             });
         }
 
-        const safeLimit = Math.min(parseInt(limit, 10) || 50, 200);
-        const safePage = Math.max(parseInt(page, 10) || 1, 1);
-
-        const query = {
-            schoolCode: normalizedCode,
-            isPublished: true,
-            isActive: { $ne: false }
-        };
-
-        if (className) query.studentClass = className;
-        if (section) query.section = section;
-        if (academicYear || session) query.academicYear = academicYear || session;
-        if (exam) query.examName = { $regex: exam, $options: 'i' };
+        const { className, roll, section, examName, academicYear } = parsed.data;
+        const query = buildPublishedResultLookupQuery({
+            normalizedCode,
+            className,
+            roll,
+            section,
+            examName,
+            academicYear
+        });
 
         const results = await Result.find(query)
             .sort({ publishedAt: -1, examDate: -1 })
-            .skip((safePage - 1) * safeLimit)
-            .limit(safeLimit)
-            .select('examName academicYear examDate studentClass section roll totalMarks gpa publishedAt isPublished schoolCode')
+            .select(PUBLIC_RESULT_SELECT)
             .lean();
 
-        const total = await Result.countDocuments(query);
+        if (!results.length) {
+            return res.status(404).json({
+                success: false,
+                code: 'RESULT_NOT_FOUND',
+                message: 'No published result found for this class and roll'
+            });
+        }
 
-        res.status(200).json({
+        const safeResults = results.map((result) => ({
+            examName: result.examName,
+            academicYear: result.academicYear,
+            examDate: result.examDate,
+            publishedAt: result.publishedAt,
+            class: result.studentClass,
+            section: result.section || null,
+            roll: result.roll,
+            subjects: (result.subjects || []).map((subject) => ({
+                subjectName: subject.subjectName,
+                marks: subject.marks,
+                grade: subject.grade
+            })),
+            totalMarks: result.totalMarks,
+            gpa: result.gpa
+        }));
+
+        return res.status(200).json({
             success: true,
-            message: 'Data fetched successfully',
-            data: results.map(formatResultSummary),
-            pagination: {
-                page: safePage,
-                limit: safeLimit,
-                total,
-                pages: Math.ceil(total / safeLimit)
+            code: 'PUBLIC_RESULTS_FOUND',
+            message: 'Published result fetched successfully',
+            data: {
+                schoolCode: normalizedCode,
+                lookup: {
+                    class: className,
+                    roll,
+                    section: section || null
+                },
+                totalResults: safeResults.length,
+                results: safeResults
             }
         });
     } catch (error) {
-        console.error('Error getting public results:', error);
+        console.error('Error searching public result:', error);
         res.status(500).json({
             success: false,
-            message: 'Error retrieving results',
+            code: 'PUBLIC_RESULT_SEARCH_FAILED',
+            message: 'Error retrieving result',
             error: error.message
         });
     }
 };
 
-const handleStudentResultLookup = async ({
-    normalizedCode,
-    rollNumber,
-    studentId,
-    className,
-    section,
-    exam,
-    academicYear,
-    res
-}) => {
-    try {
-        const studentQuery = { schoolCode: normalizedCode, isActive: true };
-        if (studentId) {
-            studentQuery._id = studentId;
-        } else if (rollNumber) {
-            studentQuery.roll = rollNumber;
-        }
-
-        const student = await Student.findOne(studentQuery).lean();
-
-        if (!student) {
-            return res.status(404).json({
-                success: false,
-                message: 'Student not found for this school'
-            });
-        }
-
-        const resultQuery = {
-            schoolCode: normalizedCode,
-            studentId: student._id,
-            isPublished: true,
-            isActive: { $ne: false }
-        };
-
-        if (className) resultQuery.studentClass = className;
-        if (section) resultQuery.section = section;
-        if (academicYear) resultQuery.academicYear = academicYear;
-        if (exam) resultQuery.examName = { $regex: exam, $options: 'i' };
-
-        const results = await Result.find(resultQuery)
-            .sort({ examDate: -1 })
-            .lean();
-
-        return res.status(200).json({
-            success: true,
-            message: 'Data fetched successfully',
-            data: {
-                student: {
-                    id: student._id,
-                    name: student.name,
-                    rollNumber: student.roll,
-                    class: student.studentClass,
-                    section: student.section
-                },
-                results: results.map(formatResultDetail),
-                summary: summarizeResults(results)
-            }
-        });
-    } catch (error) {
-        console.error('Error in student result lookup:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Error retrieving result',
-            error: error.message
-        });
-    }
+/**
+ * @desc    Search public published result by school/class/roll
+ * @route   GET /api/public/:schoolCode/results/search
+ * @access  Public
+ */
+exports.searchPublicResults = async (req, res) => {
+    return exports.getPublicResults(req, res);
 };
 
 /**
@@ -354,6 +406,7 @@ const handleStudentResultLookup = async ({
  */
 exports.getResultByRollNumber = async (req, res) => {
     req.query.rollNumber = req.params.rollNumber;
+    req.query.roll = req.params.rollNumber;
     return exports.getPublicResults(req, res);
 };
 
@@ -423,6 +476,7 @@ exports.getPublicDashboard = async (req, res) => {
         const notices = await Notice.find({
             schoolCode: normalizedCode,
             isPublished: true,
+            isPublic: true,
             status: 'active',
             isDeleted: false,
             publishDate: { $lte: now },

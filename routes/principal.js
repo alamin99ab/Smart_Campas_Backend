@@ -108,6 +108,11 @@ router.post('/teachers/:id/reset-password', principalController.resetTeacherPass
 
 router.post('/students', principalController.createStudent);
 router.get('/students', principalController.getStudents);
+router.get('/students/:id/profile', principalController.getStudentFullProfile);
+router.get('/students/:id/export/profile-pdf', principalController.downloadStudentProfilePDF);
+router.get('/students/:id/export/result-pdf', principalController.downloadStudentResultPDF);
+router.get('/students/:id/export/fee-pdf', principalController.downloadStudentFeePDF);
+router.get('/students/:id/export/attendance-pdf', principalController.downloadStudentAttendancePDF);
 router.put('/students/:id', principalController.updateStudent);
 router.delete('/students/:id', principalController.deleteStudent);
 router.post('/students/bulk-import', principalController.bulkImportStudents);

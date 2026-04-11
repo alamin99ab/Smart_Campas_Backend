@@ -134,7 +134,8 @@ exports.createNotice = async (req, res) => {
             acknowledgmentDeadline,
             allowComments,
             isPinned,
-            pinOrder
+            pinOrder,
+            isPublic
         } = req.body;
 
         // Validation
@@ -169,6 +170,14 @@ exports.createNotice = async (req, res) => {
             const tenantSchoolCode = req.tenant?.schoolCode || req.user?.schoolCode;
             schoolId = tenantSchoolId;
             schoolCode = tenantSchoolCode ? tenantSchoolCode.toUpperCase() : null;
+        }
+
+        if (isPublic && isGlobal) {
+            return res.status(400).json({
+                success: false,
+                code: 'NOTICE_PUBLIC_GLOBAL_FORBIDDEN',
+                message: 'Public website notices must be school isolated and cannot be global.'
+            });
         }
 
         if (!isGlobal && !schoolId) {
@@ -235,6 +244,7 @@ exports.createNotice = async (req, res) => {
             pinOrder: pinOrder || 0,
             status,
             isPublished: publishNow,
+            isPublic: !!isPublic,
             publishedAt: publishNow ? new Date() : null,
             createdBy: creatorId
         });
@@ -444,6 +454,7 @@ exports.updateNotice = async (req, res) => {
             publishDate,
             status,
             isPublished,
+            isPublic,
             isActive
         } = req.body;
 
@@ -494,6 +505,7 @@ exports.updateNotice = async (req, res) => {
         if (publishDate !== undefined) notice.publishDate = publishDate ? new Date(publishDate) : notice.publishDate;
         if (status) notice.status = status;
         if (isPublished !== undefined) notice.isPublished = !!isPublished;
+        if (isPublic !== undefined) notice.isPublic = !!isPublic;
 
         if (isActive !== undefined) {
             if (isActive) {
