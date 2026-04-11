@@ -91,14 +91,28 @@ const toObjectId = (value) => {
     return isValidObjectId(value) ? new mongoose.Types.ObjectId(String(value)) : null;
 };
 
+const toIdMatchCandidates = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return [];
+
+    const candidates = [raw];
+    if (mongoose.Types.ObjectId.isValid(raw)) {
+        candidates.push(new mongoose.Types.ObjectId(raw));
+    }
+
+    return candidates;
+};
+
 const findTeacherAssignment = async (teacherId, schoolCode, classId, subjectId) => {
     if (!teacherId || !classId || !subjectId) return null;
+    const classCandidates = toIdMatchCandidates(classId);
+    const subjectCandidates = toIdMatchCandidates(subjectId);
     return await TeacherAssignment.findOne({
         teacher: teacherId,
         schoolCode,
         isActive: true,
-        classes: classId,
-        subject: subjectId
+        classes: { $in: classCandidates },
+        subject: { $in: subjectCandidates }
     }).lean();
 };
 
@@ -1261,7 +1275,9 @@ const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentI
     }
 
     await result.save();
-    return await result.populate('studentId', 'name roll').populate('examId', 'name date');
+    await result.populate('studentId', 'name roll');
+    await result.populate('examId', 'name date');
+    return result;
 };
 
 /**
@@ -1725,20 +1741,60 @@ exports.getStudentsForMarks = async (req, res) => {
             return res.status(403).json({ success: false, message: 'You are not authorized to view students for this class' });
         }
 
-        const queryClassIds = classId ? [classId] : assignedClassIds;
-        const StudentModel = require('../models/Student');
+        const queryClassIds = classId ? [String(classId)] : assignedClassIds;
+        const classDocs = await Class.find({
+            schoolCode,
+            _id: { $in: queryClassIds }
+        })
+            .select('className section')
+            .lean();
+
+        if (!classDocs.length) {
+            return res.status(200).json({ success: true, data: { students: [], totalStudents: 0 } });
+        }
+
+        const scopes = classDocs
+            .filter((cls) => cls.className)
+            .map((cls) => ({
+                className: String(cls.className).trim(),
+                section: cls.section ? String(cls.section).trim().toUpperCase() : null
+            }));
+
+        if (!scopes.length) {
+            return res.status(200).json({ success: true, data: { students: [], totalStudents: 0 } });
+        }
+
         const studentFilter = {
             schoolCode,
             isActive: true,
-            classId: { $in: queryClassIds }
+            $or: scopes.map((scope) => ({
+                studentClass: scope.className,
+                ...(scope.section ? { section: scope.section } : {})
+            }))
         };
-        if (sectionId) {
-            studentFilter.section = sectionId;
-        }
 
-        const students = await StudentModel.find(studentFilter)
+        let students = await Student.find(studentFilter)
             .select('name roll section studentClass')
             .lean();
+
+        if (sectionId) {
+            const sectionRaw = String(sectionId).trim();
+            if (sectionRaw) {
+                const sectionMatches = new Set([sectionRaw.toUpperCase()]);
+                if (isValidObjectId(sectionRaw)) {
+                    const Section = require('../models/Section');
+                    const sectionDoc = await Section.findById(sectionRaw).select('name sectionName').lean();
+                    if (sectionDoc) {
+                        if (sectionDoc.name) sectionMatches.add(String(sectionDoc.name).trim().toUpperCase());
+                        if (sectionDoc.sectionName) sectionMatches.add(String(sectionDoc.sectionName).trim().toUpperCase());
+                    }
+                }
+
+                students = students.filter((student) =>
+                    sectionMatches.has(String(student.section || '').trim().toUpperCase())
+                );
+            }
+        }
 
         const mapped = students.map((student) => ({
             _id: String(student._id),

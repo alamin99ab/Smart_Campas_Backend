@@ -739,9 +739,9 @@ async function seedTestData() {
                     _id: objectId(),
                     schoolCode,
                     teacher: teacherInfo.user._id,
-                    subject: String(subjectDoc._id),
+                    subject: subjectDoc._id,
                     subjectName: subjectDoc.subjectName,
-                    classes: classDocsForLevel.map((classDoc) => String(classDoc._id)),
+                    classes: classDocsForLevel.map((classDoc) => classDoc._id),
                     sections: classDocsForLevel.map((classDoc) => classDoc.section),
                     periodsPerWeek: subjectDoc.periodsPerWeek,
                     academicYear,
@@ -793,6 +793,13 @@ async function seedTestData() {
                 startOffsetDays: 45,
                 endOffsetDays: 52,
                 scheduleLevel: 9
+            },
+            {
+                name: 'Class Quiz 1',
+                examType: 'Quiz',
+                startOffsetDays: 3,
+                endOffsetDays: 3,
+                scheduleLevel: 8
             }
         ];
 
