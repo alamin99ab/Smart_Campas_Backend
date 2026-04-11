@@ -16,6 +16,10 @@ const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
+const {
+    findTemporarySubstitutePermission,
+    markSubstituteSlotCompleted
+} = require('./teacherAbsenceController');
 
 /**
  * Ensure there is an active academic session for the current school.
@@ -106,6 +110,7 @@ exports.markStudentAttendance = async (req, res) => {
 
         const { schoolId, schoolCode } = tenant;
         const teacherId = req.user.id;
+        const isPrivilegedAttendanceActor = ['principal', 'admin', 'super_admin'].includes(req.user.role);
         const parsedDate = new Date(date);
         if (Number.isNaN(parsedDate.getTime())) {
             return res.status(400).json({
@@ -171,8 +176,21 @@ exports.markStudentAttendance = async (req, res) => {
         ]);
 
         const hasAssignment = matchingAssignments.length > 0;
+        let substitutePermission = null;
 
-        if (!hasAssignment) {
+        if (!hasAssignment && req.user.role === 'teacher') {
+            substitutePermission = await findTemporarySubstitutePermission({
+                schoolCode,
+                teacherId,
+                classId,
+                subjectId,
+                section: sectionName || classInfo.section,
+                periodNumber: normalizedPeriod,
+                date: parsedDate
+            });
+        }
+
+        if (!hasAssignment && !substitutePermission && !isPrivilegedAttendanceActor) {
             // Debug logging for troubleshooting
             if (process.env.NODE_ENV !== 'production') {
                 console.log('Teacher assignment check failed:', {
@@ -184,14 +202,21 @@ exports.markStudentAttendance = async (req, res) => {
                         teacher: teacherId,
                         schoolCode,
                         isActive: true
-                    }).select('subject classes subjectName').lean()
+                    }).select('subject classes subjectName').lean(),
+                    substitutePermissionFound: Boolean(substitutePermission)
                 });
             }
             return res.status(403).json({
                 success: false,
-                message: 'You are not assigned to teach this class/subject combination'
+                message: 'You are not assigned to teach this class/subject combination and no active substitute permission exists'
             });
         }
+
+        const markerRole = substitutePermission
+            ? 'substitute_teacher'
+            : isPrivilegedAttendanceActor
+                ? req.user.role
+                : 'teacher';
 
         // Get or create current academic session to satisfy schema requirement
         const academicSession = await ensureActiveAcademicSession(schoolId, schoolCode, teacherId);
@@ -234,6 +259,8 @@ exports.markStudentAttendance = async (req, res) => {
                 existingAttendance.notes = notes;
                 existingAttendance.lateMinutes = lateMinutes;
                 existingAttendance.isLate = status === 'present' && lateMinutes > 0;
+                existingAttendance.markedBy = teacherId;
+                existingAttendance.markedByRole = markerRole;
                 if (sectionName && !sectionObjectId) {
                     existingAttendance.section = sectionName;
                 }
@@ -258,7 +285,7 @@ exports.markStudentAttendance = async (req, res) => {
                     lateMinutes,
                     isLate: status === 'present' && lateMinutes > 0,
                     markedBy: teacherId,
-                    markedByRole: 'teacher',
+                    markedByRole: markerRole,
                     markingMethod: 'manual'
                 });
 
@@ -297,7 +324,19 @@ exports.markStudentAttendance = async (req, res) => {
                 classId,
                 sectionId,
                 subjectId,
+                periodNumber: normalizedPeriod,
                 date,
+                authorizationMode: substitutePermission
+                    ? 'temporary_substitute_permission'
+                    : hasAssignment
+                        ? 'regular_teacher_assignment'
+                        : 'privileged_role_override',
+                substitutePermission: substitutePermission
+                    ? {
+                        requestId: substitutePermission.requestId,
+                        slotId: substitutePermission.slotId
+                    }
+                    : null,
                 totalStudents: attendanceData.length,
                 present: attendanceData.filter(a => a.status === 'present').length,
                 absent: attendanceData.filter(a => a.status === 'absent').length
@@ -305,6 +344,19 @@ exports.markStudentAttendance = async (req, res) => {
             ip: req.ip,
             userAgent: req.get('User-Agent')
         });
+
+        if (substitutePermission) {
+            try {
+                await markSubstituteSlotCompleted({
+                    requestId: substitutePermission.requestId,
+                    slotId: substitutePermission.slotId,
+                    markerId: teacherId,
+                    attendanceRecordId: markedAttendances[0]?._id
+                });
+            } catch (substituteUpdateError) {
+                console.warn('Substitute slot completion update failed:', substituteUpdateError.message);
+            }
+        }
 
         res.status(201).json({
             success: true,

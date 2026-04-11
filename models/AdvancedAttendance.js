@@ -145,7 +145,7 @@ const advancedAttendanceSchema = new mongoose.Schema({
     },
     markedByRole: {
         type: String,
-        enum: ['teacher', 'principal', 'admin', 'self', 'system'],
+        enum: ['teacher', 'substitute_teacher', 'principal', 'admin', 'self', 'system'],
         required: true
     },
     markingMethod: {

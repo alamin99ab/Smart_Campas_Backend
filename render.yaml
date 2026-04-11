@@ -29,6 +29,10 @@ services:
         value: 7d
       - key: JWT_REFRESH_EXPIRE
         value: 30d
+      - key: AUTH_LOGIN_RATE_LIMIT_WINDOW_MS
+        value: 300000
+      - key: AUTH_LOGIN_RATE_LIMIT_MAX
+        value: 10
       - key: BCRYPT_ROUNDS
         value: 12
       - key: SESSION_SECRET

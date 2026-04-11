@@ -24,6 +24,8 @@ router.get('/notices', getPublicNotices);
 router.get('/notices/latest', getLatestPublicNotices);
 
 // Public Result Routes (No Login Required)
+router.get('/:schoolCode/results', getPublicResults);
+router.get('/:schoolCode/results/lookup', getPublicResults);
 router.get('/:schoolCode/results/search', searchPublicResults);
 router.get('/:schoolCode/result/:rollNumber', getResultByRollNumber);
 router.get('/results', getPublicResults);

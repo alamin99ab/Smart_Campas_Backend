@@ -44,7 +44,12 @@ const studentSchema = new mongoose.Schema({
         promotedTo: { type: String },
         promotedToSection: { type: String },
         examName: { type: String },
-        promotionType: { type: String, enum: ['all', 'passing', 'manual'] }
+        promotionType: { type: String, enum: ['all', 'passing', 'manual'] },
+        manualApproval: { type: Boolean, default: false },
+        manualApprovalReason: { type: String, trim: true },
+        manualApprovalCategory: { type: String, enum: ['failed', 'incomplete'] },
+        manualApprovalBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        manualApprovalAt: { type: Date }
     }],
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }

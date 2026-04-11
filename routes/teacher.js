@@ -20,6 +20,13 @@ const {
     respondToSubstituteAssignment,
     getMySubstituteAssignments
 } = require('../controllers/leaveController');
+const {
+    submitAbsenceRequest,
+    getMyAbsenceRequests,
+    getOpenAbsenceRequests,
+    acceptAbsenceSlot,
+    getMySubstituteAssignments: getMyTemporarySubstituteAssignments
+} = require('../controllers/teacherAbsenceController');
 const resultController = require('../controllers/resultController');
 const { getMyAssignments } = require('../controllers/teacherAssignmentController');
 
@@ -50,6 +57,13 @@ router.post('/attendance/self', checkFeatureAccess('attendance'), teacherAttenda
 router.get('/attendance/my-report', getTeacherAttendanceReport);
 router.get('/attendance/class/:classId/:sectionId/:date', getClassAttendanceReport);
 router.get('/attendance/student/:studentId/report', getStudentAttendanceReport);
+
+// Temporary absence/substitute attendance workflow
+router.post('/absence-requests', submitAbsenceRequest);
+router.get('/absence-requests/mine', getMyAbsenceRequests);
+router.get('/absence-requests/open', getOpenAbsenceRequests);
+router.patch('/absence-requests/:requestId/slots/:slotId/accept', acceptAbsenceSlot);
+router.get('/substitute-assignments', getMyTemporarySubstituteAssignments);
 
 /**
  * 👨‍🏫 Step 10: Enter Marks

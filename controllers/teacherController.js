@@ -15,6 +15,10 @@ const Notice = require('../models/Notice');
 const AuditLog = require('../models/AuditLog');
 const Routine = require('../models/Routine');
 const TeacherAssignment = require('../models/TeacherAssignment');
+const TeacherAbsenceRequest = require('../models/TeacherAbsenceRequest');
+const { findTemporarySubstitutePermission } = require('./teacherAbsenceController');
+
+const normalizeSection = (value) => String(value || '').trim().toUpperCase();
 
 /**
  * @desc    Get teacher's assigned classes and subjects
@@ -639,16 +643,6 @@ exports.getMyClasses = async (req, res) => {
             .populate('subject', 'subjectName subjectCode')
             .lean();
 
-        if (!assignments || assignments.length === 0) {
-            return res.status(200).json({
-                success: true,
-                data: {
-                    classes: [],
-                    totalClasses: 0
-                }
-            });
-        }
-
         const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
         const Class = require('../models/Class');
         const classDocs = classIds.length > 0
@@ -694,6 +688,56 @@ exports.getMyClasses = async (req, res) => {
                 // Add assignment ID
                 if (!classEntry.assignments.includes(String(assignment._id))) {
                     classEntry.assignments.push(String(assignment._id));
+                }
+            });
+        });
+
+        // Include temporary substitute slots as class-subject options for attendance workflow.
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - 1);
+        fromDate.setHours(0, 0, 0, 0);
+
+        const substituteRequests = await TeacherAbsenceRequest.find({
+            schoolCode,
+            absenceDate: { $gte: fromDate },
+            slots: {
+                $elemMatch: {
+                    substituteTeacherId: teacherId,
+                    status: { $in: ['accepted', 'assigned', 'completed'] }
+                }
+            }
+        })
+            .select('slots')
+            .lean();
+
+        substituteRequests.forEach((request) => {
+            (request.slots || []).forEach((slot) => {
+                if (String(slot.substituteTeacherId || '') !== String(teacherId)) return;
+                if (!['accepted', 'assigned', 'completed'].includes(slot.status)) return;
+
+                const classIdStr = String(slot.classId);
+                if (!classesMap.has(classIdStr)) {
+                    classesMap.set(classIdStr, {
+                        classId: classIdStr,
+                        className: slot.className || 'Class',
+                        section: normalizeSection(slot.section) || 'A',
+                        subjects: [],
+                        assignments: []
+                    });
+                }
+
+                const classEntry = classesMap.get(classIdStr);
+                if (!classEntry.subjects.some((subject) => String(subject.subjectId) === String(slot.subjectId))) {
+                    classEntry.subjects.push({
+                        subjectId: slot.subjectId,
+                        subjectName: slot.subjectName || 'Unknown Subject',
+                        temporarySubstitute: true
+                    });
+                }
+
+                const tempAssignmentId = `temporary:${request._id}:${slot._id}`;
+                if (!classEntry.assignments.includes(tempAssignmentId)) {
+                    classEntry.assignments.push(tempAssignmentId);
                 }
             });
         });
@@ -842,16 +886,42 @@ exports.getMyStudents = async (req, res) => {
         const schoolCode = req.user.schoolCode;
         const requestedClassId = req.query.classId;
         const requestedSection = req.query.sectionId;
+        const requestedSubjectId = req.query.subjectId;
+        const requestedDate = req.query.date;
+        const requestedPeriodNumber = Number(req.query.periodNumber || 1);
 
         const assignments = await require('../models/TeacherAssignment')
             .find({ teacher: teacherId, schoolCode, isActive: true })
             .lean();
 
-        if (requestedClassId && !assignments.some(a => a.classes?.some(c => String(c) === String(requestedClassId)))) {
-            return res.status(403).json({
-                success: false,
-                message: 'You are not authorized to view students for this class'
+        const hasRegularClassAssignment = requestedClassId
+            ? assignments.some((assignment) => assignment.classes?.some((classId) => String(classId) === String(requestedClassId)))
+            : false;
+
+        if (requestedClassId && !hasRegularClassAssignment) {
+            if (!requestedSubjectId || !requestedDate) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You are not authorized to view students for this class'
+                });
+            }
+
+            const substitutePermission = await findTemporarySubstitutePermission({
+                schoolCode,
+                teacherId,
+                classId: requestedClassId,
+                subjectId: requestedSubjectId,
+                section: requestedSection,
+                periodNumber: requestedPeriodNumber,
+                date: requestedDate
             });
+
+            if (!substitutePermission) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You are not authorized to view students for this class'
+                });
+            }
         }
 
         const queryClassIds = requestedClassId

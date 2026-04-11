@@ -3,13 +3,29 @@ const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
 
+const getClientIp = (req) => {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+        return forwardedFor.split(',')[0].trim();
+    }
+    return req.ip || req.socket?.remoteAddress || 'unknown-ip';
+};
+
+const getNormalizedEmail = (req) => {
+    const value = req.body?.email;
+    if (typeof value !== 'string') return 'unknown-email';
+    return value.trim().toLowerCase() || 'unknown-email';
+};
+
 const loginRateLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000,
-    max: 10,
+    windowMs: Number(process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW_MS || (5 * 60 * 1000)),
+    max: Number(process.env.AUTH_LOGIN_RATE_LIMIT_MAX || 10),
+    skipSuccessfulRequests: true,
+    keyGenerator: (req) => `${getClientIp(req)}:${getNormalizedEmail(req)}`,
     message: {
         success: false,
         code: 'TOO_MANY_REQUESTS',
-        message: 'Too many login attempts from this IP, please try again after 5 minutes.'
+        message: 'Too many failed login attempts. Please try again after 5 minutes.'
     },
     standardHeaders: true,
     legacyHeaders: false

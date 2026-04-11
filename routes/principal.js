@@ -31,6 +31,10 @@ const {
     getLeaveStatistics
 } = require('../controllers/leaveController');
 const {
+    getSchoolAbsenceRequests,
+    assignSubstituteSlot
+} = require('../controllers/teacherAbsenceController');
+const {
     markStudentAttendance,
     getStudentAttendanceReport,
     getClassAttendanceReport,
@@ -157,6 +161,8 @@ router.patch('/substitute/leave/:id/approve', approveLeave);
 router.get('/substitute/available-teachers', getAvailableSubstitutes);
 router.get('/substitute/my-assignments', getMySubstituteAssignments);
 router.get('/substitute/statistics', getLeaveStatistics);
+router.get('/absence-requests', getSchoolAbsenceRequests);
+router.patch('/absence-requests/:requestId/slots/:slotId/assign', assignSubstituteSlot);
 
 // Attendance Management
 router.post('/attendance/student/mark', checkFeatureAccess('attendance'), markStudentAttendance);

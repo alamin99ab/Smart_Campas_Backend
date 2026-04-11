@@ -13,6 +13,7 @@ router.use(protect);
 
 // Principal and Super Admin only
 router.get('/eligible', authorize('principal', 'super_admin'), promotionController.getEligibleStudents);
+router.get('/final-exams', authorize('principal', 'super_admin'), promotionController.getFinalExamSessions);
 router.post('/run', authorize('principal', 'super_admin'), promotionController.runPromotion);
 router.get('/history', authorize('principal', 'super_admin'), promotionController.getPromotionHistory);
 router.get('/classes', authorize('principal', 'super_admin'), promotionController.getPromotionClasses);

@@ -405,9 +405,92 @@ exports.searchPublicResults = async (req, res) => {
  * @access  Public
  */
 exports.getResultByRollNumber = async (req, res) => {
-    req.query.rollNumber = req.params.rollNumber;
-    req.query.roll = req.params.rollNumber;
-    return exports.getPublicResults(req, res);
+    try {
+        const schoolCode = req.params.schoolCode || req.query.schoolCode;
+        const validation = await validateSchool(schoolCode, res);
+        if (!validation) return;
+        const { normalizedCode } = validation;
+
+        const roll = Number(String(req.params.rollNumber || req.query.roll || '').trim());
+        if (!Number.isInteger(roll) || roll <= 0 || roll > 1000000) {
+            return res.status(400).json({
+                success: false,
+                code: 'ROLL_INVALID',
+                message: 'rollNumber must be a positive integer'
+            });
+        }
+
+        const className = String(req.query.class || req.query.studentClass || '').trim();
+        const section = String(req.query.section || '').trim();
+        const examName = String(req.query.exam || req.query.examName || '').trim();
+        const academicYear = String(req.query.academicYear || req.query.session || '').trim();
+
+        const query = {
+            schoolCode: normalizedCode,
+            roll,
+            isPublished: true,
+            isActive: { $ne: false }
+        };
+
+        if (className) query.studentClass = className;
+        if (section) query.section = section;
+        if (examName) query.examName = { $regex: new RegExp(`^${escapeRegex(examName)}$`, 'i') };
+        if (academicYear) query.academicYear = academicYear;
+
+        const results = await Result.find(query)
+            .sort({ publishedAt: -1, examDate: -1 })
+            .select(PUBLIC_RESULT_SELECT)
+            .lean();
+
+        if (!results.length) {
+            return res.status(404).json({
+                success: false,
+                code: 'RESULT_NOT_FOUND',
+                message: 'No published result found for this roll number'
+            });
+        }
+
+        const safeResults = results.map((result) => ({
+            examName: result.examName,
+            academicYear: result.academicYear,
+            examDate: result.examDate,
+            publishedAt: result.publishedAt,
+            class: result.studentClass,
+            section: result.section || null,
+            roll: result.roll,
+            subjects: (result.subjects || []).map((subject) => ({
+                subjectName: subject.subjectName,
+                marks: subject.marks,
+                grade: subject.grade
+            })),
+            totalMarks: result.totalMarks,
+            gpa: result.gpa
+        }));
+
+        return res.status(200).json({
+            success: true,
+            code: 'PUBLIC_RESULT_BY_ROLL_FOUND',
+            message: 'Published result fetched successfully',
+            data: {
+                schoolCode: normalizedCode,
+                lookup: {
+                    roll,
+                    class: className || null,
+                    section: section || null
+                },
+                totalResults: safeResults.length,
+                results: safeResults
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching public result by roll number:', error);
+        return res.status(500).json({
+            success: false,
+            code: 'PUBLIC_RESULT_BY_ROLL_FAILED',
+            message: 'Error retrieving result by roll number',
+            error: error.message
+        });
+    }
 };
 
 /**
