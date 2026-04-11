@@ -1422,7 +1422,6 @@ exports.getMyRoutine = async (req, res) => {
 exports.getPerformanceAnalytics = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
-        const schoolId = req.tenant?.schoolId || req.user.schoolId;
         const studentObjectId = await resolveStudentObjectIdFromUser(req.user) || req.user.studentId || null;
 
         if (!studentObjectId) {
@@ -1443,8 +1442,7 @@ exports.getPerformanceAnalytics = async (req, res) => {
             studentId: studentObjectId,
             isPublished: true
         })
-            .populate('subjectId', 'subjectName subjectCode')
-            .populate('examType', 'name')
+            .populate('subjects.subjectId', 'subjectName subjectCode')
             .lean();
 
         const totalGpa = results.reduce((sum, item) => sum + (Number(item.gpa) || 0), 0);
@@ -1456,16 +1454,18 @@ exports.getPerformanceAnalytics = async (req, res) => {
         let totalSubjects = 0;
 
         results.forEach((result) => {
-            const examDate = result.examDate ? new Date(result.examDate) : null;
-            const examMonth = examDate ? examDate.getMonth() + 1 : null;
-            const examYear = examDate ? examDate.getFullYear() : null;
-
             (result.subjects || []).forEach((subject) => {
-                const key = String(subject.subjectId || subject.subjectName || subject.subjectName || subject._id);
+                const populatedSubject = subject?.subjectId && typeof subject.subjectId === 'object'
+                    ? subject.subjectId
+                    : null;
+                const normalizedSubjectId = populatedSubject?._id || subject.subjectId || null;
+                const normalizedSubjectName = subject.subjectName || populatedSubject?.subjectName || 'Unknown';
+                const normalizedSubjectCode = subject.subjectCode || populatedSubject?.subjectCode || null;
+                const key = String(normalizedSubjectId || `${normalizedSubjectName}:${normalizedSubjectCode || ''}`);
                 const existing = subjectMap.get(key) || {
-                    subjectId: subject.subjectId || null,
-                    subjectName: subject.subjectName || subject.subjectName || 'Unknown',
-                    subjectCode: subject.subjectCode || null,
+                    subjectId: normalizedSubjectId,
+                    subjectName: normalizedSubjectName,
+                    subjectCode: normalizedSubjectCode,
                     totalMarks: 0,
                     count: 0,
                     gradeCounts: {}
@@ -1491,7 +1491,8 @@ exports.getPerformanceAnalytics = async (req, res) => {
             averageMarks: item.count > 0 ? Number((item.totalMarks / item.count).toFixed(2)) : 0,
             examCount: item.count,
             gradeCounts: item.gradeCounts
-        }));
+        }))
+            .sort((a, b) => String(a.subjectName || '').localeCompare(String(b.subjectName || '')));
 
         const trends = [];
         const trendMap = new Map();

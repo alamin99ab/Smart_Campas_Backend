@@ -13,6 +13,8 @@ const Attendance = require('../models/Attendance');
 const Result = require('../models/Result');
 const Notice = require('../models/Notice');
 const AuditLog = require('../models/AuditLog');
+const Routine = require('../models/Routine');
+const TeacherAssignment = require('../models/TeacherAssignment');
 
 /**
  * @desc    Get teacher's assigned classes and subjects
@@ -28,91 +30,111 @@ exports.getTeacherDashboard = async (req, res) => {
         const isSuperAdmin = req.user.role === 'super_admin';
         const filter = isSuperAdmin ? {} : { schoolCode };
 
+        // Teacher assignment data is mandatory for a usable dashboard.
+        const assignments = await TeacherAssignment.find({
+            teacher: teacherId,
+            ...filter,
+            isActive: true
+        })
+        .populate('subject', 'subjectName subjectCode')
+        .populate('classes', 'className section classLevel')
+        .lean();
+
         let assignedSubjects = [];
         let assignedClasses = [];
         let todaySchedule = [];
+        let scheduleStatus = {
+            available: true,
+            message: null
+        };
 
-        try {
-            // FIXED: Use TeacherAssignment as the single source of truth
-            const TeacherAssignment = require('../models/TeacherAssignment');
-            const assignments = await TeacherAssignment.find({
-                teacher: teacherId,
-                ...filter,
-                isActive: true
-            })
-            .populate('subject', 'subjectName subjectCode')
-            .populate('classes', 'className section classLevel')
-            .lean();
+        // Build assigned subjects from assignments
+        const subjectMap = new Map();
+        assignments.forEach(assignment => {
+            const subjectId = String(assignment.subject?._id || assignment.subject);
+            if (!subjectMap.has(subjectId)) {
+                subjectMap.set(subjectId, {
+                    _id: subjectId,
+                    subjectName: assignment.subject?.subjectName || assignment.subjectName,
+                    subjectCode: assignment.subject?.subjectCode,
+                    teachers: [{
+                        teacherId: teacherId,
+                        teacherName: req.user.name,
+                        isActive: true
+                    }]
+                });
+            }
+        });
+        assignedSubjects = Array.from(subjectMap.values());
 
-            // Build assigned subjects from assignments
-            const subjectMap = new Map();
-            assignments.forEach(assignment => {
-                const subjectId = String(assignment.subject?._id || assignment.subject);
-                if (!subjectMap.has(subjectId)) {
-                    subjectMap.set(subjectId, {
-                        _id: subjectId,
-                        subjectName: assignment.subject?.subjectName || assignment.subjectName,
-                        subjectCode: assignment.subject?.subjectCode,
-                        teachers: [{
+        // Build assigned classes from assignments
+        const classMap = new Map();
+        assignments.forEach(assignment => {
+            (assignment.classes || []).forEach(classDoc => {
+                const classId = String(classDoc._id || classDoc);
+                if (!classMap.has(classId)) {
+                    classMap.set(classId, {
+                        _id: classId,
+                        className: classDoc.className,
+                        section: classDoc.section,
+                        classLevel: classDoc.classLevel,
+                        subjects: [{
+                            subjectId: assignment.subject?._id || assignment.subject,
+                            subjectName: assignment.subject?.subjectName || assignment.subjectName,
                             teacherId: teacherId,
                             teacherName: req.user.name,
                             isActive: true
                         }]
                     });
+                } else {
+                    // Add subject to existing class if not already there
+                    const existingClass = classMap.get(classId);
+                    if (!existingClass.subjects.some(s => String(s.subjectId) === String(assignment.subject?._id || assignment.subject))) {
+                        existingClass.subjects.push({
+                            subjectId: assignment.subject?._id || assignment.subject,
+                            subjectName: assignment.subject?.subjectName || assignment.subjectName,
+                            teacherId: teacherId,
+                            teacherName: req.user.name,
+                            isActive: true
+                        });
+                    }
                 }
             });
-            assignedSubjects = Array.from(subjectMap.values());
+        });
+        assignedClasses = Array.from(classMap.values());
 
-            // Build assigned classes from assignments
-            const classMap = new Map();
-            assignments.forEach(assignment => {
-                (assignment.classes || []).forEach(classDoc => {
-                    const classId = String(classDoc._id || classDoc);
-                    if (!classMap.has(classId)) {
-                        classMap.set(classId, {
-                            _id: classId,
-                            className: classDoc.className,
-                            section: classDoc.section,
-                            classLevel: classDoc.classLevel,
-                            subjects: [{
-                                subjectId: assignment.subject?._id || assignment.subject,
-                                subjectName: assignment.subject?.subjectName || assignment.subjectName,
-                                teacherId: teacherId,
-                                teacherName: req.user.name,
-                                isActive: true
-                            }]
-                        });
-                    } else {
-                        // Add subject to existing class if not already there
-                        const existingClass = classMap.get(classId);
-                        if (!existingClass.subjects.some(s => String(s.subjectId) === String(assignment.subject?._id || assignment.subject))) {
-                            existingClass.subjects.push({
-                                subjectId: assignment.subject?._id || assignment.subject,
-                                subjectName: assignment.subject?.subjectName || assignment.subjectName,
-                                teacherId: teacherId,
-                                teacherName: req.user.name,
-                                isActive: true
-                            });
-                        }
-                    }
-                });
-            });
-            assignedClasses = Array.from(classMap.values());
-
-            // Get today's schedule (unchanged)
+        // Today's schedule is optional. If it cannot be loaded, keep dashboard usable.
+        try {
             const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
             todaySchedule = await Routine.find({
                 ...filter,
-                'schedule.day': today,
-                'schedule.periods.teacherId': teacherId
+                schedule: { $elemMatch: { day: today, 'periods.teacherId': teacherId } }
             }).populate('classId', 'className section')
               .populate('schedule.periods.subjectId', 'subjectName')
-              .populate('schedule.periods.teacherId', 'name');
-        } catch (dbError) {
-            console.error('Teacher dashboard data fetch error:', dbError.message);
+              .populate('schedule.periods.teacherId', 'name')
+              .lean();
+        } catch (scheduleError) {
+            scheduleStatus = {
+                available: false,
+                message: 'Today schedule is temporarily unavailable'
+            };
+            console.error('Teacher dashboard schedule fetch error:', scheduleError.message);
         }
 
         const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+        const teacherIdString = String(teacherId);
+        const todayPeriods = Array.isArray(todaySchedule) ? todaySchedule.reduce((acc, routine) => {
+            const daySchedule = routine?.schedule?.find((s) => s?.day === today);
+            if (!daySchedule || !Array.isArray(daySchedule.periods)) return acc;
+
+            const periodCount = daySchedule.periods.filter((p) => {
+                if (p?.isBreak) return false;
+                const periodTeacherId = p?.teacherId?._id || p?.teacherId;
+                return String(periodTeacherId) === teacherIdString;
+            }).length;
+
+            return acc + periodCount;
+        }, 0) : 0;
         
         res.status(200).json({
             success: true,
@@ -120,15 +142,11 @@ exports.getTeacherDashboard = async (req, res) => {
                 assignedSubjects,
                 assignedClasses,
                 todaySchedule,
+                scheduleStatus,
                 summary: {
                     totalSubjects: assignedSubjects.length,
                     totalClasses: assignedClasses.length,
-                    todayPeriods: Array.isArray(todaySchedule) ? todaySchedule.reduce((acc, routine) => {
-                        const daySchedule = routine.schedule?.find(s => s.day === today);
-                        return acc + (daySchedule ? daySchedule.periods.filter(p => 
-                            p.teacherId?.toString() === teacherId.toString() && !p.isBreak
-                        ).length : 0);
-                    }, 0) : 0
+                    todayPeriods
                 }
             }
         });
