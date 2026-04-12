@@ -3,15 +3,10 @@
  * Advanced teacher leave and substitute management system
  */
 const Substitution = require('../models/Substitution');
-const LeaveRequest = require('../models/LeaveRequest');
-const TeacherAbsence = require('../models/TeacherAbsence');
-const AdvancedRoutine = require('../models/AdvancedRoutine');
 const ClassRoutine = require('../models/ClassRoutine');
 const Teacher = require('../models/Teacher');
-const User = require('../models/User');
 const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
-const Notification = require('../models/Notification');
 
 exports.assignSubstitute = async (req, res) => {
     try {

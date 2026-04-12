@@ -3,8 +3,6 @@
  * Industry-level Teacher management for Smart Campus System
  */
 
-const mongoose = require('mongoose');
-
 // MongoDB Models
 const User = require('../models/User');
 const Class = require('../models/Class');

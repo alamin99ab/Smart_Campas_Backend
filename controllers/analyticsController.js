@@ -1,5 +1,3 @@
-const mongoose = require('mongoose');
-
 // MongoDB Models
 const User = require('../models/User');
 const Student = require('../models/Student');
@@ -184,8 +182,6 @@ exports.getPrincipalDashboard = async (req, res) => {
  */
 exports.getAttendanceAnalytics = async (req, res) => {
     try {
-        const schoolCode = req.user.schoolCode;
-        
         const analytics = {
             overallAttendance: 85,
             dailyAttendance: [],
@@ -208,8 +204,6 @@ exports.getAttendanceAnalytics = async (req, res) => {
  */
 exports.getPerformanceAnalytics = async (req, res) => {
     try {
-        const schoolCode = req.user.schoolCode;
-        
         const performance = {
             averageGPA: 3.2,
             subjectPerformance: [],
@@ -232,8 +226,6 @@ exports.getPerformanceAnalytics = async (req, res) => {
  */
 exports.getFeeAnalytics = async (req, res) => {
     try {
-        const schoolCode = req.user.schoolCode;
-        
         const analytics = {
             totalCollected: 0,
             totalPending: 0,

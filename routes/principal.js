@@ -8,8 +8,6 @@ const router = express.Router();
 
 // Import controllers
 const principalController = require('../controllers/principalController');
-const teacherController = require('../controllers/teacherController');
-const studentController = require('../controllers/studentController');
 const {
     createWeeklyRoutine,
     dragDropUpdate,

@@ -14,7 +14,6 @@ const AcademicSession = require('../models/AcademicSession');
 const TeacherAssignment = require('../models/TeacherAssignment');
 const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
-const Notification = require('../models/Notification');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
 const {
     findTemporarySubstitutePermission,

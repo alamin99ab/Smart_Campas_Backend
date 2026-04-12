@@ -118,8 +118,6 @@ router.get('/status',
     authorize('super_admin', 'principal'),
     async (req, res) => {
         try {
-            const AIService = require('../services/aiService');
-            
             const status = {
                 service: 'Smart Campus AI Service',
                 version: '1.0.0',

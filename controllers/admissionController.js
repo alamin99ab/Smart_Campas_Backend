@@ -1,6 +1,5 @@
 const Admission = require('../models/Admission');
 const Student = require('../models/Student');
-const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const cloudinary = require('../config/cloudinary');
 const { sendEmail } = require('../utils/emailService');
@@ -91,10 +90,10 @@ exports.applyAdmission = async (req, res) => {
 };
 
 exports.uploadDocuments = async (req, res) => {
+    const admissionId = req.params.id;
     try {
-        const { id } = req.params;
         const admission = await Admission.findOne({
-            _id: id,
+            _id: admissionId,
             schoolCode: req.user.schoolCode
         });
 
@@ -128,22 +127,22 @@ exports.uploadDocuments = async (req, res) => {
             data: { documents: admission.documents }
         });
     } catch (err) {
-        logger.error('Upload documents error:', { error: err.message, stack: err.stack, admissionId: id });
+        logger.error('Upload documents error:', { error: err.message, stack: err.stack, admissionId });
         res.status(500).json({ success: false, message: 'Failed to upload documents' });
     }
 };
 
 exports.approveAdmission = async (req, res) => {
+    const admissionId = req.params.id;
     try {
         if (req.user.role !== 'principal' && req.user.role !== 'admin') {
             return res.status(403).json({ success: false, message: 'Access denied' });
         }
 
-        const { id } = req.params;
         const { remarks } = req.body;
 
         const admission = await Admission.findOne({
-            _id: id,
+            _id: admissionId,
             schoolCode: req.user.schoolCode
         });
 
@@ -174,13 +173,13 @@ exports.approveAdmission = async (req, res) => {
                     studentId,
                     appliedClass: admission.appliedClass
                 }
-            }).catch(err => logger.error('Email send error:', { error: err.message, admissionId: id }));
+            }).catch(err => logger.error('Email send error:', { error: err.message, admissionId }));
         }
 
         await AuditLog.create({
             user: req.user._id,
             action: 'ADMISSION_APPROVED',
-            details: { admissionId: id, studentId },
+            details: { admissionId, studentId },
             ip: req.ip,
             userAgent: req.headers['user-agent']
         });
@@ -194,16 +193,16 @@ exports.approveAdmission = async (req, res) => {
             }
         });
     } catch (err) {
-        logger.error('Approve admission error:', { error: err.message, stack: err.stack, admissionId: id });
+        logger.error('Approve admission error:', { error: err.message, stack: err.stack, admissionId });
         res.status(500).json({ success: false, message: 'Failed to approve admission' });
     }
 };
 
 exports.confirmRegistration = async (req, res) => {
+    const admissionId = req.params.id;
     try {
-        const { id } = req.params;
         const admission = await Admission.findOne({
-            _id: id,
+            _id: admissionId,
             status: 'approved'
         });
 
@@ -233,7 +232,7 @@ exports.confirmRegistration = async (req, res) => {
         await AuditLog.create({
             user: admission.approvedBy,
             action: 'STUDENT_REGISTERED',
-            details: { admissionId: id, studentId: student._id },
+            details: { admissionId, studentId: student._id },
             ip: req.ip,
             userAgent: req.headers['user-agent']
         });
@@ -247,7 +246,7 @@ exports.confirmRegistration = async (req, res) => {
             }
         });
     } catch (err) {
-        logger.error('Confirm registration error:', { error: err.message, stack: err.stack, admissionId: id });
+        logger.error('Confirm registration error:', { error: err.message, stack: err.stack, admissionId });
         res.status(500).json({ success: false, message: 'Failed to confirm registration' });
     }
 };

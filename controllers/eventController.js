@@ -1,5 +1,4 @@
 const SchoolEvent = require('../models/SchoolEvent');
-const User = require('../models/User');
 
 const allowedRoles = ['principal', 'admin', 'teacher'];
 

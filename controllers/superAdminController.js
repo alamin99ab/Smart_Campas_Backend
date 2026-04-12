@@ -3,7 +3,6 @@
  * Clean, minimal, and secure implementations for Super Admin endpoints.
  */
 const mongoose = require('mongoose');
-const crypto = require('crypto');
 const { sendEmail } = require('../utils/emailService');
 
 const School = require('../models/School');

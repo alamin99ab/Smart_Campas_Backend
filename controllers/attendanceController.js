@@ -1,10 +1,8 @@
 // controllers/attendanceController.js
 const Attendance = require('../models/Attendance');
 const Student = require('../models/Student');
-const School = require('../models/School');
 const AuditLog = require('../models/AuditLog');
 const Excel = require('exceljs');
-const PDFDocument = require('pdfkit');
 const { sendSMS } = require('../utils/smsService');
 
 // @desc    Take Attendance

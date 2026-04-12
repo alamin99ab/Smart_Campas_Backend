@@ -207,6 +207,15 @@ function monthWindow(offset) {
     return new Date(now.getFullYear(), now.getMonth() + offset, 10, 12, 0, 0, 0);
 }
 
+function redactMongoUri(uri) {
+    if (!uri || typeof uri !== 'string') return uri;
+    try {
+        return uri.replace(/\/\/([^:/?#\s]+):([^@/?#\s]+)@/, '//***:***@');
+    } catch (_) {
+        return '[redacted]';
+    }
+}
+
 function calculateGrade(marks) {
     if (marks >= 80) return 'A+';
     if (marks >= 70) return 'A';
@@ -1729,7 +1738,7 @@ function logSeedSummary(result) {
 
 async function main() {
     console.log(`Loading environment from ${envPath || 'default dotenv resolution'}`);
-    console.log(`Connecting to MongoDB: ${process.env.MONGO_URI}`);
+    console.log(`Connecting to MongoDB: ${redactMongoUri(process.env.MONGO_URI)}`);
 
     await mongoose.connect(process.env.MONGO_URI, {
         serverSelectionTimeoutMS: 10000,

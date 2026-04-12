@@ -5,7 +5,6 @@
 
 const Subscription = require('../models/Subscription');
 const School = require('../models/School');
-const User = require('../models/User');
 const { createNotification } = require('../utils/createNotification');
 
 // Plan configurations

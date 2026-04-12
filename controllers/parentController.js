@@ -3,8 +3,6 @@
  * Complete parent dashboard implementation
  */
 
-const mongoose = require('mongoose');
-
 // MongoDB Models
 const User = require('../models/User');
 const Student = require('../models/Student');

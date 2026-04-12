@@ -8,7 +8,6 @@ const Result = require('../models/Result');
 const Class = require('../models/Class');
 const User = require('../models/User');
 const School = require('../models/School');
-const Student = require('../models/Student');
 
 const normalizeSchoolCode = (code = '') => code.trim().toUpperCase();
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

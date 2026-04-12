@@ -63,12 +63,7 @@ async function runAutomaticDeploySeed() {
     if (process.env.NODE_ENV === 'production' && resetExisting) {
         throw new Error('FORCE_SEED_RESET / AUTO_SEED_RESET_DATA cannot be enabled in production');
     }
-    const usingProductionDefault = (
-        typeof process.env.AUTO_SEED_TEST_DATA !== 'string'
-        && typeof process.env.SEED_ON_STARTUP !== 'string'
-        && process.env.NODE_ENV === 'production'
-    );
-    console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}${usingProductionDefault ? ' (production default)' : ''}.`);
+    console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}.`);
 
     const result = await ensureSeedData({ resetExisting });
     if (result.skipped) {
@@ -1012,16 +1007,7 @@ const startServer = async () => {
             try {
                 MongoMemoryReplSet = require('mongodb-memory-server').MongoMemoryReplSet;
             } catch (importError) {
-                console.error('[DB] mongodb-memory-server package is not installed. Falling back to mock DB mode.');
-                console.warn(importError.message);
-                console.warn('[DB] Set USE_MOCK_DB=true in .env for non-persistent mock mode.');
-                useMemoryDB = false;
-                useMockDB = true;
-                updateDbStatus({
-                    mode: 'mock',
-                    connected: false,
-                    lastError: 'mongodb-memory-server is not installed'
-                });
+                throw new Error(`mongodb-memory-server is required when USE_MEMORY_DB=true (${importError.message})`);
             }
 
             if (useMemoryDB && MongoMemoryReplSet) {
