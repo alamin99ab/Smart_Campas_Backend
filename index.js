@@ -394,6 +394,15 @@ app.use(requestId);
 // Enhanced security middleware
 app.use(enhancedSecurity);
 
+// Temporary first-request bootstrap (for emergency empty DB)
+try {
+    const { firstRequestBootstrap } = require('../services/bootstrap-seed');
+    app.use(firstRequestBootstrap);
+    console.log('🔧 Temporary first-request bootstrap enabled');
+} catch (error) {
+    console.warn('⚠️ Temporary bootstrap middleware not loaded:', error.message);
+}
+
 // Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
