@@ -34,44 +34,71 @@ function getBooleanEnv(keys) {
     return null;
 }
 
-function shouldAutoSeedTestData() {
-    const configured = getBooleanEnv(['SEED_ON_STARTUP', 'AUTO_SEED_TEST_DATA']);
-    if (configured !== null) {
-        return configured;
-    }
-
-    // Production-safe default: auto seeding must be explicit.
-    return false;
-}
-
-function shouldResetAutoSeedData() {
-    const configured = getBooleanEnv(['FORCE_SEED_RESET', 'AUTO_SEED_RESET_DATA']);
-    if (configured !== null) {
-        return configured;
-    }
-
-    return false;
-}
-
-async function runAutomaticDeploySeed() {
-    if (!shouldAutoSeedTestData()) {
+async function runBootstrapIfEmpty() {
+    if (process.env.NODE_ENV === 'production' && !process.env.FORCE_BOOTSTRAP_IN_PRODUCTION) {
+        console.warn('\n⚠️ Bootstrap skipped in production - set FORCE_BOOTSTRAP_IN_PRODUCTION=true to enable');
         return;
     }
 
-    const { seedDatabase } = require('./scripts/seed-data');
-    const resetExisting = shouldResetAutoSeedData();
-    if (process.env.NODE_ENV === 'production' && resetExisting) {
-        throw new Error('FORCE_SEED_RESET / AUTO_SEED_RESET_DATA cannot be enabled in production');
-    }
-    console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}.`);
-
-    const result = await seedDatabase({ resetExisting });
+    const { bootstrapDatabase } = require('./scripts/bootstrap-seed');
+    const result = await bootstrapDatabase();
     if (result.skipped) {
-        console.warn(`ℹ️ Automatic deploy seed skipped: ${result.reason}`);
+        console.warn(`ℹ️ Bootstrap skipped: ${result.reason}`);
         return;
     }
 
-    console.warn(`✅ Automatic deploy seed finished: ${result.counts.schools} schools, ${result.counts.students} students, ${result.counts.teachers} teachers.`);
+    console.warn(`✅ Bootstrap completed: ${result.counts.schools} schools, ${result.counts.students} students.`);
+}
+
+function parseAllowedOrigins() {
+    const fromEnv = (process.env.ALLOWED_ORIGINS || '')
+        .split(',')
+        .map((o) => o.trim())
+        .filter(Boolean);
+    const frontendUrl = (process.env.FRONTEND_URL || '').trim();
+    const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
+    const configured = [
+        ...fromEnv,
+        ...(frontendUrl ? [frontendUrl] : [])
+    ].map(normalizeOrigin);
+
+    const localDefaults = [
+        'http://localhost:3000',
+        'http://localhost:8080',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:8080'
+    ].map(normalizeOrigin);
+
+    if (process.env.NODE_ENV !== 'production') {
+        return Array.from(new Set([...configured, ...localDefaults]));
+    }
+
+    return Array.from(new Set(configured));
+}
+
+function getBooleanEnv(keys) {
+    for (const key of keys) {
+        if (typeof process.env[key] === 'string') {
+            return isTruthyEnv(process.env[key]);
+        }
+    }
+    return null;
+}
+
+async function runBootstrapIfEmpty() {
+    if (process.env.NODE_ENV === 'production' && !process.env.FORCE_BOOTSTRAP_IN_PRODUCTION) {
+        console.warn('\n⚠️ Bootstrap skipped in production - set FORCE_BOOTSTRAP_IN_PRODUCTION=true to enable');
+        return;
+    }
+
+    const { bootstrapDatabase } = require('./scripts/bootstrap-seed');
+    const result = await bootstrapDatabase();
+    if (result.skipped) {
+        console.warn(`ℹ️ Bootstrap skipped: ${result.reason}`);
+        return;
+    }
+
+    console.warn(`✅ Bootstrap completed: ${result.counts.schools} schools, ${result.counts.students} students.`);
 }
 
 function parseAllowedOrigins() {
@@ -1082,11 +1109,11 @@ const startServer = async () => {
     // Initialize Super Admin only if DB is connected
     if (dbConnected) {
         try {
-            await runAutomaticDeploySeed();
-        } catch (seedError) {
-            console.error('Automatic deploy seed failed:', seedError.message);
+            await runBootstrapIfEmpty();
+        } catch (bootstrapError) {
+            console.error('Bootstrap failed:', bootstrapError.message);
             if (process.env.NODE_ENV === 'production') {
-                console.error('Production abort: automatic deploy seed failed. Exiting.');
+                console.error('Production abort: bootstrap failed. Exiting.');
                 process.exit(1);
             }
         }
