@@ -58,14 +58,14 @@ async function runAutomaticDeploySeed() {
         return;
     }
 
-    const { ensureSeedData } = require('./scripts/seed-test-data');
+    const { seedDatabase } = require('./scripts/seed-data');
     const resetExisting = shouldResetAutoSeedData();
     if (process.env.NODE_ENV === 'production' && resetExisting) {
         throw new Error('FORCE_SEED_RESET / AUTO_SEED_RESET_DATA cannot be enabled in production');
     }
     console.warn(`\n🧪 Automatic deploy seed enabled${resetExisting ? ' with reset' : ''}.`);
 
-    const result = await ensureSeedData({ resetExisting });
+    const result = await seedDatabase({ resetExisting });
     if (result.skipped) {
         console.warn(`ℹ️ Automatic deploy seed skipped: ${result.reason}`);
         return;
