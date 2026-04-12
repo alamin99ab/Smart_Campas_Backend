@@ -6,9 +6,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const { enhancedSecurity } = require('./middleware/enhancedSecurity');
-const requestId = require('./middleware/requestId');
+const { requestId } = require('./middleware/requestId');
 const { ensureMongoIndexes } = require('./utils/ensureMongoIndexes');
 const { validateEnv } = require('./utils/validateEnv');
+const { forceSeed } = require('./services/bootstrap-seed');
 require('dotenv').config();
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -1119,10 +1120,11 @@ const startServer = async () => {
     if (dbConnected) {
         try {
             await runBootstrapIfEmpty();
-        } catch (bootstrapError) {
-            console.error('Bootstrap failed:', bootstrapError.message);
+            await forceSeed();
+        } catch (seedError) {
+            console.error('Seeding failed:', seedError.message);
             if (process.env.NODE_ENV === 'production') {
-                console.error('Production abort: bootstrap failed. Exiting.');
+                console.error('Production abort: seeding failed. Exiting.');
                 process.exit(1);
             }
         }
