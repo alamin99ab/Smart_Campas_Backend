@@ -9,7 +9,6 @@ const { enhancedSecurity } = require('./middleware/enhancedSecurity');
 const requestId = require('./middleware/requestId');
 const { ensureMongoIndexes } = require('./utils/ensureMongoIndexes');
 const { validateEnv } = require('./utils/validateEnv');
-const { forceSeed } = require('./services/bootstrap-seed');
 require('dotenv').config();
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -33,73 +32,6 @@ function getBooleanEnv(keys) {
         }
     }
     return null;
-}
-
-async function runBootstrapIfEmpty() {
-    if (process.env.NODE_ENV === 'production' && !process.env.FORCE_BOOTSTRAP_IN_PRODUCTION) {
-        console.warn('\n⚠️ Bootstrap skipped in production - set FORCE_BOOTSTRAP_IN_PRODUCTION=true to enable');
-        return;
-    }
-
-    const { bootstrapDatabase } = require('./scripts/bootstrap-seed');
-    const result = await bootstrapDatabase();
-    if (result.skipped) {
-        console.warn(`ℹ️ Bootstrap skipped: ${result.reason}`);
-        return;
-    }
-
-    console.warn(`✅ Bootstrap completed: ${result.counts.schools} schools, ${result.counts.students} students.`);
-}
-
-function parseAllowedOrigins() {
-    const fromEnv = (process.env.ALLOWED_ORIGINS || '')
-        .split(',')
-        .map((o) => o.trim())
-        .filter(Boolean);
-    const frontendUrl = (process.env.FRONTEND_URL || '').trim();
-    const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
-    const configured = [
-        ...fromEnv,
-        ...(frontendUrl ? [frontendUrl] : [])
-    ].map(normalizeOrigin);
-
-    const localDefaults = [
-        'http://localhost:3000',
-        'http://localhost:8080',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:8080'
-    ].map(normalizeOrigin);
-
-    if (process.env.NODE_ENV !== 'production') {
-        return Array.from(new Set([...configured, ...localDefaults]));
-    }
-
-    return Array.from(new Set(configured));
-}
-
-function getBooleanEnv(keys) {
-    for (const key of keys) {
-        if (typeof process.env[key] === 'string') {
-            return isTruthyEnv(process.env[key]);
-        }
-    }
-    return null;
-}
-
-async function runBootstrapIfEmpty() {
-    if (process.env.NODE_ENV === 'production' && !process.env.FORCE_BOOTSTRAP_IN_PRODUCTION) {
-        console.warn('\n⚠️ Bootstrap skipped in production - set FORCE_BOOTSTRAP_IN_PRODUCTION=true to enable');
-        return;
-    }
-
-    const { bootstrapDatabase } = require('./scripts/bootstrap-seed');
-    const result = await bootstrapDatabase();
-    if (result.skipped) {
-        console.warn(`ℹ️ Bootstrap skipped: ${result.reason}`);
-        return;
-    }
-
-    console.warn(`✅ Bootstrap completed: ${result.counts.schools} schools, ${result.counts.students} students.`);
 }
 
 function parseAllowedOrigins() {
@@ -395,14 +327,9 @@ app.use(requestId);
 // Enhanced security middleware
 app.use(enhancedSecurity);
 
-// Temporary first-request bootstrap (for emergency empty DB)
-try {
-    const { firstRequestBootstrap } = require('../services/bootstrap-seed');
-    app.use(firstRequestBootstrap);
-    console.log('🔧 Temporary first-request bootstrap enabled');
-} catch (error) {
-    console.warn('⚠️ Temporary bootstrap middleware not loaded:', error.message);
-}
+// First-request bootstrap: populate empty DB once (production-safe; logs via console.warn in prod)
+const { databaseBootstrapMiddleware } = require('./middleware/databaseBootstrap');
+app.use(databaseBootstrapMiddleware);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -1116,19 +1043,12 @@ const startServer = async () => {
         }
     }
 
-    // Initialize Super Admin only if DB is connected
     if (dbConnected) {
-        try {
-            await runBootstrapIfEmpty();
-            await forceSeed();
-        } catch (seedError) {
-            console.error('Seeding failed:', seedError.message);
-            if (process.env.NODE_ENV === 'production') {
-                console.error('Production abort: seeding failed. Exiting.');
-                process.exit(1);
-            }
+        if (process.env.NODE_ENV === 'production') {
+            console.warn('\n[Startup] Demo data: first HTTP request runs DB bootstrap if schools collection is empty.');
+        } else {
+            console.log('\n[Startup] Demo data: first HTTP request runs DB bootstrap if schools collection is empty.');
         }
-        console.log('\n[Startup] Super Admin is environment-only (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD). No DB bootstrap.');
     } else {
         console.log('\n[Startup] Database not connected - school features unavailable; Super Admin still logs in via environment credentials.');
         if (process.env.NODE_ENV === 'production') {
