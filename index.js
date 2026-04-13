@@ -19,7 +19,6 @@ if (isProduction) {
     // Keep warning/error visible in production for issues
 }
 
-let memoryMongoServer = null;
 
 function isTruthyEnv(value) {
     return typeof value === 'string' && value.toLowerCase() === 'true';
@@ -594,285 +593,69 @@ Role: super_admin
     console.error('❌ Failed to load auto admin setup routes:', error.message);
 }
 
-// Auth Routes - Working ✅
-try {
-    const authRoutes = require('./routes/auth');
-    app.use('/api/auth', authRoutes);
-    console.log('✅ Auth routes loaded - Login, Register, Password Reset');
-} catch (error) {
-    console.error('❌ Failed to load auth routes:', error.message);
-}
+// Load API Routes
+const routeModules = [
+    { path: '/api/auth', module: './routes/auth', name: 'Auth' },
+    { path: '/api/super-admin', module: './routes/superAdmin', name: 'Super Admin' },
+    { path: '/api/principal', module: './routes/principal', name: 'Principal' },
+    { path: '/api/teacher', module: './routes/teacher', name: 'Teacher' },
+    { path: '/api/student', module: './routes/student', name: 'Student' },
+    { path: '/api/parent', module: './routes/parent', name: 'Parent' },
+    { path: '/api/accountant', module: './routes/accountant', name: 'Accountant' },
+    { path: '/api/dashboard', module: './routes/dashboard', name: 'Dashboard' },
+    { path: '/api/notices', module: './routes/notices', name: 'Notice' },
+    { path: '/api/academic-sessions', module: './routes/academicSessionRoutes', name: 'Academic Session' },
+    { path: '/api/admissions', module: './routes/admissionRoutes', name: 'Admission' },
+    { path: '/api/attendance', module: './routes/attendanceRoutes', name: 'Attendance' },
+    { path: '/api/exam-schedules', module: './routes/examScheduleRoutes', name: 'Exam Schedule' },
+    { path: '/api/fees', module: './routes/feeRoutes', name: 'Fee' },
+    { path: '/api/leave', module: './routes/leaveRoutes', name: 'Leave' },
+    { path: '/api/notifications', module: './routes/notificationRoutes', name: 'Notification' },
+    { path: '/api/results', module: './routes/resultRoutes', name: 'Result' }
+];
 
-// Super Admin Routes - Working ✅
-try {
-    const superAdminRoutes = require('./routes/superAdmin');
-    app.use('/api/super-admin', superAdminRoutes);
-    console.log('✅ Super Admin routes loaded - School Management, Platform Control');
-} catch (error) {
-    console.error('❌ Failed to load super admin routes:', error.message);
-}
+let loadedRoutes = 0;
+routeModules.forEach(({ path, module, name }) => {
+    try {
+        const routes = require(module);
+        app.use(path, routes);
+        loadedRoutes++;
+    } catch (error) {
+        console.error(`Failed to load ${name} routes:`, error.message);
+    }
+});
 
-// Principal Routes - Working ✅
-try {
-    const principalRoutes = require('./routes/principal');
-    app.use('/api/principal', principalRoutes);
-    console.log('✅ Principal routes loaded - Academic Setup, Teacher/Student Management');
-} catch (error) {
-    console.error('❌ Failed to load principal routes:', error.message);
-}
+console.log(`Loaded ${loadedRoutes}/${routeModules.length} core API routes`);
 
-// Teacher Routes
-console.log('Loading teacher routes...');
-try {
-    const teacherRoutes = require('./routes/teacher');
-    console.log('Teacher routes module loaded successfully');
-    app.use('/api/teacher', teacherRoutes);
-    console.log('✅ Teacher routes mounted at /api/teacher');
-} catch (error) {
-    console.error('❌ Failed to load teacher routes:', error.message);
-    console.error(error.stack);
-}
+// Load remaining API routes
+const remainingRoutes = [
+    { path: '/api/routines', module: './routes/routineRoutes', name: 'Routine' },
+    { path: '/api/search', module: './routes/searchRoutes', name: 'Search' },
+    { path: '/api/substitutes', module: './routes/substituteRoutes', name: 'Substitute' },
+    { path: '/api/teacher-assignments', module: './routes/teacherAssignmentRoutes', name: 'Teacher Assignment' },
+    { path: '/api/activities', module: './routes/activityRoutes', name: 'Activity' },
+    { path: '/api/analytics', module: './routes/analyticsRoutes', name: 'Analytics' },
+    { path: '/api/rooms', module: './routes/roomRoutes', name: 'Room' },
+    { path: '/api/events', module: './routes/eventRoutes', name: 'Event' },
+    { path: '/api/public', module: './routes/publicRoutes', name: 'Public' },
+    { path: '/api/ai', module: './routes/ai', name: 'AI' },
+    { path: '/api/subscriptions', module: './routes/subscriptionRoutes', name: 'Subscription' },
+    { path: '/api/promotion', module: './routes/promotionRoutes', name: 'Promotion' },
+    { path: '/api/students/bulk', module: './routes/studentBulkRoutes', name: 'Student Bulk' }
+];
 
-// Student Routes
-console.log('Loading student routes...');
-try {
-    const studentRoutes = require('./routes/student');
-    console.log('Student routes module loaded successfully');
-    app.use('/api/student', studentRoutes);
-    console.log('✅ Student routes mounted at /api/student');
-} catch (error) {
-    console.error('❌ Failed to load student routes:', error.message);
-    console.error(error.stack);
-}
+let remainingLoaded = 0;
+remainingRoutes.forEach(({ path, module, name }) => {
+    try {
+        const routes = require(module);
+        app.use(path, routes);
+        remainingLoaded++;
+    } catch (error) {
+        console.error(`Failed to load ${name} routes:`, error.message);
+    }
+});
 
-// Parent Routes - Working ✅
-try {
-    const parentRoutes = require('./routes/parent');
-    app.use('/api/parent', parentRoutes);
-    console.log('✅ Parent routes loaded - Children Monitoring, Dashboard');
-} catch (error) {
-    console.error('❌ Failed to load parent routes:', error.message);
-}
-
-// Accountant Routes - Working ✅
-try {
-    const accountantRoutes = require('./routes/accountant');
-    app.use('/api/accountant', accountantRoutes);
-    console.log('✅ Accountant routes loaded - Fee Management, Dashboard');
-} catch (error) {
-    console.error('❌ Failed to load accountant routes:', error.message);
-}
-
-// Dashboard Routes - Working ✅
-try {
-    const dashboardRoutes = require('./routes/dashboard');
-    app.use('/api/dashboard', dashboardRoutes);
-    console.log('✅ Dashboard routes loaded - Analytics for All Roles');
-} catch (error) {
-    console.error('❌ Failed to load dashboard routes:', error.message);
-}
-
-// Notice Routes - Working ✅
-try {
-    const noticeRoutes = require('./routes/notices');
-    app.use('/api/notices', noticeRoutes);
-    console.log('✅ Notice routes loaded - Communication System');
-} catch (error) {
-    console.error('❌ Failed to load notice routes:', error.message);
-}
-
-// Academic Session Routes
-try {
-    const academicSessionRoutes = require('./routes/academicSessionRoutes');
-    app.use('/api/academic-sessions', academicSessionRoutes);
-    console.log('✅ Academic Session routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load academic session routes:', error.message);
-}
-
-// Admission Routes
-try {
-    const admissionRoutes = require('./routes/admissionRoutes');
-    app.use('/api/admissions', admissionRoutes);
-    console.log('✅ Admission routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load admission routes:', error.message);
-}
-
-// Attendance Routes
-try {
-    const attendanceRoutes = require('./routes/attendanceRoutes');
-    app.use('/api/attendance', attendanceRoutes);
-    console.log('✅ Attendance routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load attendance routes:', error.message);
-}
-
-// Exam Schedule Routes
-try {
-    const examScheduleRoutes = require('./routes/examScheduleRoutes');
-    app.use('/api/exam-schedules', examScheduleRoutes);
-    console.log('✅ Exam Schedule routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load exam schedule routes:', error.message);
-}
-
-// Fee Routes
-try {
-    const feeRoutes = require('./routes/feeRoutes');
-    app.use('/api/fees', feeRoutes);
-    console.log('✅ Fee routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load fee routes:', error.message);
-}
-
-// Leave Routes
-try {
-    const leaveRoutes = require('./routes/leaveRoutes');
-    app.use('/api/leave', leaveRoutes);
-    console.log('✅ Leave routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load leave routes:', error.message);
-}
-
-// Notification Routes
-try {
-    const notificationRoutes = require('./routes/notificationRoutes');
-    app.use('/api/notifications', notificationRoutes);
-    console.log('✅ Notification routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load notification routes:', error.message);
-}
-
-// Result Routes
-console.log('Loading result routes...');
-try {
-    const resultRoutes = require('./routes/resultRoutes');
-    console.log('Result routes module loaded successfully');
-    app.use('/api/results', resultRoutes);
-    console.log('✅ Result routes mounted at /api/results');
-} catch (error) {
-    console.error('❌ Failed to load result routes:', error.message);
-    console.error(error.stack);
-}
-
-// Routine Routes
-try {
-    const routineRoutes = require('./routes/routineRoutes');
-    app.use('/api/routines', routineRoutes);
-    // Legacy alias '/api/routine' removed for clarity and to avoid redundancy
-    console.log('✅ Routine routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load routine routes:', error.message);
-}
-
-// Search Routes
-try {
-    const searchRoutes = require('./routes/searchRoutes');
-    app.use('/api/search', searchRoutes);
-    console.log('✅ Search routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load search routes:', error.message);
-}
-
-// Substitute Routes
-try {
-    const substituteRoutes = require('./routes/substituteRoutes');
-    app.use('/api/substitutes', substituteRoutes);
-    console.log('✅ Substitute routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load substitute routes:', error.message);
-}
-
-// Teacher Assignment Routes
-try {
-    const teacherAssignmentRoutes = require('./routes/teacherAssignmentRoutes');
-    app.use('/api/teacher-assignments', teacherAssignmentRoutes);
-    console.log('✅ Teacher Assignment routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load teacher assignment routes:', error.message);
-}
-
-// Activity Routes
-try {
-    const activityRoutes = require('./routes/activityRoutes');
-    app.use('/api/activities', activityRoutes);
-    console.log('✅ Activity routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load activity routes:', error.message);
-}
-
-// Analytics Routes
-try {
-    const analyticsRoutes = require('./routes/analyticsRoutes');
-    app.use('/api/analytics', analyticsRoutes);
-    console.log('✅ Analytics routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load analytics routes:', error.message);
-}
-
-// Room Routes
-try {
-    const roomRoutes = require('./routes/roomRoutes');
-    app.use('/api/rooms', roomRoutes);
-    console.log('✅ Room routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load room routes:', error.message);
-}
-
-// Event Routes
-try {
-    const eventRoutes = require('./routes/eventRoutes');
-    app.use('/api/events', eventRoutes);
-    console.log('✅ Event routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load event routes:', error.message);
-}
-
-// Public Routes
-try {
-    const publicRoutes = require('./routes/publicRoutes');
-    app.use('/api/public', publicRoutes);
-    console.log('✅ Public routes loaded');
-} catch (error) {
-    console.error('❌ Failed to load public routes:', error.message);
-}
-
-// AI Routes
-try {
-    const aiRoutes = require('./routes/ai');
-    app.use('/api/ai', aiRoutes);
-    console.log('✅ AI routes loaded - 10+ AI Features');
-} catch (error) {
-    console.error('❌ Failed to load AI routes:', error.message);
-}
-
-// Subscription Routes (SaaS)
-try {
-    const subscriptionRoutes = require('./routes/subscriptionRoutes');
-    app.use('/api/subscriptions', subscriptionRoutes);
-    console.log('✅ Subscription routes loaded - SaaS subscription management');
-} catch (error) {
-    console.error('❌ Failed to load subscription routes:', error.message);
-}
-
-// Promotion Routes
-try {
-    const promotionRoutes = require('./routes/promotionRoutes');
-    app.use('/api/promotion', promotionRoutes);
-    console.log('✅ Promotion routes loaded - Academic promotion management');
-} catch (error) {
-    console.error('❌ Failed to load promotion routes:', error.message);
-}
-
-// Student Bulk Import Routes
-try {
-    const studentBulkRoutes = require('./routes/studentBulkRoutes');
-    app.use('/api/students/bulk', studentBulkRoutes);
-    console.log('✅ Student bulk routes loaded - Bulk import support');
-} catch (error) {
-    console.error('❌ Failed to load student bulk routes:', error.message);
-}
+console.log(`Loaded ${remainingLoaded}/${remainingRoutes.length} additional API routes`);
 
 // 404 handler with all available endpoints
 app.use('*', (req, res) => {
@@ -947,71 +730,15 @@ app.use((error, req, res, next) => {
 const startServer = async () => {
     let dbConnected = false;
 
-    // Check if we should use mock database for testing
-    let useMockDB = process.env.USE_MOCK_DB === 'true' || process.env.NODE_ENV === 'test';
-    let useMemoryDB = process.env.USE_MEMORY_DB === 'true';
-
-    if (process.env.NODE_ENV === 'production' && (useMockDB || useMemoryDB)) {
-        console.error('[DB] USE_MOCK_DB / USE_MEMORY_DB are not allowed in production.');
+    // Production safety: Block development-only database modes
+    if (process.env.USE_MOCK_DB === 'true' || process.env.USE_MEMORY_DB === 'true') {
+        console.error('[DB] Development database modes are not allowed in production.');
         process.exit(1);
     }
 
-    if (useMemoryDB) {
-        updateDbStatus({ mode: 'memory', connected: false, lastError: null });
-    } else if (useMockDB) {
-        updateDbStatus({ mode: 'mock', connected: false, lastError: null });
-    } else {
-        updateDbStatus({ mode: 'mongo', connected: false, lastError: null });
-    }
+    updateDbStatus({ mode: 'mongo', connected: false, lastError: null });
 
-    if (useMemoryDB) {
-        try {
-            console.log('\n[DB] Starting in-memory MongoDB replica set for local development...');
-            let MongoMemoryReplSet;
-            try {
-                MongoMemoryReplSet = require('mongodb-memory-server').MongoMemoryReplSet;
-            } catch (importError) {
-                throw new Error(`mongodb-memory-server is required when USE_MEMORY_DB=true (${importError.message})`);
-            }
-
-            if (useMemoryDB && MongoMemoryReplSet) {
-                memoryMongoServer = await MongoMemoryReplSet.create({
-                    replSet: { count: 1 },
-                    instanceOpts: [{
-                        dbName: process.env.MEMORY_DB_NAME || 'smart-campus-dev'
-                    }]
-                });
-
-                const memoryMongoUri = memoryMongoServer.getUri();
-                await mongoose.connect(memoryMongoUri, {
-                    serverSelectionTimeoutMS: 10000,
-                    socketTimeoutMS: 30000,
-                    connectTimeoutMS: 10000,
-                    maxPoolSize: 5,
-                    minPoolSize: 1,
-                    retryWrites: false
-                });
-
-                dbConnected = true;
-                updateDbStatus({ mode: 'memory', connected: true, lastError: null });
-                console.log('[DB] In-memory MongoDB replica set started successfully');
-                console.log(`[DB] Database: ${mongoose.connection.name}`);
-                await ensureMongoIndexes();
-            }
-        } catch (memoryError) {
-            updateDbStatus({ mode: 'memory', connected: false, lastError: memoryError.message });
-            console.error('[DB] Failed to start in-memory MongoDB:', memoryError.message);
-            process.exit(1);
-        }
-    }
-
-    if (!dbConnected && useMockDB) {
-        console.log('\n[DB] Using Mock Database mode...');
-        console.warn('[DB] Database-backed features are disabled in mock mode.');
-        updateDbStatus({ mode: 'mock', connected: false, lastError: app.locals.dbStatus.lastError });
-    }
-
-    if (!dbConnected && !useMockDB) {
+    if (!dbConnected) {
         try {
             console.log('\n[DB] Connecting to MongoDB...');
             console.log(`[DB] Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -1083,13 +810,10 @@ process.on('SIGTERM', async () => {
     console.log('\nSIGTERM received, shutting down gracefully...');
     try {
         await mongoose.connection.close();
-        if (memoryMongoServer) {
-            await memoryMongoServer.stop();
-        }
         console.log('MongoDB connection closed');
         process.exit(0);
-    } catch (err) {
-        console.error('Error closing MongoDB connection on SIGTERM:', err);
+    } catch (error) {
+        console.error('Error during shutdown:', error);
         process.exit(1);
     }
 });
@@ -1098,13 +822,10 @@ process.on('SIGINT', async () => {
     console.log('\nSIGINT received, shutting down gracefully...');
     try {
         await mongoose.connection.close();
-        if (memoryMongoServer) {
-            await memoryMongoServer.stop();
-        }
         console.log('MongoDB connection closed');
         process.exit(0);
-    } catch (err) {
-        console.error('Error closing MongoDB connection on SIGINT:', err);
+    } catch (error) {
+        console.error('Error during shutdown:', error);
         process.exit(1);
     }
 });
