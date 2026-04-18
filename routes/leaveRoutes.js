@@ -8,8 +8,11 @@ const {
     rejectLeave
 } = require('../controllers/leaveController');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 
 router.post('/apply', authorize('teacher'), applyLeave);
 router.get('/my', authorize('teacher'), getMyLeaves);

@@ -6,6 +6,11 @@
 const mongoose = require('mongoose');
 
 const subjectSchema = new mongoose.Schema({
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
     schoolCode: {
         type: String,
         required: true,
@@ -105,6 +110,22 @@ const subjectSchema = new mongoose.Schema({
 
 // Compound index for unique subject per school
 subjectSchema.index({ schoolCode: 1, subjectCode: 1 }, { unique: true });
+subjectSchema.index({ schoolCode: 1, isActive: 1, subjectName: 1 });
+subjectSchema.index({ schoolCode: 1, classLevels: 1, isActive: 1 });
+subjectSchema.index({ schoolId: 1, classLevels: 1, isActive: 1 });
+
+subjectSchema.pre('validate', function(next) {
+    if (typeof this.schoolCode === 'string') {
+        this.schoolCode = this.schoolCode.trim().toUpperCase();
+    }
+    if (typeof this.subjectCode === 'string') {
+        this.subjectCode = this.subjectCode.trim().toUpperCase();
+    }
+    if (typeof this.subjectName === 'string') {
+        this.subjectName = this.subjectName.trim();
+    }
+    next();
+});
 
 // Method to add teacher
 subjectSchema.methods.addTeacher = function(teacherId) {

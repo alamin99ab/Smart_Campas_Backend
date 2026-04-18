@@ -28,6 +28,7 @@ const {
     getMySubstituteAssignments: getMyTemporarySubstituteAssignments
 } = require('../controllers/teacherAbsenceController');
 const resultController = require('../controllers/resultController');
+const examController = require('../controllers/examController');
 const { getMyAssignments } = require('../controllers/teacherAssignmentController');
 
 // Import middleware
@@ -75,6 +76,8 @@ router.get('/marks/exam/:examId', resultController.getExamMarks);
 router.get('/marks/subject/:subjectId', resultController.getSubjectMarks);
 router.get('/marks/students', resultController.getStudentsForMarks);
 router.get('/exams', resultController.getTeacherExams);
+router.post('/class-tests', checkFeatureAccess('exam'), examController.createClassTest);
+router.get('/class-tests', examController.getClassTests);
 
 /**
  * 🔁 SUBSTITUTE FLOW

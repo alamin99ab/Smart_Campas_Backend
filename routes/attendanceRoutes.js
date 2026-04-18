@@ -11,9 +11,13 @@ const {
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { checkSchoolStatus } = require('../middleware/schoolMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
+const { validate, schemas, validateObjectId } = require('../middleware/validationMiddleware');
 
 // All attendance routes require authentication
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 router.use(checkSchoolStatus);
 
 // Discovery endpoint
@@ -36,12 +40,23 @@ router.get('/', (req, res) => {
 });
 
 // Teacher/Principal can take attendance
-router.post('/take', authorize('teacher', 'principal', 'accountant'), takeAttendance);
-router.get('/report', getAttendanceReport);
+router.post('/take', 
+    validate(schemas.attendance.take), 
+    authorize('teacher', 'principal'), 
+    takeAttendance
+);
+router.get('/report', 
+    validate(schemas.attendance.report, 'query'), 
+    getAttendanceReport
+);
 router.get('/today', getTodayAttendance);
 router.get('/monthly', getMonthlyReport);
 router.get('/alerts', authorize('principal', 'teacher', 'admin'), getAttendanceAlerts);
-router.get('/export', authorize('principal', 'accountant'), exportAttendance);
-router.delete('/:id', authorize('principal'), deleteAttendance);
+router.get('/export', authorize('principal', 'admin', 'super_admin'), exportAttendance);
+router.delete('/:id', 
+    validateObjectId('id'), 
+    authorize('principal'), 
+    deleteAttendance
+);
 
 module.exports = router;

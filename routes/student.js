@@ -18,6 +18,7 @@ const noticeController = require('../controllers/noticeController');
 // Import middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { ensureTenantIsolation, checkFeatureAccess, addSchoolScope } = require('../middleware/multiTenant');
+const { validate, schemas, preventSensitiveFields } = require('../middleware/validationMiddleware');
 
 // Authentication first, then tenant isolation
 router.use(protect);
@@ -39,7 +40,11 @@ router.use(authorize('student'));
 
 router.get('/dashboard', studentController.getStudentDashboard);
 router.get('/profile', studentController.getStudentProfile);
-router.put('/profile', studentController.updateStudentProfile);
+router.put('/profile', 
+    validate(schemas.student.update), 
+    preventSensitiveFields, 
+    studentController.updateStudentProfile
+);
 router.put('/password', studentController.changePassword);
 
 /**

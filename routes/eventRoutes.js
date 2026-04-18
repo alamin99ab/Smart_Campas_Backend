@@ -8,8 +8,11 @@ const {
     deleteEvent
 } = require('../controllers/eventController');
 const { protect } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 router.route('/')
     .post(createEvent)
     .get(getEvents);

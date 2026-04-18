@@ -1,4 +1,5 @@
-const ClassRoutine = require('../models/ClassRoutine');
+const AdvancedRoutine = require('../models/AdvancedRoutine');
+const ClassRoutine = require('../models/ClassRoutine'); // Keep for backward compatibility
 const AuditLog = require('../models/AuditLog');
 const Teacher = require('../models/Teacher');
 const User = require('../models/User');
@@ -243,6 +244,9 @@ exports.createRoutine = async (req, res) => {
         }
 
         const routinePayload = {
+            ...(req.tenant?.schoolId || req.user?.schoolId
+                ? { schoolId: req.tenant?.schoolId || req.user?.schoolId }
+                : {}),
             schoolCode: req.user.schoolCode,
             studentClass: normalizedClass,
             section: normalizedSection,
@@ -502,6 +506,7 @@ exports.autoGenerateRoutine = async (req, res) => {
 
         const { studentClass, section, academicYear, semester } = req.body;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user?.schoolId;
 
         if (!studentClass || !academicYear) {
             return res.status(400).json({ success: false, message: 'Class and academic year are required' });
@@ -643,6 +648,7 @@ exports.autoGenerateRoutine = async (req, res) => {
 
             // Create routine for this day
             const routine = await ClassRoutine.create({
+                ...(schoolId ? { schoolId } : {}),
                 schoolCode,
                 studentClass,
                 section: section || null,

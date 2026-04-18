@@ -4,7 +4,9 @@ const Result = require('../models/Result');
 const Student = require('../models/Student');
 const School = require('../models/School');
 const Class = require('../models/Class');
+const Section = require('../models/Section');
 const Exam = require('../models/Exam');
+const ExamSchedule = require('../models/ExamSchedule');
 const Subject = require('../models/Subject');
 const TeacherAssignment = require('../models/TeacherAssignment');
 const { resolveStudentObjectIdFromUser } = require('../utils/resolveStudentFromUser');
@@ -13,6 +15,12 @@ const PDFDocument = require('pdfkit');
 const Excel = require('exceljs');
 const { sendEmail } = require('../utils/emailService');
 const { sendSMS } = require('../utils/smsService');
+
+const RESULT_STATUS = Object.freeze({
+    DRAFT: 'draft',
+    VERIFIED: 'verified',
+    PUBLISHED: 'published'
+});
 
 const normalizeObjectIdString = (value) => {
     if (!value) return null;
@@ -29,7 +37,7 @@ const guardianEmailRegex = (email) => {
 };
 
 const getParentLinkedStudentIdStrings = async (user) => {
-    if (user?.role !== 'parent' || !user?.schoolCode) return [];
+    if (user?.role !== 'parent' || !user?.schoolId) return [];
     const parentId = normalizeObjectIdString(user._id || user.id);
     const emailRegex = guardianEmailRegex(user.email);
     const conditions = [];
@@ -38,7 +46,7 @@ const getParentLinkedStudentIdStrings = async (user) => {
     if (!conditions.length) return [];
 
     const rows = await Student.find({
-        schoolCode: user.schoolCode,
+        schoolId: user.schoolId,
         isActive: true,
         $or: conditions
     }).select('_id').lean();
@@ -47,12 +55,12 @@ const getParentLinkedStudentIdStrings = async (user) => {
 };
 
 const getTeacherResultScopes = async (user) => {
-    const schoolCode = user?.schoolCode;
+    const schoolId = user?.schoolId;
     const teacherId = normalizeObjectIdString(user?._id || user?.id);
-    if (!schoolCode || !teacherId) return [];
+    if (!schoolId || !teacherId) return [];
 
     const assignments = await TeacherAssignment.find({
-        schoolCode,
+        schoolId,
         teacher: teacherId,
         isActive: true
     }).select('classes').lean();
@@ -62,7 +70,7 @@ const getTeacherResultScopes = async (user) => {
 
     const classes = await Class.find({
         _id: { $in: classIds },
-        schoolCode
+        schoolId
     }).select('className section').lean();
 
     return classes
@@ -103,23 +111,23 @@ const toIdMatchCandidates = (value) => {
     return candidates;
 };
 
-const findTeacherAssignment = async (teacherId, schoolCode, classId, subjectId) => {
+const findTeacherAssignment = async (teacherId, schoolId, classId, subjectId) => {
     if (!teacherId || !classId || !subjectId) return null;
     const classCandidates = toIdMatchCandidates(classId);
     const subjectCandidates = toIdMatchCandidates(subjectId);
     return await TeacherAssignment.findOne({
         teacher: teacherId,
-        schoolCode,
+        schoolId,
         isActive: true,
         classes: { $in: classCandidates },
         subject: { $in: subjectCandidates }
     }).lean();
 };
 
-const getTeacherAccessibleClassConditions = async (teacherId, schoolCode) => {
+const getTeacherAccessibleClassConditions = async (teacherId, schoolId) => {
     const assignments = await TeacherAssignment.find({
         teacher: teacherId,
-        schoolCode,
+        schoolId,
         isActive: true
     }).populate('classes', 'className section').lean();
 
@@ -168,6 +176,233 @@ const calculateGPA = (subjects) => {
     return count > 0 ? (totalPoints / count).toFixed(2) : 0;
 };
 
+const normalizeSectionValue = (value) => {
+    const raw = String(value || '').trim();
+    return raw ? raw.toUpperCase() : '';
+};
+
+const andFilters = (...filters) => {
+    const valid = filters.filter((filter) => filter && Object.keys(filter).length > 0);
+    if (!valid.length) return {};
+    if (valid.length === 1) return valid[0];
+    return { $and: valid };
+};
+
+const getSchoolScopeFilter = (req) => {
+    const schoolCode = String(req.tenant?.schoolCode || req.user?.schoolCode || '').trim().toUpperCase();
+    const schoolIdRaw = req.tenant?.schoolId || req.user?.schoolId;
+    const schoolId = toObjectId(schoolIdRaw);
+
+    const clauses = [];
+    if (schoolId) clauses.push({ schoolId });
+    if (schoolCode) clauses.push({ schoolCode });
+
+    if (!clauses.length) {
+        return null;
+    }
+
+    return clauses.length === 1 ? clauses[0] : { $or: clauses };
+};
+
+const publishedVisibilityFilter = () => ({
+    $or: [
+        { status: RESULT_STATUS.PUBLISHED },
+        { $and: [{ status: { $exists: false } }, { isPublished: true }] }
+    ]
+});
+
+const nonPublishedVisibilityFilter = () => ({
+    $or: [
+        { status: RESULT_STATUS.DRAFT },
+        { status: RESULT_STATUS.VERIFIED },
+        { status: null },
+        { $and: [{ status: { $exists: false } }, { isPublished: { $ne: true } }] }
+    ]
+});
+
+const isResultPublished = (result) => {
+    if (!result) return false;
+    if (result.status) return result.status === RESULT_STATUS.PUBLISHED;
+    return Boolean(result.isPublished);
+};
+
+const applyDraftState = (result) => {
+    result.status = RESULT_STATUS.DRAFT;
+    result.isPublished = false;
+    result.publishedAt = null;
+    result.publishedBy = null;
+    return result;
+};
+
+const getExamAnchorDate = (exam) => {
+    return exam?.startDate || exam?.date || exam?.createdAt || new Date();
+};
+
+const extractExamClassIds = (exam) => {
+    const ids = new Set();
+    if (!exam) return ids;
+    if (exam.classId) ids.add(String(exam.classId?._id || exam.classId));
+    (exam.targetClasses || []).forEach((entry) => ids.add(String(entry?._id || entry)));
+    return ids;
+};
+
+const isClassWithinExamScope = (exam, classId) => {
+    const classIds = extractExamClassIds(exam);
+    if (!classIds.size) return true;
+    return classIds.has(String(classId));
+};
+
+const resolveExamClassContextForMarks = async ({
+    exam,
+    schoolCode,
+    classId,
+    student
+}) => {
+    if (!exam) {
+        return { error: { status: 404, message: 'Exam not found' } };
+    }
+
+    let classDoc = null;
+
+    if (classId) {
+        if (!isValidObjectId(classId)) {
+            return { error: { status: 400, message: 'Valid classId is required for this exam' } };
+        }
+        classDoc = await Class.findOne({
+            _id: toObjectId(classId),
+            schoolCode,
+            isActive: true
+        }).select('_id className section').lean();
+        if (!classDoc) {
+            return { error: { status: 404, message: 'Class not found in this school' } };
+        }
+    } else if (exam.classId?.className) {
+        classDoc = {
+            _id: exam.classId._id || exam.classId,
+            className: exam.classId.className,
+            section: exam.classId.section || ''
+        };
+    } else if (Array.isArray(exam.targetClasses) && exam.targetClasses.length === 1) {
+        const target = exam.targetClasses[0];
+        classDoc = {
+            _id: target._id || target,
+            className: target.className || '',
+            section: target.section || ''
+        };
+    } else if (student?.studentClass) {
+        classDoc = await Class.findOne({
+            schoolCode,
+            className: String(student.studentClass).trim(),
+            ...(student.section ? { section: String(student.section).trim().toUpperCase() } : {}),
+            isActive: true
+        }).select('_id className section').lean();
+    }
+
+    if (classDoc?._id && !classDoc.className) {
+        const resolved = await Class.findOne({
+            _id: toObjectId(classDoc._id),
+            schoolCode,
+            isActive: true
+        }).select('_id className section').lean();
+        classDoc = resolved || classDoc;
+    }
+
+    if (!classDoc) {
+        return { error: { status: 400, message: 'classId is required for multi-class exam marks entry' } };
+    }
+
+    if (!isClassWithinExamScope(exam, classDoc._id)) {
+        return { error: { status: 400, message: 'Selected class is outside exam scope' } };
+    }
+
+    return { classDoc };
+};
+
+const getExamScheduleDoc = async ({ examId, schoolCode, cache }) => {
+    const cacheKey = `${schoolCode}::${String(examId)}`;
+    if (cache?.has(cacheKey)) {
+        return cache.get(cacheKey);
+    }
+
+    const schedule = await ExamSchedule.findOne({
+        schoolCode,
+        examId: toObjectId(examId)
+    }).lean();
+
+    if (cache) cache.set(cacheKey, schedule || null);
+    return schedule || null;
+};
+
+const findScheduleSlot = ({ schedule, classDoc, section, subjectId }) => {
+    if (!schedule || !Array.isArray(schedule.slots)) return null;
+    const classId = String(classDoc?._id || '');
+    const sectionToken = normalizeSectionValue(section || classDoc?.section || '');
+
+    return schedule.slots.find((slot) => {
+        const slotClassId = slot.classId ? String(slot.classId) : '';
+        const slotSection = normalizeSectionValue(slot.section || '');
+        const slotSubjectId = slot.subjectId ? String(slot.subjectId) : '';
+
+        if (slotClassId && classId && slotClassId !== classId) return false;
+        if (sectionToken && slotSection && slotSection !== sectionToken) return false;
+        if (subjectId && slotSubjectId && String(subjectId) !== slotSubjectId) return false;
+        return true;
+    }) || null;
+};
+
+const resolveExamSubjectContextForMarks = async ({
+    exam,
+    schoolCode,
+    subjectId,
+    classDoc,
+    section,
+    schedule
+}) => {
+    let resolvedSubjectId = subjectId ? String(subjectId) : null;
+
+    if (!resolvedSubjectId && exam.subjectId) {
+        resolvedSubjectId = String(exam.subjectId?._id || exam.subjectId);
+    }
+
+    if (!resolvedSubjectId || !isValidObjectId(resolvedSubjectId)) {
+        return { error: { status: 400, message: 'Valid subjectId is required for marks entry' } };
+    }
+
+    const subjectDoc = await Subject.findOne({
+        _id: toObjectId(resolvedSubjectId),
+        schoolCode,
+        isActive: true
+    }).select('_id subjectName').lean();
+
+    if (!subjectDoc) {
+        return { error: { status: 404, message: 'Subject not found in this school' } };
+    }
+
+    if (exam.subjectId && String(exam.subjectId?._id || exam.subjectId) !== resolvedSubjectId) {
+        return { error: { status: 400, message: 'Subject does not match the selected exam' } };
+    }
+
+    const slot = findScheduleSlot({
+        schedule,
+        classDoc,
+        section,
+        subjectId: resolvedSubjectId
+    });
+
+    // For event-style exams, schedule defines valid subject-class mappings.
+    if (!exam.subjectId && schedule && !slot) {
+        return { error: { status: 400, message: 'Subject is not scheduled for this exam/class scope' } };
+    }
+
+    const totalMarks = Number(slot?.totalMarks || slot?.fullMarks || exam.totalMarks || 100);
+
+    return {
+        subjectId: toObjectId(resolvedSubjectId),
+        subjectName: subjectDoc.subjectName || 'Unknown Subject',
+        totalMarks
+    };
+};
+
 // @desc    Upload/Publish Result (Teachers/Principal only)
 // @route   POST /api/results
 // @access  Private
@@ -181,6 +416,7 @@ exports.uploadResult = async (req, res) => {
         }
 
         const normalizedSchoolCode = (req.user.schoolCode || '').toUpperCase();
+        const schoolId = req.tenant?.schoolId || req.user?.schoolId;
 
         // Check if student exists and belongs to this school
         const student = await Student.findOne({ 
@@ -193,9 +429,6 @@ exports.uploadResult = async (req, res) => {
 
         const school = await School.findOne({ schoolCode: normalizedSchoolCode }).select('academicSettings.currentSession');
         const derivedAcademicYear = req.body.academicYear || student.academicYear || school?.academicSettings?.currentSession;
-        // New workflow: results are created as draft and require principal publish action.
-        const isPublished = false;
-        const publishedAt = null;
 
         // Validate each subject
         for (let sub of subjects) {
@@ -229,6 +462,7 @@ exports.uploadResult = async (req, res) => {
         // Create result
         const result = await Result.create({
             studentId,
+            ...(schoolId ? { schoolId } : {}),
             schoolCode: normalizedSchoolCode,
             studentClass: student.studentClass,
             section: student.section,
@@ -240,8 +474,9 @@ exports.uploadResult = async (req, res) => {
             totalMarks,
             gpa,
             remarks,
-            isPublished,
-            publishedAt,
+            status: RESULT_STATUS.DRAFT,
+            isPublished: false,
+            publishedAt: null,
             isActive: true
         });
 
@@ -270,7 +505,7 @@ exports.uploadResult = async (req, res) => {
         if (error.code === 11000) {
             return res.status(400).json({ message: 'Duplicate entry: Result already exists' });
         }
-        res.status(500).json({ message: 'Failed to publish result' });
+        res.status(500).json({ message: 'Failed to save result draft' });
     }
 };
 
@@ -281,24 +516,33 @@ exports.updateResult = async (req, res) => {
     try {
         const { id } = req.params;
         const { subjects, examName, examDate, remarks, gradingSystem } = req.body;
+        const schoolCode = String(req.user.schoolCode || '').toUpperCase();
 
-        const result = await Result.findById(id);
+        const result = await Result.findOne({ _id: id, schoolCode });
         if (!result) {
             return res.status(404).json({ message: 'Result not found' });
         }
 
-        // Check school ownership
-        if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'super_admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
         if (result.isLocked) {
             return res.status(403).json({ message: 'Result is locked. Principal must unlock to edit.' });
         }
-        if (req.user.role === 'teacher' && result.isPublished) {
+        if (req.user.role === 'teacher' && isResultPublished(result)) {
             return res.status(403).json({ success: false, message: 'Published results can only be edited by principal/admin' });
+        }
+        if (
+            req.body.isPublished !== undefined ||
+            req.body.status !== undefined ||
+            req.body.publishedAt !== undefined ||
+            req.body.publishedBy !== undefined
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: 'Publish state cannot be changed from update endpoint. Use exam-wise publish APIs.'
+            });
         }
 
         // Update fields
+        let hasMaterialUpdate = false;
         if (subjects) {
             if (!Array.isArray(subjects) || subjects.length === 0) {
                 return res.status(400).json({ message: 'Subjects must be a non-empty array' });
@@ -310,19 +554,31 @@ exports.updateResult = async (req, res) => {
             result.subjects = updatedSubjects;
             result.totalMarks = updatedSubjects.reduce((acc, curr) => acc + curr.marks, 0);
             result.gpa = calculateGPA(updatedSubjects);
+            hasMaterialUpdate = true;
         }
-        if (examName) result.examName = examName;
-        if (examDate) result.examDate = examDate;
-        if (remarks !== undefined) result.remarks = remarks;
-        if (gradingSystem) result.gradingSystem = gradingSystem;
-        if (req.body.academicYear) result.academicYear = req.body.academicYear;
-        if (req.body.isPublished !== undefined) {
-            if (!['principal', 'admin', 'super_admin'].includes(req.user.role)) {
-                return res.status(403).json({ success: false, message: 'Only principal/admin can change publish status' });
-            }
-            result.isPublished = !!req.body.isPublished;
-            result.publishedAt = result.isPublished ? (result.publishedAt || new Date()) : null;
-            result.publishedBy = result.isPublished ? (result.publishedBy || req.user._id) : null;
+        if (examName) {
+            result.examName = examName;
+            hasMaterialUpdate = true;
+        }
+        if (examDate) {
+            result.examDate = examDate;
+            hasMaterialUpdate = true;
+        }
+        if (remarks !== undefined) {
+            result.remarks = remarks;
+            hasMaterialUpdate = true;
+        }
+        if (gradingSystem) {
+            result.gradingSystem = gradingSystem;
+            hasMaterialUpdate = true;
+        }
+        if (req.body.academicYear) {
+            result.academicYear = req.body.academicYear;
+            hasMaterialUpdate = true;
+        }
+
+        if (hasMaterialUpdate) {
+            applyDraftState(result);
         }
 
         result.updatedBy = req.user._id;
@@ -340,7 +596,9 @@ exports.updateResult = async (req, res) => {
         });
 
         res.json({ 
-            message: 'Result updated successfully', 
+            message: hasMaterialUpdate
+                ? 'Result updated and moved to draft. Publish exam-wise to make it visible.'
+                : 'Result updated successfully',
             result: await result.populate('studentId', 'name')
         });
 
@@ -368,7 +626,7 @@ exports.searchResult = async (req, res) => {
             studentClass,
             roll: Number(roll),
             examName: { $regex: new RegExp(`^${examName}$`, 'i') },
-            isPublished: true
+            ...publishedVisibilityFilter()
         }).populate('studentId', 'name section fatherName motherName');
 
         if (!result) {
@@ -404,12 +662,18 @@ exports.getResults = async (req, res) => {
             studentId, 
             fromDate, 
             toDate, 
+            status,
             page = 1, 
             limit = 20 
         } = req.query;
+
+        // Pagination validation and limits
+        const pageNum = Math.max(1, parseInt(page, 10));
+        const limitNum = Math.min(Math.max(1, parseInt(limit, 10)), 100); // Max 100 records
+        const skip = (pageNum - 1) * limitNum;
         const role = req.user?.role;
         const schoolCode = req.user?.schoolCode;
-        let query = { schoolCode };
+        let query = { schoolCode, isActive: true };
         let teacherScopes = [];
 
         if (className) query.studentClass = className;
@@ -419,6 +683,16 @@ exports.getResults = async (req, res) => {
             query.examDate = {};
             if (fromDate) query.examDate.$gte = new Date(fromDate);
             if (toDate) query.examDate.$lte = new Date(toDate);
+        }
+        if (status) {
+            const normalizedStatus = String(status).trim().toLowerCase();
+            if (!Object.values(RESULT_STATUS).includes(normalizedStatus)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid status filter. Allowed values: draft, verified, published'
+                });
+            }
+            query.status = normalizedStatus;
         }
 
         if (role === 'teacher') {
@@ -464,7 +738,7 @@ exports.getResults = async (req, res) => {
                 return res.status(403).json({ success: false, message: 'Access denied' });
             }
             query.studentId = studentOid;
-            query.isPublished = true;
+            query = andFilters(query, publishedVisibilityFilter());
         } else if (role === 'parent') {
             const linkedStudentIds = await getParentLinkedStudentIdStrings(req.user);
             if (!linkedStudentIds.length) {
@@ -486,7 +760,7 @@ exports.getResults = async (req, res) => {
             } else {
                 query.studentId = { $in: linkedStudentIds };
             }
-            query.isPublished = true;
+            query = andFilters(query, publishedVisibilityFilter());
         } else if (studentId) {
             const sid = normalizeObjectIdString(studentId);
             if (!sid) {
@@ -495,23 +769,21 @@ exports.getResults = async (req, res) => {
             query.studentId = sid;
         }
 
-        const skip = (page - 1) * limit;
-
         const results = await Result.find(query)
             .populate('studentId', 'name roll section')
             .populate('publishedBy', 'name')
             .sort({ examDate: -1, 'studentId.roll': 1 })
             .skip(skip)
-            .limit(parseInt(limit))
+            .limit(limitNum)
             .lean();
 
-        const total = await Result.countDocuments(query);
+        const total = await Result.countDocuments(query).lean();
 
         const payload = {
             results,
             total,
-            totalPages: Math.ceil(total / limit),
-            currentPage: parseInt(page)
+            totalPages: Math.ceil(total / limitNum),
+            currentPage: pageNum
         };
 
         res.json({
@@ -532,7 +804,12 @@ exports.getResults = async (req, res) => {
 // @access  Private (or public if shared link)
 exports.getResultById = async (req, res) => {
     try {
-        const result = await Result.findById(req.params.id)
+        const role = req.user?.role;
+        const schoolScopedQuery = role === 'super_admin'
+            ? { _id: req.params.id }
+            : { _id: req.params.id, schoolCode: req.user?.schoolCode };
+
+        const result = await Result.findOne(schoolScopedQuery)
             .populate('studentId', 'name roll section fatherName motherName')
             .populate('publishedBy', 'name')
             .populate('updatedBy', 'name');
@@ -541,7 +818,6 @@ exports.getResultById = async (req, res) => {
             return res.status(404).json({ message: 'Result not found' });
         }
 
-        const role = req.user?.role;
         const userSchoolCode = req.user?.schoolCode;
         const resultStudentId = String(result.studentId?._id || result.studentId);
 
@@ -569,7 +845,7 @@ exports.getResultById = async (req, res) => {
 
         if (role === 'student') {
             const studentOid = await resolveStudentObjectIdFromUser(req.user);
-            if (!studentOid || String(studentOid) !== resultStudentId || !result.isPublished) {
+            if (!studentOid || String(studentOid) !== resultStudentId || !isResultPublished(result)) {
                 return res.status(403).json({ success: false, message: 'Access denied' });
             }
             return res.json(result);
@@ -577,7 +853,7 @@ exports.getResultById = async (req, res) => {
 
         if (role === 'parent') {
             const linkedStudentIds = await getParentLinkedStudentIdStrings(req.user);
-            if (!linkedStudentIds.includes(resultStudentId) || !result.isPublished) {
+            if (!linkedStudentIds.includes(resultStudentId) || !isResultPublished(result)) {
                 return res.status(403).json({ success: false, message: 'Access denied' });
             }
             return res.json(result);
@@ -600,19 +876,17 @@ exports.deleteResult = async (req, res) => {
             return res.status(403).json({ message: 'Access denied. Principal or admin only.' });
         }
 
-        const result = await Result.findById(req.params.id);
+        const result = await Result.findOne({
+            _id: req.params.id,
+            schoolCode: req.user.schoolCode
+        });
         if (!result) {
             return res.status(404).json({ message: 'Result not found' });
         }
 
-        if (result.schoolCode !== req.user.schoolCode && req.user.role !== 'super_admin') {
-            return res.status(403).json({ message: 'Access denied' });
-        }
-
-        // Soft delete (set isPublished false) or hard delete
-        result.isPublished = false;
+        // Soft delete (set draft + inactive)
+        applyDraftState(result);
         result.isActive = false;
-        result.publishedAt = null;
         await result.save();
 
         // Audit log
@@ -632,114 +906,282 @@ exports.deleteResult = async (req, res) => {
     }
 };
 
-// @desc    Publish single result
-// @route   PUT /api/results/:id/publish
-// @access  Private (Principal/Admin/Super_Admin)
-exports.publishResult = async (req, res) => {
-    try {
-        const normalizedSchoolCode = String(req.user.schoolCode || '').toUpperCase();
-        const result = await Result.findOne({ _id: req.params.id, schoolCode: normalizedSchoolCode });
-        if (!result) {
-            return res.status(404).json({ success: false, message: 'Result not found' });
-        }
-        if (result.isPublished) {
-            return res.status(400).json({ success: false, message: 'Result is already published' });
-        }
+const resolveExamPublishContext = async (req) => {
+    const { examId, classId, sectionId, section } = req.body || {};
+    const schoolScope = getSchoolScopeFilter(req);
 
-        result.isPublished = true;
-        result.publishedAt = new Date();
-        result.isActive = true;
-        result.publishedBy = req.user._id;
-        await result.save();
-
-        await AuditLog.create({
-            user: req.user._id,
-            action: 'RESULT_PUBLISHED',
-            details: { resultId: result._id, examName: result.examName },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
-        });
-
-        res.json({ success: true, message: 'Result published successfully', data: result });
-    } catch (error) {
-        console.error('Publish result error:', error);
-        res.status(500).json({ success: false, message: 'Failed to publish result' });
+    if (!schoolScope) {
+        return { error: { status: 403, message: 'School scope not found' } };
     }
+    if (!isValidObjectId(examId)) {
+        return { error: { status: 400, message: 'Valid examId is required' } };
+    }
+    if (!isValidObjectId(classId)) {
+        return { error: { status: 400, message: 'Valid classId is required' } };
+    }
+
+    const examOid = toObjectId(examId);
+    const classOid = toObjectId(classId);
+
+    const [exam, classDoc] = await Promise.all([
+        Exam.findOne(andFilters({ _id: examOid, isActive: true }, schoolScope))
+            .populate('classId', 'className section')
+            .populate('targetClasses', 'className section')
+            .lean(),
+        Class.findOne(andFilters({ _id: classOid, isActive: true }, schoolScope))
+            .select('className section')
+            .lean()
+    ]);
+
+    if (!exam) {
+        return { error: { status: 404, message: 'Exam not found in this school' } };
+    }
+    if (!classDoc) {
+        return { error: { status: 404, message: 'Class not found in this school' } };
+    }
+
+    const allowedClassIds = extractExamClassIds(exam);
+    if (allowedClassIds.size && !allowedClassIds.has(String(classOid))) {
+        return { error: { status: 400, message: 'examId does not belong to the provided classId' } };
+    }
+
+    let resolvedSection = normalizeSectionValue(section);
+    if (sectionId) {
+        if (!isValidObjectId(sectionId)) {
+            return { error: { status: 400, message: 'sectionId must be a valid ObjectId' } };
+        }
+        const sectionDoc = await Section.findOne(andFilters(
+            { _id: toObjectId(sectionId), classId: classOid },
+            schoolScope
+        )).select('sectionName name').lean();
+
+        if (!sectionDoc) {
+            return { error: { status: 404, message: 'Section not found in this class/school' } };
+        }
+        resolvedSection = normalizeSectionValue(sectionDoc.sectionName || sectionDoc.name);
+    } else if (!resolvedSection && classDoc.section) {
+        resolvedSection = normalizeSectionValue(classDoc.section);
+    }
+
+    const anchorDate = getExamAnchorDate(exam);
+    const examDayStart = new Date(anchorDate);
+    examDayStart.setHours(0, 0, 0, 0);
+    const examDayEnd = new Date(anchorDate);
+    examDayEnd.setHours(23, 59, 59, 999);
+    const examAcademicYear = anchorDate ? String(new Date(anchorDate).getFullYear()) : null;
+
+    const identityFilter = {
+        $or: [
+            { examId: exam._id },
+            andFilters(
+                { examName: exam.name },
+                examAcademicYear ? { academicYear: examAcademicYear } : {}
+            ),
+            { examName: exam.name, examDate: { $gte: examDayStart, $lte: examDayEnd } }
+        ]
+    };
+
+    const baseFilter = andFilters(
+        schoolScope,
+        {
+            isActive: true,
+            studentClass: classDoc.className,
+            ...(resolvedSection ? { section: resolvedSection } : {})
+        },
+        identityFilter,
+        { 'subjects.0': { $exists: true } }
+    );
+
+    return {
+        schoolScope,
+        classDoc,
+        classOid,
+        exam,
+        resolvedSection,
+        baseFilter
+    };
 };
 
-// @desc    Unpublish single result
-// @route   PUT /api/results/:id/unpublish
-// @access  Private (Principal/Admin/Super_Admin)
-exports.unpublishResult = async (req, res) => {
-    try {
-        const normalizedSchoolCode = String(req.user.schoolCode || '').toUpperCase();
-        const result = await Result.findOne({ _id: req.params.id, schoolCode: normalizedSchoolCode });
-        if (!result) {
-            return res.status(404).json({ success: false, message: 'Result not found' });
-        }
-        if (!result.isPublished) {
-            return res.status(400).json({ success: false, message: 'Result is already unpublished' });
-        }
+const getExamPublishSummary = async (baseFilter) => {
+    const [totalResults, publishedResults, draftResults, verifiedResults] = await Promise.all([
+        Result.countDocuments(baseFilter),
+        Result.countDocuments(andFilters(baseFilter, publishedVisibilityFilter())),
+        Result.countDocuments(andFilters(baseFilter, { status: RESULT_STATUS.DRAFT })),
+        Result.countDocuments(andFilters(baseFilter, { status: RESULT_STATUS.VERIFIED }))
+    ]);
 
-        result.isPublished = false;
-        result.publishedAt = null;
-        result.publishedBy = null;
-        await result.save();
-
-        await AuditLog.create({
-            user: req.user._id,
-            action: 'RESULT_UNPUBLISHED',
-            details: { resultId: result._id, examName: result.examName },
-            ip: req.ip,
-            userAgent: req.headers['user-agent']
-        });
-
-        res.json({
-            success: true,
-            message: 'Result unpublished successfully',
-            data: result
-        });
-    } catch (error) {
-        console.error('Unpublish result error:', error);
-        res.status(500).json({ success: false, message: 'Failed to unpublish result' });
-    }
+    return {
+        totalResults,
+        publishedResults,
+        draftResults,
+        verifiedResults,
+        unpublishedResults: Math.max(0, totalResults - publishedResults)
+    };
 };
 
-// @desc    Bulk publish results
-// @route   PUT /api/results/publish
-// @access  Private (Principal/Admin/Super_Admin)
-exports.bulkPublishResults = async (req, res) => {
-    try {
-        const { resultIds } = req.body;
-        if (!resultIds || !Array.isArray(resultIds) || resultIds.length === 0) {
-            return res.status(400).json({ success: false, message: 'resultIds array is required' });
+const executeExamWisePublishAction = async ({ req, action }) => {
+    const { withTransaction } = require('../utils/transactionHelper');
+    
+    return withTransaction(async (session) => {
+        const context = await resolveExamPublishContext(req);
+        if (context.error) {
+            return context;
         }
 
-        const normalizedSchoolCode = (req.user.schoolCode || '').toUpperCase();
+        const now = new Date();
+        const summaryBefore = await getExamPublishSummary(context.baseFilter);
+        if (summaryBefore.totalResults === 0) {
+            return { error: { status: 404, message: 'No result drafts found for the selected exam/class/section scope' } };
+        }
 
-        const update = await Result.updateMany(
-            { _id: { $in: resultIds }, schoolCode: normalizedSchoolCode },
-            { isPublished: true, publishedAt: new Date(), publishedBy: req.user._id, isActive: true }
+        const updateFilter = action === 'publish'
+            ? andFilters(context.baseFilter, nonPublishedVisibilityFilter())
+            : andFilters(context.baseFilter, publishedVisibilityFilter());
+
+        const updatePayload = action === 'publish'
+            ? {
+                status: RESULT_STATUS.PUBLISHED,
+                isPublished: true,
+                publishedAt: now,
+                publishedBy: req.user._id,
+                isActive: true,
+                updatedBy: req.user._id,
+                updatedAt: now
+            }
+            : {
+                status: RESULT_STATUS.DRAFT,
+                isPublished: false,
+                publishedAt: null,
+                publishedBy: null,
+                updatedBy: req.user._id,
+                updatedAt: now
+            };
+
+        // Update results within transaction
+        const updateResult = await Result.updateMany(updateFilter, { $set: updatePayload }, { session });
+
+        // Update exam status within transaction
+        await Exam.updateMany(
+            andFilters(context.schoolScope, { _id: context.exam._id }),
+            {
+                $set: {
+                    resultsPublished: action === 'publish',
+                    publishedDate: action === 'publish' ? now : null
+                }
+            },
+            { session }
         );
 
-        await AuditLog.create({
+        const summaryAfter = await getExamPublishSummary(context.baseFilter);
+
+        // Create audit log within transaction
+        await AuditLog.create([{
             user: req.user._id,
-            action: 'RESULTS_BULK_PUBLISHED',
-            details: { resultIds, modifiedCount: update.modifiedCount },
+            action: action === 'publish' ? 'RESULTS_EXAM_WISE_PUBLISHED' : 'RESULTS_EXAM_WISE_UNPUBLISHED',
+            details: {
+                examId: context.exam._id,
+                examName: context.exam.name,
+                classId: context.classOid,
+                className: context.classDoc.className,
+                section: context.resolvedSection || null,
+                summaryBefore,
+                summaryAfter,
+                modifiedCount: updateResult.modifiedCount
+            },
             ip: req.ip,
             userAgent: req.headers['user-agent']
-        });
+        }], { session });
 
-        res.json({
+        return {
             success: true,
-            message: 'Results published successfully',
-            data: { matchedCount: update.matchedCount, modifiedCount: update.modifiedCount }
+            data: {
+                examId: context.exam._id,
+                examName: context.exam.name,
+                classId: context.classOid,
+                className: context.classDoc.className,
+                section: context.resolvedSection || null,
+                updatedCount: updateResult.modifiedCount || 0,
+                summaryBefore,
+                summaryAfter
+            }
+        };
+    });
+};
+
+// @desc    Publish results exam-wise (bulk)
+// @route   POST|PUT /api/results/publish
+// @access  Private (Principal/Admin)
+exports.publishResultsByExam = async (req, res) => {
+    try {
+        const actionResult = await executeExamWisePublishAction({ req, action: 'publish' });
+        if (!actionResult.success) {
+            return res.status(actionResult.error.status).json({ success: false, message: actionResult.error.message });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Results published exam-wise successfully',
+            data: actionResult.data
         });
     } catch (error) {
-        console.error('Bulk publish results error:', error);
-        res.status(500).json({ success: false, message: 'Failed to publish results' });
+        console.error('Exam-wise publish error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to publish results exam-wise' });
     }
 };
+
+// @desc    Unpublish results exam-wise (bulk)
+// @route   POST /api/results/unpublish
+// @access  Private (Principal/Admin)
+exports.unpublishResultsByExam = async (req, res) => {
+    try {
+        const actionResult = await executeExamWisePublishAction({ req, action: 'unpublish' });
+        if (!actionResult.success) {
+            return res.status(actionResult.error.status).json({ success: false, message: actionResult.error.message });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Results unpublished exam-wise successfully',
+            data: actionResult.data
+        });
+    } catch (error) {
+        console.error('Exam-wise unpublish error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to unpublish results exam-wise' });
+    }
+};
+
+// @desc    Get publish status summary for exam/class
+// @route   GET /api/results/publish-status
+// @access  Private (Principal/Admin)
+exports.getExamPublishStatus = async (req, res) => {
+    try {
+        const context = await resolveExamPublishContext({ ...req, body: req.query });
+        if (context.error) {
+            return res.status(context.error.status).json({ success: false, message: context.error.message });
+        }
+
+        const summary = await getExamPublishSummary(context.baseFilter);
+        return res.status(200).json({
+            success: true,
+            data: {
+                examId: context.exam._id,
+                examName: context.exam.name,
+                classId: context.classOid,
+                className: context.classDoc.className,
+                section: context.resolvedSection || null,
+                summary,
+                isFullyPublished: summary.totalResults > 0 && summary.publishedResults === summary.totalResults
+            }
+        });
+    } catch (error) {
+        console.error('Get exam publish status error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to fetch publish status' });
+    }
+};
+
+// Backward-compatible alias for older route/controller references
+exports.bulkPublishResults = exports.publishResultsByExam;
+
 
 // @desc    Lock result (Principal only ΓÇô no further edits)
 // @route   PUT /api/results/:id/lock
@@ -790,7 +1232,7 @@ exports.getStudentResults = async (req, res) => {
         const list = await Result.find({
             schoolCode,
             studentId: studentOid,
-            isPublished: true
+            ...publishedVisibilityFilter()
         })
             .sort({ examDate: -1 })
             .lean();
@@ -825,12 +1267,19 @@ exports.getStudentExamResult = async (req, res) => {
                 message: 'Student profile not linked'
             });
         }
+        const examOid = toObjectId(examId);
+        if (!examOid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid examId'
+            });
+        }
 
         const result = await Result.findOne({
-            _id: examId,
             schoolCode,
             studentId: studentOid,
-            isPublished: true
+            $or: [{ examId: examOid }, { _id: examOid }],
+            ...publishedVisibilityFilter()
         }).lean();
 
         if (!result) {
@@ -939,13 +1388,17 @@ exports.unlockResult = async (req, res) => {
 // @access  Public (with token) or Private
 exports.downloadResultPDF = async (req, res) => {
     try {
-        const result = await Result.findById(req.params.id)
+        const role = req.user?.role;
+        const schoolScopedQuery = role === 'super_admin'
+            ? { _id: req.params.id }
+            : { _id: req.params.id, schoolCode: req.user?.schoolCode };
+
+        const result = await Result.findOne(schoolScopedQuery)
             .populate('studentId', 'name fatherName motherName section');
         if (!result) {
             return res.status(404).send('Result not found');
         }
 
-        const role = req.user?.role;
         const userSchoolCode = req.user?.schoolCode;
         const resultStudentId = String(result.studentId?._id || result.studentId);
 
@@ -964,12 +1417,12 @@ exports.downloadResultPDF = async (req, res) => {
                 }
             } else if (role === 'student') {
                 const studentOid = await resolveStudentObjectIdFromUser(req.user);
-                if (!studentOid || String(studentOid) !== resultStudentId || !result.isPublished) {
+                if (!studentOid || String(studentOid) !== resultStudentId || !isResultPublished(result)) {
                     return res.status(403).json({ success: false, message: 'Access denied' });
                 }
             } else if (role === 'parent') {
                 const linkedStudentIds = await getParentLinkedStudentIdStrings(req.user);
-                if (!linkedStudentIds.includes(resultStudentId) || !result.isPublished) {
+                if (!linkedStudentIds.includes(resultStudentId) || !isResultPublished(result)) {
                     return res.status(403).json({ success: false, message: 'Access denied' });
                 }
             } else {
@@ -1086,7 +1539,7 @@ exports.exportResultsToExcel = async (req, res) => {
     try {
         const { class: className, section, examName } = req.query;
 
-        let query = { schoolCode: req.user.schoolCode, isPublished: true };
+        let query = andFilters({ schoolCode: req.user.schoolCode, isActive: true }, publishedVisibilityFilter());
         if (className) query.studentClass = className;
         if (section) query.section = section;
         if (examName) query.examName = { $regex: examName, $options: 'i' };
@@ -1164,33 +1617,43 @@ const sendResultNotification = async (student, result) => {
     }
 };
 
-const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentId, marks }) => {
-    if (!exam || !subjectId || !studentId) {
-        throw new Error('Exam, subject, and student are required');
+const buildMarkEntry = async ({
+    schoolCode,
+    teacherId,
+    exam,
+    classDoc,
+    section,
+    subjectContext,
+    studentId,
+    marks,
+    student
+}) => {
+    if (!exam || !subjectContext?.subjectId || !studentId || !classDoc?._id) {
+        throw new Error('Exam, class, subject, and student are required');
     }
 
-    const student = await Student.findOne({ _id: studentId, schoolCode, isActive: true });
-    if (!student) {
+    const studentDoc = student || await Student.findOne({ _id: studentId, schoolCode, isActive: true });
+    if (!studentDoc) {
         const error = new Error('Student not found in this school');
         error.status = 404;
         throw error;
     }
 
-    if (String(student.studentClass).trim() !== String(exam.classId.className).trim()) {
+    if (String(studentDoc.studentClass).trim() !== String(classDoc.className).trim()) {
         const error = new Error('Student does not belong to the exam class');
         error.status = 400;
         throw error;
     }
 
-    const studentSection = student.section ? String(student.section).toUpperCase() : '';
-    const examSection = exam.classId.section ? String(exam.classId.section).toUpperCase() : '';
-    if (examSection && studentSection !== examSection) {
+    const scopedSection = normalizeSectionValue(section || classDoc.section || '');
+    const studentSection = normalizeSectionValue(studentDoc.section);
+    if (scopedSection && studentSection && scopedSection !== studentSection) {
         const error = new Error('Student does not belong to the exam section');
         error.status = 400;
         throw error;
     }
 
-    const assignment = await findTeacherAssignment(teacherId, schoolCode, exam.classId._id, subjectId);
+    const assignment = await findTeacherAssignment(teacherId, schoolCode, classDoc._id, subjectContext.subjectId);
     if (!assignment) {
         const error = new Error('You are not authorized to enter marks for this class and subject');
         error.status = 403;
@@ -1203,24 +1666,28 @@ const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentI
         error.status = 400;
         throw error;
     }
-    if (exam.totalMarks !== undefined && markValue > exam.totalMarks) {
-        const error = new Error(`Marks cannot exceed the exam's total marks (${exam.totalMarks})`);
+    if (subjectContext.totalMarks !== undefined && markValue > Number(subjectContext.totalMarks)) {
+        const error = new Error(`Marks cannot exceed total marks (${subjectContext.totalMarks})`);
         error.status = 400;
         throw error;
     }
 
-    const subjectName = exam.subjectId?.subjectName || 'Unknown Subject';
-    const grade = calculateGrade(markValue);
     const subjectEntry = {
-        subjectId,
-        subjectName,
+        subjectId: subjectContext.subjectId,
+        subjectName: subjectContext.subjectName || 'Unknown Subject',
         marks: markValue,
-        grade
+        grade: calculateGrade(markValue)
     };
 
-    let result = await Result.findOne({ schoolCode, studentId, examId: exam._id });
+    let result = await Result.findOne({ schoolCode, studentId: studentDoc._id, examId: exam._id });
     if (!result) {
-        result = await Result.findOne({ schoolCode, studentId, examName: exam.name });
+        result = await Result.findOne({
+            schoolCode,
+            studentId: studentDoc._id,
+            examName: exam.name,
+            studentClass: classDoc.className,
+            ...(scopedSection ? { section: scopedSection } : {})
+        });
     }
 
     if (result && result.isLocked) {
@@ -1228,27 +1695,32 @@ const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentI
         error.status = 403;
         throw error;
     }
-    if (result && result.isPublished) {
+    if (result && isResultPublished(result)) {
         const error = new Error('Published results cannot be modified by teachers');
         error.status = 400;
         throw error;
     }
 
+    const anchorDate = getExamAnchorDate(exam);
+    const resolvedSection = studentSection || scopedSection || normalizeSectionValue(classDoc.section);
+
     if (!result) {
         result = new Result({
             examId: exam._id,
-            studentId,
+            studentId: studentDoc._id,
+            ...(exam.schoolId ? { schoolId: exam.schoolId } : {}),
             schoolCode,
-            studentClass: exam.classId.className,
-            section: exam.classId.section,
-            roll: student.roll,
+            studentClass: classDoc.className,
+            section: resolvedSection || undefined,
+            roll: studentDoc.roll,
             examName: exam.name,
-            examDate: exam.date,
-            academicYear: exam.date ? String(exam.date.getFullYear()) : String(new Date().getFullYear()),
+            examDate: anchorDate,
+            academicYear: String(new Date(anchorDate).getFullYear()),
             subjects: [subjectEntry],
             totalMarks: markValue,
             gpa: calculateGPA([subjectEntry]),
             gradingSystem: 'standard',
+            status: RESULT_STATUS.DRAFT,
             isPublished: false,
             isActive: true,
             createdAt: new Date(),
@@ -1256,7 +1728,9 @@ const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentI
         });
     } else {
         const subjects = result.subjects || [];
-        const existingIndex = subjects.findIndex((s) => s.subjectId && String(s.subjectId) === String(subjectId));
+        const existingIndex = subjects.findIndex((entry) =>
+            entry.subjectId && String(entry.subjectId) === String(subjectContext.subjectId)
+        );
         if (existingIndex >= 0) {
             subjects[existingIndex] = {
                 ...subjects[existingIndex],
@@ -1265,18 +1739,21 @@ const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentI
         } else {
             subjects.push(subjectEntry);
         }
+
         result.subjects = subjects;
         result.totalMarks = subjects.reduce((sum, curr) => sum + Number(curr.marks || 0), 0);
         result.gpa = calculateGPA(subjects);
         result.updatedBy = teacherId;
         result.updatedAt = new Date();
-        result.isPublished = false;
         result.examId = exam._id;
+        result.studentClass = classDoc.className;
+        result.section = resolvedSection || result.section;
+        applyDraftState(result);
     }
 
     await result.save();
     await result.populate('studentId', 'name roll');
-    await result.populate('examId', 'name date');
+    await result.populate('examId', 'name date startDate');
     return result;
 };
 
@@ -1287,7 +1764,7 @@ const buildMarkEntry = async ({ schoolCode, teacherId, exam, subjectId, studentI
  */
 exports.enterMarks = async (req, res) => {
     try {
-        const { examId, studentId, subjectId, marks, marksData } = req.body;
+        const { examId, classId, section, studentId, subjectId, marks, marksData } = req.body;
         const teacherId = toObjectId(req.user._id || req.user.id);
         const schoolCode = req.user.schoolCode;
 
@@ -1296,13 +1773,19 @@ exports.enterMarks = async (req, res) => {
         }
 
         const examOid = toObjectId(examId);
-        const subjectOid = toObjectId(subjectId);
-        if (!examOid || !subjectOid) {
-            return res.status(400).json({ success: false, message: 'Valid examId and subjectId are required' });
+        if (!examOid) {
+            return res.status(400).json({ success: false, message: 'Valid examId is required' });
+        }
+        if (subjectId && !isValidObjectId(subjectId)) {
+            return res.status(400).json({ success: false, message: 'subjectId must be a valid ObjectId' });
+        }
+        if (classId && !isValidObjectId(classId)) {
+            return res.status(400).json({ success: false, message: 'classId must be a valid ObjectId' });
         }
 
         const exam = await Exam.findOne({ _id: examOid, schoolCode, isActive: true })
             .populate('classId', 'className section')
+            .populate('targetClasses', 'className section')
             .populate('subjectId', 'subjectName')
             .lean();
 
@@ -1310,10 +1793,12 @@ exports.enterMarks = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam not found' });
         }
 
-        const examSubjectId = exam.subjectId?._id || exam.subjectId;
-        if (!examSubjectId || String(examSubjectId) !== String(subjectOid)) {
-            return res.status(400).json({ success: false, message: 'Subject does not match the selected exam' });
-        }
+        const scheduleCache = new Map();
+        const schedule = await getExamScheduleDoc({
+            examId: exam._id,
+            schoolCode,
+            cache: scheduleCache
+        });
 
         const results = [];
         const errors = [];
@@ -1326,13 +1811,60 @@ exports.enterMarks = async (req, res) => {
             for (const item of marksData) {
                 const rowStudentId = toObjectId(item.studentId);
                 try {
+                    if (!rowStudentId) {
+                        throw new Error('studentId must be a valid ObjectId');
+                    }
+
+                    const rowStudent = await Student.findOne({
+                        _id: rowStudentId,
+                        schoolCode,
+                        isActive: true
+                    }).select('_id roll studentClass section').lean();
+                    if (!rowStudent) {
+                        throw new Error('Student not found in this school');
+                    }
+
+                    const classContext = await resolveExamClassContextForMarks({
+                        exam,
+                        schoolCode,
+                        classId: item.classId || classId,
+                        student: rowStudent
+                    });
+                    if (classContext.error) {
+                        const scopedError = new Error(classContext.error.message);
+                        scopedError.status = classContext.error.status;
+                        throw scopedError;
+                    }
+
+                    const scopedSection = normalizeSectionValue(
+                        item.section || section || rowStudent.section || classContext.classDoc.section
+                    );
+
+                    const resolvedSubjectInput = item.subjectId || subjectId;
+                    const subjectContext = await resolveExamSubjectContextForMarks({
+                        exam,
+                        schoolCode,
+                        subjectId: resolvedSubjectInput,
+                        classDoc: classContext.classDoc,
+                        section: scopedSection,
+                        schedule
+                    });
+                    if (subjectContext.error) {
+                        const scopedError = new Error(subjectContext.error.message);
+                        scopedError.status = subjectContext.error.status;
+                        throw scopedError;
+                    }
+
                     const result = await buildMarkEntry({
                         schoolCode,
                         teacherId,
                         exam,
-                        subjectId: subjectOid,
+                        classDoc: classContext.classDoc,
+                        section: scopedSection,
+                        subjectContext,
                         studentId: rowStudentId,
-                        marks: item.marks
+                        marks: item.marks,
+                        student: rowStudent
                     });
                     results.push({ studentId: rowStudentId, resultId: result._id, status: 'saved' });
                 } catch (error) {
@@ -1352,13 +1884,49 @@ exports.enterMarks = async (req, res) => {
             return res.status(400).json({ success: false, message: 'studentId and marks are required' });
         }
 
+        const studentDoc = await Student.findOne({
+            _id: studentOid,
+            schoolCode,
+            isActive: true
+        }).select('_id roll studentClass section').lean();
+
+        if (!studentDoc) {
+            return res.status(404).json({ success: false, message: 'Student not found in this school' });
+        }
+
+        const classContext = await resolveExamClassContextForMarks({
+            exam,
+            schoolCode,
+            classId,
+            student: studentDoc
+        });
+        if (classContext.error) {
+            return res.status(classContext.error.status).json({ success: false, message: classContext.error.message });
+        }
+
+        const scopedSection = normalizeSectionValue(section || studentDoc.section || classContext.classDoc.section);
+        const subjectContext = await resolveExamSubjectContextForMarks({
+            exam,
+            schoolCode,
+            subjectId,
+            classDoc: classContext.classDoc,
+            section: scopedSection,
+            schedule
+        });
+        if (subjectContext.error) {
+            return res.status(subjectContext.error.status).json({ success: false, message: subjectContext.error.message });
+        }
+
         const result = await buildMarkEntry({
             schoolCode,
             teacherId,
             exam,
-            subjectId: subjectOid,
+            classDoc: classContext.classDoc,
+            section: scopedSection,
+            subjectContext,
             studentId: studentOid,
-            marks
+            marks,
+            student: studentDoc
         });
 
         res.status(201).json({
@@ -1392,20 +1960,16 @@ exports.updateMarks = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Unauthorized' });
         }
 
-        const result = await Result.findById(resultId);
+        const result = await Result.findOne({ _id: resultId, schoolCode });
         if (!result) {
             return res.status(404).json({ success: false, message: 'Result not found' });
-        }
-
-        if (result.schoolCode !== schoolCode) {
-            return res.status(403).json({ success: false, message: 'Access denied' });
         }
 
         if (result.isLocked) {
             return res.status(403).json({ success: false, message: 'Result is locked and cannot be updated' });
         }
 
-        if (result.isPublished) {
+        if (isResultPublished(result)) {
             return res.status(400).json({ success: false, message: 'Published results cannot be modified by teachers' });
         }
 
@@ -1430,17 +1994,62 @@ exports.updateMarks = async (req, res) => {
         if (result.examId) {
             exam = await Exam.findOne({ _id: result.examId, schoolCode, isActive: true })
                 .populate('classId', 'className section')
+                .populate('targetClasses', 'className section')
+                .populate('subjectId', 'subjectName')
                 .lean();
         }
 
+        const classDoc = await Class.findOne({
+            schoolCode,
+            className: String(result.studentClass || '').trim(),
+            ...(result.section ? { section: normalizeSectionValue(result.section) } : {}),
+            isActive: true
+        }).select('_id className section').lean();
+
+        if (!classDoc) {
+            return res.status(400).json({ success: false, message: 'Result class scope is invalid' });
+        }
+
+        if (exam && !isClassWithinExamScope(exam, classDoc._id)) {
+            return res.status(400).json({ success: false, message: 'Result class is outside exam scope' });
+        }
+
+        let marksLimit = exam?.totalMarks || null;
         if (exam) {
-            if (String(exam.subjectId?._id || exam.subjectId) !== String(subjectOid)) {
+            if (exam.subjectId && String(exam.subjectId?._id || exam.subjectId) !== String(subjectOid)) {
                 return res.status(400).json({ success: false, message: 'Subject does not match the exam' });
             }
-            const assignment = await findTeacherAssignment(teacherId, schoolCode, exam.classId._id, subjectOid);
-            if (!assignment) {
-                return res.status(403).json({ success: false, message: 'You are not authorized to update marks for this class and subject' });
+
+            const schedule = await getExamScheduleDoc({
+                examId: exam._id,
+                schoolCode,
+                cache: null
+            });
+            const slot = findScheduleSlot({
+                schedule,
+                classDoc,
+                section: result.section,
+                subjectId: subjectOid
+            });
+
+            if (!exam.subjectId && schedule && !slot) {
+                return res.status(400).json({ success: false, message: 'Subject is not scheduled for this exam/class scope' });
             }
+            if (slot?.totalMarks || slot?.fullMarks) {
+                marksLimit = Number(slot.totalMarks || slot.fullMarks);
+            }
+        }
+
+        const assignment = await findTeacherAssignment(teacherId, schoolCode, classDoc._id, subjectOid);
+        if (!assignment) {
+            return res.status(403).json({ success: false, message: 'You are not authorized to update marks for this class and subject' });
+        }
+
+        if (marksLimit !== null && Number.isFinite(Number(marksLimit)) && markValue > Number(marksLimit)) {
+            return res.status(400).json({
+                success: false,
+                message: `Marks cannot exceed total marks (${Number(marksLimit)})`
+            });
         }
 
         subjectEntry.marks = markValue;
@@ -1451,7 +2060,7 @@ exports.updateMarks = async (req, res) => {
         result.gpa = calculateGPA(subjects);
         result.updatedBy = teacherId;
         result.updatedAt = new Date();
-        result.isPublished = false;
+        applyDraftState(result);
 
         await result.save();
 
@@ -1478,6 +2087,7 @@ exports.updateMarks = async (req, res) => {
 exports.getExamMarks = async (req, res) => {
     try {
         const { examId } = req.params;
+        const { classId, subjectId, section, sectionId } = req.query;
         const teacherId = toObjectId(req.user._id || req.user.id);
         const schoolCode = req.user.schoolCode;
 
@@ -1485,9 +2095,19 @@ exports.getExamMarks = async (req, res) => {
         if (!examOid) {
             return res.status(400).json({ success: false, message: 'Invalid examId' });
         }
+        if (classId && !isValidObjectId(classId)) {
+            return res.status(400).json({ success: false, message: 'Invalid classId' });
+        }
+        if (subjectId && !isValidObjectId(subjectId)) {
+            return res.status(400).json({ success: false, message: 'Invalid subjectId' });
+        }
+        if (sectionId && !isValidObjectId(sectionId)) {
+            return res.status(400).json({ success: false, message: 'Invalid sectionId' });
+        }
 
         const exam = await Exam.findOne({ _id: examOid, schoolCode, isActive: true })
             .populate('classId', 'className section')
+            .populate('targetClasses', 'className section')
             .populate('subjectId', 'subjectName')
             .lean();
 
@@ -1495,24 +2115,75 @@ exports.getExamMarks = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Exam not found' });
         }
 
-        const assignment = await findTeacherAssignment(teacherId, schoolCode, exam.classId._id, exam.subjectId._id);
+        const classContext = await resolveExamClassContextForMarks({
+            exam,
+            schoolCode,
+            classId
+        });
+        if (classContext.error) {
+            return res.status(classContext.error.status).json({ success: false, message: classContext.error.message });
+        }
+
+        let scopedSection = normalizeSectionValue(section || classContext.classDoc.section);
+        if (sectionId) {
+            const sectionDoc = await Section.findOne({
+                _id: toObjectId(sectionId),
+                schoolCode,
+                classId: classContext.classDoc._id
+            }).select('sectionName name').lean();
+            if (!sectionDoc) {
+                return res.status(404).json({ success: false, message: 'Section not found for this class' });
+            }
+            scopedSection = normalizeSectionValue(sectionDoc.sectionName || sectionDoc.name);
+        }
+
+        const schedule = await getExamScheduleDoc({
+            examId: exam._id,
+            schoolCode,
+            cache: null
+        });
+        const subjectContext = await resolveExamSubjectContextForMarks({
+            exam,
+            schoolCode,
+            subjectId,
+            classDoc: classContext.classDoc,
+            section: scopedSection,
+            schedule
+        });
+        if (subjectContext.error) {
+            return res.status(subjectContext.error.status).json({ success: false, message: subjectContext.error.message });
+        }
+
+        const assignment = await findTeacherAssignment(
+            teacherId,
+            schoolCode,
+            classContext.classDoc._id,
+            subjectContext.subjectId
+        );
         if (!assignment) {
             return res.status(403).json({ success: false, message: 'You are not authorized to view marks for this exam' });
         }
 
         const studentsInClass = await Student.countDocuments({
             schoolCode,
-            studentClass: exam.classId.className,
-            section: exam.classId.section,
+            studentClass: classContext.classDoc.className,
+            ...(scopedSection ? { section: scopedSection } : {}),
             isActive: true
         });
 
-        const results = await Result.find({ schoolCode, examId: exam._id })
+        const results = await Result.find({
+            schoolCode,
+            examId: exam._id,
+            studentClass: classContext.classDoc.className,
+            ...(scopedSection ? { section: scopedSection } : {})
+        })
             .populate('studentId', 'name roll')
             .lean();
 
         const rows = results.map((result) => {
-            const subjectEntry = result.subjects.find((s) => s.subjectId && String(s.subjectId) === String(exam.subjectId?._id || exam.subjectId));
+            const subjectEntry = result.subjects.find((entry) =>
+                entry.subjectId && String(entry.subjectId) === String(subjectContext.subjectId)
+            );
             return {
                 resultId: result._id,
                 studentId: result.studentId?._id,
@@ -1522,7 +2193,7 @@ exports.getExamMarks = async (req, res) => {
                 grade: subjectEntry?.grade ?? null,
                 totalMarks: result.totalMarks,
                 gpa: result.gpa,
-                published: result.isPublished
+                published: isResultPublished(result)
             };
         });
 
@@ -1536,12 +2207,14 @@ exports.getExamMarks = async (req, res) => {
                 _id: exam._id,
                 name: exam.name,
                 examType: exam.examType,
-                className: exam.classId.className,
-                section: exam.classId.section,
-                subjectId: exam.subjectId?._id,
-                subjectName: exam.subjectId?.subjectName,
-                date: exam.date,
-                totalMarks: exam.totalMarks
+                category: exam.category || 'school_exam',
+                classId: classContext.classDoc._id,
+                className: classContext.classDoc.className,
+                section: scopedSection || null,
+                subjectId: subjectContext.subjectId,
+                subjectName: subjectContext.subjectName,
+                date: getExamAnchorDate(exam),
+                totalMarks: subjectContext.totalMarks || exam.totalMarks
             },
             results: rows,
             statistics: {
@@ -1604,7 +2277,7 @@ exports.getSubjectMarks = async (req, res) => {
                 grade: subjectEntry?.grade ?? null,
                 totalMarks: result.totalMarks,
                 gpa: result.gpa,
-                published: result.isPublished
+                published: isResultPublished(result)
             };
         });
 
@@ -1654,55 +2327,138 @@ exports.getTeacherExams = async (req, res) => {
             isActive: true
         }).lean();
 
-        const assignedClassIds = [...new Set(assignments.flatMap((assignment) => assignment.classes || []).map((id) => String(id)))].map(toObjectId).filter(Boolean);
-        const assignedSubjectIds = [...new Set(assignments.map((assignment) => String(assignment.subject)))].map(toObjectId).filter(Boolean);
+        const assignedClassIds = [...new Set(
+            assignments.flatMap((assignment) => assignment.classes || []).map((id) => String(id)).filter(Boolean)
+        )];
+        const assignedSubjectIds = [...new Set(
+            assignments.map((assignment) => String(assignment.subject)).filter(Boolean)
+        )];
 
         if (!assignedClassIds.length || !assignedSubjectIds.length) {
             return res.status(200).json({ success: true, data: { exams: [] } });
         }
 
+        if (classId && (!isValidObjectId(classId) || !assignedClassIds.includes(String(classId)))) {
+            return res.status(403).json({ success: false, message: 'Unauthorized class filter' });
+        }
+        if (subjectId && (!isValidObjectId(subjectId) || !assignedSubjectIds.includes(String(subjectId)))) {
+            return res.status(403).json({ success: false, message: 'Unauthorized subject filter' });
+        }
+
+        const assignedClassOids = assignedClassIds.map((id) => new mongoose.Types.ObjectId(id));
+
         const query = {
             schoolCode,
             isActive: true,
-            classId: { $in: assignedClassIds },
-            subjectId: { $in: assignedSubjectIds }
+            $or: [
+                { classId: { $in: assignedClassOids } },
+                { targetClasses: { $in: assignedClassOids } }
+            ]
         };
-
-        if (classId) {
-            const classOid = toObjectId(classId);
-            if (!classOid || !assignedClassIds.some((id) => String(id) === String(classOid))) {
-                return res.status(403).json({ success: false, message: 'Unauthorized class filter' });
-            }
-            query.classId = classOid;
-        }
-
-        if (subjectId) {
-            const subjectOid = toObjectId(subjectId);
-            if (!subjectOid || !assignedSubjectIds.some((id) => String(id) === String(subjectOid))) {
-                return res.status(403).json({ success: false, message: 'Unauthorized subject filter' });
-            }
-            query.subjectId = subjectOid;
-        }
 
         const exams = await Exam.find(query)
             .populate('classId', 'className section')
+            .populate('targetClasses', 'className section')
             .populate('subjectId', 'subjectName subjectCode')
-            .sort({ date: -1, createdAt: -1 })
+            .sort({ startDate: -1, date: -1, createdAt: -1 })
             .lean();
 
-        const data = exams.map((exam) => ({
-            _id: exam._id,
-            name: exam.name,
-            examType: exam.examType,
-            classId: exam.classId?._id,
-            className: exam.classId?.className,
-            section: exam.classId?.section,
-            subjectId: exam.subjectId?._id,
-            subjectName: exam.subjectId?.subjectName,
-            totalMarks: exam.totalMarks,
-            date: exam.date,
-            resultsPublished: exam.resultsPublished
-        }));
+        if (!exams.length) {
+            return res.status(200).json({ success: true, data: { exams: [] } });
+        }
+
+        const examIds = exams.map((exam) => exam._id);
+        const schedules = await ExamSchedule.find({
+            schoolCode,
+            examId: { $in: examIds }
+        }).select('examId slots').lean();
+
+        const scheduleMap = new Map(schedules.map((row) => [String(row.examId), row]));
+        const classRows = await Class.find({
+            _id: { $in: assignedClassOids },
+            schoolCode,
+            isActive: true
+        }).select('_id className section').lean();
+        const classMap = new Map(classRows.map((row) => [String(row._id), row]));
+
+        const data = [];
+        for (const exam of exams) {
+            const scopedRows = [];
+            const seenScopeKeys = new Set();
+
+            const pushScope = ({ classId: scopedClassId, section: scopedSection, subjectId: scopedSubjectId, subjectName, totalMarks }) => {
+                if (!scopedClassId || !scopedSubjectId) return;
+                const classIdStr = String(scopedClassId);
+                const subjectIdStr = String(scopedSubjectId);
+                const sectionToken = normalizeSectionValue(scopedSection);
+                const scopeKey = `${classIdStr}::${subjectIdStr}::${sectionToken}`;
+                if (seenScopeKeys.has(scopeKey)) return;
+                if (!assignedClassIds.includes(classIdStr) || !assignedSubjectIds.includes(subjectIdStr)) return;
+                if (classId && classIdStr !== String(classId)) return;
+                if (subjectId && subjectIdStr !== String(subjectId)) return;
+
+                const classMeta = classMap.get(classIdStr)
+                    || (exam.classId && String(exam.classId._id || exam.classId) === classIdStr ? exam.classId : null)
+                    || (exam.targetClasses || []).find((row) => String(row._id || row) === classIdStr)
+                    || null;
+
+                scopedRows.push({
+                    classId: classIdStr,
+                    className: classMeta?.className || null,
+                    section: sectionToken || classMeta?.section || null,
+                    subjectId: subjectIdStr,
+                    subjectName: subjectName || null,
+                    totalMarks: totalMarks || exam.totalMarks || null
+                });
+                seenScopeKeys.add(scopeKey);
+            };
+
+            const legacyClassId = exam.classId ? String(exam.classId._id || exam.classId) : null;
+            const legacySubjectId = exam.subjectId ? String(exam.subjectId._id || exam.subjectId) : null;
+            if (legacyClassId && legacySubjectId) {
+                pushScope({
+                    classId: legacyClassId,
+                    section: exam.classId?.section,
+                    subjectId: legacySubjectId,
+                    subjectName: exam.subjectId?.subjectName,
+                    totalMarks: exam.totalMarks
+                });
+            }
+
+            const schedule = scheduleMap.get(String(exam._id));
+            if (schedule?.slots?.length) {
+                schedule.slots.forEach((slot) => {
+                    pushScope({
+                        classId: slot.classId,
+                        section: slot.section,
+                        subjectId: slot.subjectId,
+                        subjectName: slot.subjectName,
+                        totalMarks: slot.totalMarks || slot.fullMarks
+                    });
+                });
+            }
+
+            if (!scopedRows.length) {
+                continue;
+            }
+
+            const primaryScope = scopedRows[0];
+            data.push({
+                _id: exam._id,
+                name: exam.name,
+                examType: exam.examType,
+                category: exam.category || 'school_exam',
+                classId: primaryScope.classId,
+                className: primaryScope.className,
+                section: primaryScope.section,
+                subjectId: primaryScope.subjectId,
+                subjectName: primaryScope.subjectName,
+                totalMarks: primaryScope.totalMarks,
+                date: exam.startDate || exam.date,
+                resultsPublished: exam.resultsPublished,
+                availableScopes: scopedRows
+            });
+        }
 
         res.status(200).json({ success: true, data: { exams: data } });
     } catch (error) {
@@ -1783,7 +2539,7 @@ exports.getStudentsForMarks = async (req, res) => {
                 const sectionMatches = new Set([sectionRaw.toUpperCase()]);
                 if (isValidObjectId(sectionRaw)) {
                     const Section = require('../models/Section');
-                    const sectionDoc = await Section.findById(sectionRaw).select('name sectionName').lean();
+                    const sectionDoc = await Section.findOne({ _id: sectionRaw, schoolCode }).select('name sectionName').lean();
                     if (sectionDoc) {
                         if (sectionDoc.name) sectionMatches.add(String(sectionDoc.name).trim().toUpperCase());
                         if (sectionDoc.sectionName) sectionMatches.add(String(sectionDoc.sectionName).trim().toUpperCase());

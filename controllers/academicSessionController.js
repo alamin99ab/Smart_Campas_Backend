@@ -52,16 +52,17 @@ exports.getSessions = async (req, res) => {
 
 exports.setCurrentSession = async (req, res) => {
     try {
+        const schoolCode = req.user.schoolCode;
         await AcademicSession.updateMany(
-            { schoolCode: req.user.schoolCode },
+            { schoolCode },
             { isCurrent: false }
         );
-        const session = await AcademicSession.findByIdAndUpdate(
-            req.params.id,
+        const session = await AcademicSession.findOneAndUpdate(
+            { _id: req.params.id, schoolCode },
             { isCurrent: true },
             { new: true }
         );
-        if (!session || session.schoolCode !== req.user.schoolCode) {
+        if (!session) {
             return res.status(404).json({ success: false, message: 'Session not found' });
         }
         res.json({ success: true, data: session });

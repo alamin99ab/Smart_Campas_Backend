@@ -108,7 +108,7 @@ const buildWeeklyFromClassRoutine = (routineDocs) => {
     return sortWeeklyRoutine(weekly);
 };
 
-const resolveStudentClassContext = async (studentUser) => {
+const resolveStudentClassContext = async (studentUser, schoolCode) => {
     if (!studentUser) return { classId: null, className: null, section: null };
 
     let classId = null;
@@ -121,7 +121,10 @@ const resolveStudentClassContext = async (studentUser) => {
         section = section || studentUser.classId.section || null;
     } else if (studentUser.classId && mongoose.Types.ObjectId.isValid(studentUser.classId)) {
         classId = studentUser.classId;
-        const classDoc = await Class.findById(studentUser.classId).select('className section').lean();
+        const classDoc = await Class.findOne({
+            _id: studentUser.classId,
+            ...(schoolCode ? { schoolCode } : {})
+        }).select('className section').lean();
         if (classDoc) {
             className = classDoc.className || null;
             section = section || classDoc.section || null;
@@ -132,7 +135,7 @@ const resolveStudentClassContext = async (studentUser) => {
 };
 
 const getStudentRoutineData = async ({ studentUser, schoolCode }) => {
-    const { classId, className, section } = await resolveStudentClassContext(studentUser);
+    const { classId, className, section } = await resolveStudentClassContext(studentUser, schoolCode);
     if (!classId && !className) {
         return { weeklyRoutine: [], todayRoutine: null };
     }

@@ -280,12 +280,14 @@ exports.createSection = async (req, res) => {
     try {
         const { sectionName, classId, capacity, roomNumber } = req.body;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
 
         const section = new Section({
             sectionName,
             classId,
             capacity,
             roomNumber,
+            ...(schoolId ? { schoolId } : {}),
             schoolCode,
             createdBy: req.user.id
         });
@@ -462,6 +464,7 @@ exports.createClass = async (req, res) => {
         }
 
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
         const normalizedSection = section?.trim()?.toUpperCase();
 
         let effectiveAcademicYear = academicYear;
@@ -486,6 +489,7 @@ exports.createClass = async (req, res) => {
         }
 
         const newClass = new Class({
+            ...(schoolId ? { schoolId } : {}),
             schoolCode,
             className,
             section: normalizedSection,
@@ -541,6 +545,7 @@ exports.getAllClasses = async (req, res) => {
     try {
         const { academicYear, classLevel } = req.query;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
 
         const query = { schoolCode };
         if (academicYear) query.academicYear = academicYear;
@@ -666,6 +671,7 @@ exports.createSubject = async (req, res) => {
         }
 
         const newSubject = new Subject({
+            ...(schoolId ? { schoolId } : {}),
             schoolCode,
             subjectName,
             subjectCode,
@@ -792,6 +798,7 @@ exports.createRoom = async (req, res) => {
     try {
         const { roomNumber, capacity, type, floor, building, equipment } = req.body;
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user.schoolId;
 
         const room = new Room({
             roomNumber,
@@ -800,6 +807,7 @@ exports.createRoom = async (req, res) => {
             floor,
             building,
             equipment,
+            schoolId,
             schoolCode,
             createdBy: req.user.id
         });
@@ -1401,20 +1409,14 @@ exports.resetUserPassword = async (req, res) => {
         }
 
         // ===== FETCH TARGET USER =====
-        const targetUser = await User.findById(userId);
+        const targetUser = await User.findOne({
+            _id: userId,
+            schoolCode: principalSchoolCode
+        });
         if (!targetUser) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
-            });
-        }
-
-        // ===== AUTHORIZATION CHECKS =====
-        // Check if target user is in same school
-        if (targetUser.schoolCode !== principalSchoolCode) {
-            return res.status(403).json({
-                success: false,
-                message: 'You can only manage users in your own school'
             });
         }
 
@@ -1539,7 +1541,7 @@ exports.createStudent = async (req, res) => {
         try {
             let className = 'Unassigned';
             if (classId) {
-                const classDoc = await Class.findById(classId).select('className section');
+                const classDoc = await Class.findOne({ _id: classId, schoolCode }).select('className section');
                 if (classDoc) {
                     className = classDoc.className;
                 }
@@ -1558,6 +1560,7 @@ exports.createStudent = async (req, res) => {
                           email: parentInfo.email
                       }
                     : undefined,
+                schoolId,
                 schoolCode,
                 parentId: undefined,
                 addedBy: req.user.id,

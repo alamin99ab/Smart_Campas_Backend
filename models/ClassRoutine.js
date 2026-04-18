@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const routineSchema = new mongoose.Schema({
+    schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
     schoolCode: { type: String, required: true, index: true },
     studentClass: { type: String, required: true },
     section: { type: String },
@@ -30,6 +31,11 @@ const routineSchema = new mongoose.Schema({
 });
 
 routineSchema.index({ schoolCode: 1, studentClass: 1, section: 1, day: 1, academicYear: 1 }, { unique: true });
+routineSchema.index(
+    { schoolId: 1, studentClass: 1, section: 1, day: 1, academicYear: 1 },
+    { unique: true, partialFilterExpression: { schoolId: { $type: 'objectId' } } }
+);
+routineSchema.index({ schoolId: 1, studentClass: 1, section: 1, isActive: 1 });
 routineSchema.pre('save', function () {
     this.updatedAt = Date.now();
 });

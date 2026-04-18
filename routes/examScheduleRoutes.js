@@ -7,8 +7,11 @@ const {
     publishExamSchedule
 } = require('../controllers/examScheduleController');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 
 router.post('/', authorize('principal', 'admin'), createExamSchedule);
 router.get('/', authorize('principal', 'admin', 'teacher', 'student'), getExamSchedules);

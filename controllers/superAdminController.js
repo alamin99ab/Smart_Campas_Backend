@@ -11,6 +11,7 @@ const Subscription = require('../models/Subscription');
 const AuditLog = require('../models/AuditLog');
 const Student = require('../models/Student');
 const passwordService = require('../services/passwordResetService');
+const { deleteSchoolService, SchoolDeletionError } = require('../services/schoolDeletionService');
 const { USER_SAFE_RESPONSE_PROJECTION, sanitizeUserForResponse } = require('../utils/safeUserResponse');
 
 const SUBSCRIPTION_PRESETS = {
@@ -509,47 +510,74 @@ exports.updateSchool = async (req, res) => {
 };
 
 exports.deleteSchool = async (req, res) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
-        const school = await School.findById(req.params.id).session(session);
-        if (!school) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(404).json({ success: false, message: 'School not found' });
+        const dryRun = parseBoolean(req.query.dryRun ?? req.body?.dryRun, false);
+        const confirm = parseBoolean(req.query.confirm ?? req.body?.confirm, false);
+        const force = parseBoolean(req.query.force ?? req.body?.force, false);
+        const allowUnsafeWithoutTransaction = parseBoolean(
+            req.query.allowUnsafeWithoutTransaction ?? req.body?.allowUnsafeWithoutTransaction,
+            false
+        );
+        const confirmSchoolCode = `${req.query.confirmSchoolCode ?? req.body?.confirmSchoolCode ?? ''}`.trim().toUpperCase();
+
+        const result = await deleteSchoolService({
+            schoolId: req.params.id,
+            confirm,
+            dryRun,
+            force,
+            allowUnsafeWithoutTransaction,
+            confirmSchoolCode
+        });
+
+        if (!dryRun) {
+            await AuditLog.create({
+                user: req.user?.isEnvBased ? undefined : req.user?._id || undefined,
+                userId: req.user?.isEnvBased ? undefined : req.user?._id || undefined,
+                isEnvUser: Boolean(req.user?.isEnvBased),
+                envUserEmail: req.user?.isEnvBased ? req.user?.email || null : null,
+                action: 'DELETE_SCHOOL',
+                details: {
+                    schoolId: result.school._id,
+                    schoolCode: result.school.schoolCode,
+                    schoolName: result.school.schoolName,
+                    deleted: result.deleted,
+                    summary: result.summary,
+                    warnings: result.warnings,
+                    transactionUsed: result.transactionUsed,
+                    fallbackWithoutTransaction: result.fallbackWithoutTransaction
+                },
+                schoolCode: req.user?.schoolCode || 'SUPER_ADMIN',
+                ip: req.ip,
+                userAgent: req.headers['user-agent']
+            });
         }
 
-        const schoolCode = school.schoolCode;
-        const schoolId = school._id;
-
-        const [userDeleteResult, studentDeleteResult, subscriptionDeleteResult] = await Promise.all([
-            User.deleteMany({ schoolCode }).session(session),
-            Student.deleteMany({ schoolCode }).session(session),
-            Subscription.deleteMany({ schoolId }).session(session)
-        ]);
-
-        await School.deleteOne({ _id: schoolId }).session(session);
-
-        await session.commitTransaction();
-        session.endSession();
-
-        await createAudit(req.user?._id || null, 'DELETE_SCHOOL', { schoolId: req.params.id }, req);
-        res.json({
+        return res.json({
             success: true,
-            message: 'School deleted',
+            message: dryRun ? 'School delete dry-run complete' : 'School deleted with cascade cleanup',
             data: {
-                schoolId,
-                schoolCode,
-                deletedUsers: userDeleteResult.deletedCount || 0,
-                deletedStudents: studentDeleteResult.deletedCount || 0,
-                deletedSubscriptions: subscriptionDeleteResult.deletedCount || 0
-            }
+                schoolId: result.school._id,
+                schoolCode: result.school.schoolCode,
+                schoolName: result.school.schoolName,
+                dryRun: result.dryRun,
+                transactionUsed: result.transactionUsed,
+                fallbackWithoutTransaction: result.fallbackWithoutTransaction,
+                warnings: result.warnings,
+                deleted: result.deleted,
+                summary: result.summary
+            },
+            deleted: result.deleted
         });
     } catch (err) {
-        await session.abortTransaction();
-        session.endSession();
-        res.status(500).json({ success: false, message: err.message });
+        if (err instanceof SchoolDeletionError) {
+            return res.status(err.statusCode).json({
+                success: false,
+                message: err.message,
+                code: err.code
+            });
+        }
+
+        return res.status(500).json({ success: false, message: err.message });
     }
 };
 
@@ -734,6 +762,16 @@ const clampNumber = (value, { min = 1, max = Number.MAX_SAFE_INTEGER, fallback =
 };
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const parseBoolean = (value, fallback = false) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value !== 'string') return fallback;
+
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n'].includes(normalized)) return false;
+    return fallback;
+};
 
 function getMonthWindow(baseDate = new Date()) {
     const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);

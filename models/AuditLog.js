@@ -30,6 +30,15 @@ const auditLogSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.Mixed,
         default: {} 
     },
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
+    schoolCode: {
+        type: String,
+        index: true
+    },
     ip: { 
         type: String 
     },
@@ -48,5 +57,7 @@ const auditLogSchema = new mongoose.Schema({
 
 auditLogSchema.index({ user: 1, createdAt: -1 });
 auditLogSchema.index({ action: 1, createdAt: -1 });
+auditLogSchema.index({ schoolCode: 1, createdAt: -1 });
+auditLogSchema.index({ schoolId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);

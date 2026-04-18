@@ -6,6 +6,11 @@
 const mongoose = require('mongoose');
 
 const routineSchema = new mongoose.Schema({
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
     schoolCode: {
         type: String,
         required: true,
@@ -141,5 +146,6 @@ const routineSchema = new mongoose.Schema({
 
 // Index for efficient queries
 routineSchema.index({ schoolCode: 1, classId: 1, academicYear: 1 });
+routineSchema.index({ schoolId: 1, classId: 1, academicYear: 1 });
 
 module.exports = mongoose.model('Routine', routineSchema);

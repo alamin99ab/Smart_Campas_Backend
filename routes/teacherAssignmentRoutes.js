@@ -9,6 +9,7 @@ const {
     deleteAssignment
 } = require('../controllers/teacherAssignmentController');
 const { protect } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 const allowAssignmentReaders = (req, res, next) => {
     if (!req.user) {
@@ -55,6 +56,8 @@ const allowAssignmentWriters = (req, res, next) => {
 };
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 
 router.post('/', allowAssignmentWriters, assignSubject);
 router.get('/', allowAssignmentReaders, getTeacherAssignments);

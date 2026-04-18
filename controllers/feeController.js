@@ -92,7 +92,7 @@ const safeAudit = async (req, action, details) => {
             user,
             action,
             details,
-            schoolCode: req?.user?.schoolCode,
+            schoolId: req.tenant?.schoolId || req?.user?.schoolId,
             ip: req?.ip,
             userAgent: req?.headers?.['user-agent']
         });
@@ -104,7 +104,11 @@ const safeAudit = async (req, action, details) => {
 const updateStudentTotalDue = async (studentId, schoolCode, session = null) => {
     const fees = await Fee.find({ studentId, schoolCode }).session(session).select('amountDue amountPaid');
     const totalDue = fees.reduce((sum, fee) => sum + computeOutstanding(fee.amountDue, fee.amountPaid), 0);
-    await Student.findByIdAndUpdate(studentId, { totalDue }, { session: session || undefined });
+    await Student.findOneAndUpdate(
+        { _id: studentId, schoolCode },
+        { totalDue },
+        { session: session || undefined }
+    );
     return totalDue;
 };
 
@@ -163,7 +167,7 @@ const resolveStudentByRef = async (studentRef, schoolCode) => {
             const studentQuery = { schoolCode, roll };
 
             if (userDoc.classId) {
-                const classDoc = await Class.findById(userDoc.classId).select('className').lean();
+                const classDoc = await Class.findOne({ _id: userDoc.classId, schoolCode }).select('className').lean();
                 if (classDoc?.className) studentQuery.studentClass = classDoc.className;
             }
             if (userDoc.section) studentQuery.section = userDoc.section;
@@ -283,12 +287,12 @@ const parseFeeType = (value) => {
 };
 
 const applyPaymentAcrossFees = async ({
-    schoolCode, studentId, amount, paymentMethod, transactionId, remarks, actorId, feeId, month, year, session
+    schoolCode, schoolId, studentId, amount, paymentMethod, transactionId, remarks, actorId, feeId, month, year, session
 }) => {
     const payableAmount = toPositive(amount);
     if (payableAmount === null || payableAmount <= 0) throw new Error('Payment amount must be a positive number');
 
-    const query = { schoolCode, studentId };
+    const query = { schoolCode, studentId, ...(schoolId ? { schoolId } : {}) };
     if (feeId) query._id = feeId;
     if (!feeId && month && year) {
         query.month = month;
@@ -310,16 +314,31 @@ const applyPaymentAcrossFees = async ({
 
     let remaining = payableAmount;
     const paymentEntries = [];
+    const feeUpdates = [];
+    
+    // Prepare all updates first
     for (const row of rows) {
         if (remaining <= 0) break;
         const applied = Math.min(remaining, row.outstanding);
-        row.fee.amountPaid = toNumber(row.fee.amountPaid) + applied;
-        row.fee.status = computeStatus(row.fee.amountDue, row.fee.amountPaid);
-        row.fee.updatedBy = actorId;
-        row.fee.updatedAt = new Date();
-        await row.fee.save({ session });
-
-        const docs = await PaymentHistory.create([{
+        
+        const newAmountPaid = toNumber(row.fee.amountPaid) + applied;
+        const newStatus = computeStatus(row.fee.amountDue, newAmountPaid);
+        
+        feeUpdates.push({
+            updateOne: {
+                filter: { _id: row.fee._id },
+                update: {
+                    $set: {
+                        amountPaid: newAmountPaid,
+                        status: newStatus,
+                        updatedBy: actorId,
+                        updatedAt: new Date()
+                    }
+                }
+            }
+        });
+        
+        paymentEntries.push({
             feeId: row.fee._id,
             studentId: row.fee.studentId,
             month: row.fee.month,
@@ -331,18 +350,35 @@ const applyPaymentAcrossFees = async ({
             transactionId: transactionId || undefined,
             remarks: remarks || undefined,
             receivedBy: actorId || undefined,
+            ...(schoolId ? { schoolId } : {}),
             schoolCode
-        }], { session });
-        paymentEntries.push(docs[0]);
+        });
+        
         remaining -= applied;
     }
 
-    return { appliedAmount: payableAmount - remaining, paymentEntries };
+    // Execute all updates atomically within the transaction
+    if (feeUpdates.length > 0) {
+        await Fee.bulkWrite(feeUpdates, { session });
+    }
+    
+    // Create payment history records
+    if (paymentEntries.length > 0) {
+        const docs = await PaymentHistory.create(paymentEntries, { session });
+        return { appliedAmount: payableAmount - remaining, paymentEntries: docs };
+    }
+
+    return { appliedAmount: payableAmount - remaining, paymentEntries: [] };
 };
 
 exports.getFees = async (req, res) => {
     try {
         const { page = 1, limit = 10, studentId, month, year, status } = req.query;
+
+        // Pagination validation and limits
+        const pageNum = Math.max(1, parseInt(page, 10));
+        const limitNum = Math.min(Math.max(1, parseInt(limit, 10)), 100); // Max 100 records
+        const skip = (pageNum - 1) * limitNum;
         const role = req.user?.role;
         const filter = { schoolCode: req.user.schoolCode };
 
@@ -358,7 +394,7 @@ exports.getFees = async (req, res) => {
                     data: {
                         fees: [],
                         summary: { totalAssessed: 0, totalPaid: 0, totalDue: 0 },
-                        pagination: { page: Math.max(toNumber(page, 1), 1), limit: Math.min(Math.max(toNumber(limit, 10), 1), 500), total: 0, pages: 1 }
+                        pagination: { page: pageNum, limit: limitNum, total: 0, pages: 1 }
                     }
                 });
             }
@@ -378,47 +414,45 @@ exports.getFees = async (req, res) => {
                     data: {
                         fees: [],
                         summary: { totalAssessed: 0, totalPaid: 0, totalDue: 0 },
-                        pagination: { page: Math.max(toNumber(page, 1), 1), limit: Math.min(Math.max(toNumber(limit, 10), 1), 500), total: 0, pages: 1 }
+                        pagination: { page: pageNum, limit: limitNum, total: 0, pages: 1 }
                     }
                 });
             }
-
-            if (studentId) {
-                const target = await resolveStudentByRef(studentId, req.user.schoolCode);
-                if (!target || !linkedStudentIds.includes(String(target._id))) {
-                    return sendError(res, 403, 'Access denied', 'FORBIDDEN');
-                }
-                filter.studentId = target._id;
-            } else {
-                filter.studentId = { $in: linkedStudentIds };
+            if (studentId && !linkedStudentIds.includes(String(studentId))) {
+                return sendError(res, 403, 'Access denied', 'FORBIDDEN');
             }
-        } else if (studentId) {
-            filter.studentId = studentId;
+            filter.studentId = { $in: linkedStudentIds };
+        } else if (['principal', 'accountant', 'admin'].includes(role)) {
+            if (studentId) {
+                filter.studentId = studentId;
+            }
+        } else {
+            return sendError(res, 403, 'Access denied', 'FORBIDDEN');
         }
 
         if (month && year) {
-            const period = parsePeriod(month, year);
-            if (!period) return sendError(res, 400, 'Invalid month/year', 'VALIDATION_ERROR');
-            filter.month = period.month;
-            filter.year = period.year;
+            const m = toNumber(month, 0);
+            const y = toNumber(year, 0);
+            if (m >= 1 && m <= 12 && y > 2000) {
+                filter.month = m;
+                filter.year = y;
+            }
         }
+
         if (status) {
-            const normalizedStatus = normalizeStatus(status);
+            const normalizedStatus = normalizeFeeStatus(status);
             if (!normalizedStatus) return sendError(res, 400, 'Invalid status', 'VALIDATION_ERROR');
             filter.status = normalizedStatus;
         }
-
-        const pageNum = Math.max(toNumber(page, 1), 1);
-        const limitNum = Math.min(Math.max(toNumber(limit, 10), 1), 500);
-        const skip = (pageNum - 1) * limitNum;
 
         const [fees, total] = await Promise.all([
             Fee.find(filter)
                 .populate('studentId', 'name roll studentClass section')
                 .sort({ year: -1, month: -1, createdAt: -1 })
                 .skip(skip)
-                .limit(limitNum),
-            Fee.countDocuments(filter)
+                .limit(limitNum)
+                .lean(),
+            Fee.countDocuments(filter).lean()
         ]);
 
         const summary = fees.reduce((acc, fee) => {
@@ -451,6 +485,7 @@ exports.getFees = async (req, res) => {
 exports.updateFee = async (req, res) => {
     const { studentId, month, year, amountDue, amountPaid, paymentMethod, transactionId, remarks } = req.body || {};
     const schoolCode = req.user.schoolCode;
+    const schoolId = req.tenant?.schoolId || req.user?.schoolId;
     const actorId = req.user._id || req.user.id;
     const period = parsePeriod(month, year);
 
@@ -494,6 +529,7 @@ exports.updateFee = async (req, res) => {
                         transactionId: transactionId || undefined,
                         remarks: remarks || undefined,
                         receivedBy: actorId,
+                        ...(schoolId ? { schoolId } : {}),
                         schoolCode
                     }], { session });
                     payment = docs[0];
@@ -506,6 +542,7 @@ exports.updateFee = async (req, res) => {
                     amountDue: due,
                     amountPaid: paid,
                     status: computeStatus(due, paid),
+                    ...(schoolId ? { schoolId } : {}),
                     schoolCode,
                     createdBy: actorId,
                     updatedBy: actorId
@@ -525,6 +562,7 @@ exports.updateFee = async (req, res) => {
                         transactionId: transactionId || undefined,
                         remarks: remarks || undefined,
                         receivedBy: actorId,
+                        ...(schoolId ? { schoolId } : {}),
                         schoolCode
                     }], { session });
                     payment = pdocs[0];
@@ -563,6 +601,7 @@ exports.updateFee = async (req, res) => {
 exports.collectPayment = async (req, res) => {
     const { studentId, amount, paymentMethod, transactionId, remarks, feeId, month, year } = req.body || {};
     const schoolCode = req.user.schoolCode;
+    const schoolId = req.tenant?.schoolId || req.user?.schoolId;
     const actorId = req.user._id || req.user.id;
     if (!studentId) return sendError(res, 400, 'Student ID is required', 'VALIDATION_ERROR');
     const period = (month && year) ? parsePeriod(month, year) : null;
@@ -577,6 +616,7 @@ exports.collectPayment = async (req, res) => {
         try {
             const result = await applyPaymentAcrossFees({
                 schoolCode,
+                schoolId,
                 studentId: student._id,
                 amount,
                 paymentMethod,
@@ -593,7 +633,7 @@ exports.collectPayment = async (req, res) => {
 
             if (result.paymentEntries.length && process.env.SEND_PAYMENT_RECEIPT === 'true') {
                 const latest = result.paymentEntries[result.paymentEntries.length - 1];
-                const fee = await Fee.findById(latest.feeId);
+                const fee = await Fee.findOne({ _id: latest.feeId, schoolCode });
                 await sendReceipt({ student, fee, amount: latest.amount, paymentMethod: latest.paymentMethod });
             }
 
@@ -1271,6 +1311,7 @@ exports.getUnpaidFees = async (req, res) => {
 exports.generateInvoices = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user?.schoolId;
         const classLevel = String(req.body.classLevel || req.body.className || '').trim();
         if (!classLevel) return sendError(res, 400, 'classLevel is required', 'VALIDATION_ERROR');
 
@@ -1331,6 +1372,7 @@ exports.generateInvoices = async (req, res) => {
                     amountDue,
                     amountPaid: 0,
                     status: FEE_STATUS.UNPAID,
+                    ...(schoolId ? { schoolId } : {}),
                     schoolCode,
                     createdBy: req.user._id || req.user.id,
                     updatedBy: req.user._id || req.user.id

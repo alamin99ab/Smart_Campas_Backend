@@ -88,6 +88,24 @@ const advancedRoutineSchema = new mongoose.Schema({
         default: 'regular'
     },
     
+    // Import source tracking
+    source: {
+        type: String,
+        enum: ['manual', 'pdf_import', 'bulk_import'],
+        default: 'manual'
+    },
+    importBatchId: {
+        type: String,
+        index: true
+    },
+    importMetadata: {
+        originalFileName: String,
+        parsedAt: Date,
+        parserVersion: String,
+        parseWarnings: [String],
+        originalData: mongoose.Schema.Types.Mixed // Store original parsed data for audit
+    },
+    
     // Status and validation
     status: {
         type: String,
@@ -172,6 +190,15 @@ advancedRoutineSchema.index({ teacherId: 1, day: 1, startTime: 1 });
 advancedRoutineSchema.index({ roomId: 1, day: 1, startTime: 1 });
 advancedRoutineSchema.index({ classId: 1, sectionId: 1, day: 1 });
 advancedRoutineSchema.index({ status: 1 });
+
+// Additional indexes for import and query optimization
+advancedRoutineSchema.index({ schoolId: 1, classId: 1, sectionId: 1, status: 1 });
+advancedRoutineSchema.index({ schoolId: 1, teacherId: 1, status: 1 });
+advancedRoutineSchema.index({ schoolId: 1, roomId: 1, status: 1 });
+advancedRoutineSchema.index({ importBatchId: 1, status: 1 });
+advancedRoutineSchema.index({ source: 1, status: 1 });
+advancedRoutineSchema.index({ createdAt: -1 });
+advancedRoutineSchema.index({ updatedAt: -1 });
 
 // Pre-save middleware for conflict detection
 advancedRoutineSchema.pre('save', async function() {

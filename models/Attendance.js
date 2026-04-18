@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const attendanceSchema = new mongoose.Schema({
+    schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
     schoolCode: { type: String, required: true, index: true },
     studentClass: { type: String, required: true },
     section: { type: String, required: true },
@@ -18,5 +19,11 @@ const attendanceSchema = new mongoose.Schema({
 
 // One attendance per class/section/date/subject
 attendanceSchema.index({ schoolCode: 1, studentClass: 1, section: 1, date: 1, subject: 1 }, { unique: true });
+attendanceSchema.index(
+    { schoolId: 1, studentClass: 1, section: 1, date: 1, subject: 1 },
+    { unique: true, partialFilterExpression: { schoolId: { $type: 'objectId' } } }
+);
+attendanceSchema.index({ schoolId: 1, date: -1 });
+attendanceSchema.index({ schoolId: 1, 'records.studentId': 1, date: -1 });
 
 module.exports = mongoose.model('Attendance', attendanceSchema);

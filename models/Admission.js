@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const admissionSchema = new mongoose.Schema({
+    schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
     schoolCode: { type: String, required: true, index: true },
     studentName: { type: String, required: true, trim: true },
     dateOfBirth: { type: Date, required: true },
@@ -37,6 +38,7 @@ const admissionSchema = new mongoose.Schema({
 });
 
 admissionSchema.index({ schoolCode: 1, status: 1, createdAt: -1 });
+admissionSchema.index({ schoolId: 1, status: 1, createdAt: -1 });
 admissionSchema.pre('save', function () {
     this.updatedAt = Date.now();
 });

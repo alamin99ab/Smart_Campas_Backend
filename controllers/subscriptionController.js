@@ -580,7 +580,18 @@ exports.getPlanDetails = async (req, res) => {
 // @access  Private
 exports.validateSubscriptionLimits = async (req, res) => {
     try {
-        const { schoolCode, userType, count = 1 } = req.body;
+        const { schoolCode: requestedSchoolCode, userType, count = 1 } = req.body;
+        const schoolCodeRaw = req.user?.role === 'super_admin'
+            ? requestedSchoolCode
+            : (req.tenant?.schoolCode || req.user?.schoolCode);
+        const schoolCode = schoolCodeRaw ? String(schoolCodeRaw).toUpperCase() : null;
+
+        if (!schoolCode) {
+            return res.status(400).json({
+                success: false,
+                message: 'School code is required'
+            });
+        }
 
         const school = await School.findOne({ schoolCode });
         if (!school) {

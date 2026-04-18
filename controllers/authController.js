@@ -91,6 +91,8 @@ const createAuditLog = async (userId, action, details, req) => {
         const logData = {
             action,
             details,
+            schoolId: req?.tenant?.schoolId || req?.user?.schoolId || null,
+            schoolCode: req?.tenant?.schoolCode || req?.user?.schoolCode || null,
             ip: req?.ip,
             userAgent: req?.headers?.['user-agent'],
             deviceId: req?.headers?.['x-device-id'] || null
@@ -1420,8 +1422,11 @@ exports.approveTeacher = async (req, res) => {
             return res.status(403).json({ message: 'Access denied. Principal only.' });
         }
 
-        const teacher = await User.findById(req.params.id);
-        if (!teacher || teacher.schoolCode !== req.user.schoolCode) {
+        const teacher = await User.findOne({
+            _id: req.params.id,
+            schoolCode: req.user.schoolCode
+        });
+        if (!teacher) {
             return res.status(404).json({ message: 'Teacher not found' });
         }
 

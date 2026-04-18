@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const teacherAssignmentSchema = new mongoose.Schema({
+    schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
     schoolCode: { type: String, required: true, index: true },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     subject: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject', required: true },
@@ -18,6 +19,8 @@ const teacherAssignmentSchema = new mongoose.Schema({
 
 teacherAssignmentSchema.index({ schoolCode: 1, teacher: 1, subject: 1, academicYear: 1 });
 teacherAssignmentSchema.index({ schoolCode: 1, subject: 1 });
+teacherAssignmentSchema.index({ schoolId: 1, teacher: 1, subject: 1, academicYear: 1 });
+teacherAssignmentSchema.index({ schoolId: 1, subject: 1 });
 teacherAssignmentSchema.pre('save', function () {
     this.updatedAt = Date.now();
 });

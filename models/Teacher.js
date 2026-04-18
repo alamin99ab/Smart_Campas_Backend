@@ -6,6 +6,11 @@ const teacherSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
     schoolCode: {
         type: String,
         required: true
@@ -32,6 +37,10 @@ const teacherSchema = new mongoose.Schema({
             ref: 'Subject'
         },
         subjectName: String,
+        classId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Class'
+        },
         className: String,
         section: String,
         isPrimary: { type: Boolean, default: false },
@@ -40,6 +49,7 @@ const teacherSchema = new mongoose.Schema({
     }],
     // Class teacher assignment
     classTeacherOf: {
+        classId: { type: mongoose.Schema.Types.ObjectId, ref: 'Class' },
         class: String,
         section: String,
         assignedDate: Date
@@ -99,6 +109,20 @@ const teacherSchema = new mongoose.Schema({
 
 // Pre-save middleware to update updatedAt
 teacherSchema.pre('save', function(next) {
+    if (typeof this.schoolCode === 'string') {
+        this.schoolCode = this.schoolCode.trim().toUpperCase();
+    }
+    (this.subjectAssignments || []).forEach((assignment) => {
+        if (typeof assignment.section === 'string') {
+            assignment.section = assignment.section.trim().toUpperCase();
+        }
+        if (typeof assignment.className === 'string') {
+            assignment.className = assignment.className.trim();
+        }
+    });
+    if (this.classTeacherOf?.section) {
+        this.classTeacherOf.section = this.classTeacherOf.section.trim().toUpperCase();
+    }
     this.updatedAt = Date.now();
     next();
 });
@@ -111,5 +135,11 @@ teacherSchema.pre('save', async function(next) {
     }
     next();
 });
+
+teacherSchema.index({ schoolCode: 1, userId: 1 }, { unique: true });
+teacherSchema.index({ schoolCode: 1, employeeId: 1 }, { unique: true, sparse: true });
+teacherSchema.index({ schoolCode: 1, isActive: 1 });
+teacherSchema.index({ schoolCode: 1, 'subjectAssignments.subjectId': 1, 'subjectAssignments.classId': 1 });
+teacherSchema.index({ schoolCode: 1, 'classTeacherOf.classId': 1 });
 
 module.exports = mongoose.model('Teacher', teacherSchema);

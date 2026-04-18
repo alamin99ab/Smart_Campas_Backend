@@ -71,7 +71,11 @@ const sendSuccess = (res, { status = 200, code = 'REQUEST_SUCCESS', message = 'R
 const updateStudentTotalDue = async (studentId, schoolCode, session = null) => {
     const fees = await Fee.find({ studentId, schoolCode }).session(session).select('amountDue amountPaid');
     const totalDue = fees.reduce((sum, fee) => sum + computeOutstanding(fee.amountDue, fee.amountPaid), 0);
-    await Student.findByIdAndUpdate(studentId, { totalDue }, { session: session || undefined });
+    await Student.findOneAndUpdate(
+        { _id: studentId, schoolCode },
+        { totalDue },
+        { session: session || undefined }
+    );
     return totalDue;
 };
 

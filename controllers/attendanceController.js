@@ -10,6 +10,7 @@ const { sendSMS } = require('../utils/smsService');
 // @access  Private (Teacher/Principal)
 exports.takeAttendance = async (req, res) => {
     const { studentClass, section, date, records, subject } = req.body;
+    const schoolId = req.tenant?.schoolId || req.user?.schoolId;
     
     try {
         // Validation
@@ -29,11 +30,39 @@ exports.takeAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Invalid records format' });
         }
 
+        // Teacher scope validation - ensure teacher can take attendance for this class/subject
+        if (req.user.role === 'teacher') {
+            const TeacherAssignment = require('../models/TeacherAssignment');
+            const assignment = await TeacherAssignment.findOne({
+                teacher: req.user._id,
+                schoolId: req.tenant?.schoolId || req.user?.schoolId,
+                isActive: true,
+                classes: { $in: [mongoose.Types.ObjectId(studentClass)] }
+            });
+            
+            if (!assignment) {
+                return res.status(403).json({ message: 'Access denied: Teacher not assigned to this class' });
+            }
+            
+            // If subject is specified, ensure teacher is assigned to this subject
+            if (subject && assignment.subjects && assignment.subjects.length > 0) {
+                const Subject = require('../models/Subject');
+                const subjectDoc = await Subject.findOne({
+                    subjectName: { $regex: subject, $options: 'i' },
+                    schoolId: req.tenant?.schoolId || req.user?.schoolId
+                });
+                
+                if (subjectDoc && !assignment.subjects.includes(subjectDoc._id)) {
+                    return res.status(403).json({ message: 'Access denied: Teacher not assigned to this subject' });
+                }
+            }
+        }
+
         // Verify students belong to this school/class/section
         const studentIds = records.map(r => r.studentId);
         const students = await Student.find({ 
             _id: { $in: studentIds },
-            schoolCode: req.user.schoolCode,
+            schoolId: req.tenant?.schoolId || req.user?.schoolId,
             studentClass,
             section
         });
@@ -44,7 +73,7 @@ exports.takeAttendance = async (req, res) => {
 
         // Check if attendance already exists
         const existingAttendance = await Attendance.findOne({
-            schoolCode: req.user.schoolCode,
+            schoolId: req.tenant?.schoolId || req.user?.schoolId,
             studentClass,
             section,
             date,
@@ -75,7 +104,7 @@ exports.takeAttendance = async (req, res) => {
 
         // Create new attendance
         const attendance = await Attendance.create({
-            schoolCode: req.user.schoolCode,
+            schoolId: req.tenant?.schoolId || req.user?.schoolId,
             studentClass,
             section,
             date,
@@ -93,6 +122,7 @@ exports.takeAttendance = async (req, res) => {
             if (absentStudents.length > 0) {
                 const absentStudentDetails = await Student.find({ 
                     _id: { $in: absentStudents },
+                    schoolId: req.tenant?.schoolId || req.user?.schoolId,
                     'guardian.phone': { $exists: true }
                 }).select('name guardian');
 
@@ -162,7 +192,7 @@ exports.getAttendanceReport = async (req, res) => {
         }
 
         let query = {
-            schoolCode: req.user.schoolCode,
+            schoolId: req.tenant?.schoolId || req.user?.schoolId,
             studentClass: finalClass,
             section
         };
@@ -587,13 +617,14 @@ exports.deleteAttendance = async (req, res) => {
             return res.status(403).json({ message: 'Access denied. Principal only.' });
         }
 
-        const attendance = await Attendance.findById(req.params.id);
-        
-        if (!attendance || attendance.schoolCode !== req.user.schoolCode) {
+        const attendance = await Attendance.findOneAndDelete({
+            _id: req.params.id,
+            schoolCode: req.user.schoolCode
+        });
+
+        if (!attendance) {
             return res.status(404).json({ message: 'Attendance not found' });
         }
-
-        await attendance.deleteOne();
 
         // Audit log
         await AuditLog.create({

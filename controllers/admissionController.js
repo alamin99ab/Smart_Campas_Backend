@@ -42,11 +42,13 @@ exports.applyAdmission = async (req, res) => {
         }
 
         const schoolCode = req.user?.schoolCode || req.body.schoolCode;
+        const schoolId = req.user?.schoolId || req.tenant?.schoolId || req.body.schoolId || null;
         if (!schoolCode) {
             return res.status(400).json({ success: false, message: 'School code required' });
         }
 
         const admission = await Admission.create({
+            schoolId: schoolId || undefined,
             schoolCode,
             studentName,
             dateOfBirth: new Date(dateOfBirth),
@@ -201,9 +203,15 @@ exports.approveAdmission = async (req, res) => {
 exports.confirmRegistration = async (req, res) => {
     const admissionId = req.params.id;
     try {
+        const schoolCode = req.user?.schoolCode;
+        if (!schoolCode) {
+            return res.status(400).json({ success: false, message: 'School context required' });
+        }
+
         const admission = await Admission.findOne({
             _id: admissionId,
-            status: 'approved'
+            status: 'approved',
+            schoolCode
         });
 
         if (!admission) {
@@ -220,6 +228,7 @@ exports.confirmRegistration = async (req, res) => {
             gender: admission.gender,
             address: admission.address,
             guardian: admission.guardian,
+            schoolId: admission.schoolId || req.user?.schoolId || req.tenant?.schoolId || undefined,
             schoolCode: admission.schoolCode,
             studentId: admission.studentId,
             addedBy: admission.approvedBy

@@ -2,8 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { getNotifications, getUnreadCount, markAsRead, markAllAsRead } = require('../controllers/notificationController');
 const { protect } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 router.get('/', getNotifications);
 router.get('/unread-count', getUnreadCount);
 router.put('/read-all', markAllAsRead);

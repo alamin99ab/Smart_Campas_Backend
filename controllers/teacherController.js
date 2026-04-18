@@ -31,7 +31,7 @@ exports.getTeacherDashboard = async (req, res) => {
 
         // For super_admin, use all data
         const isSuperAdmin = req.user.role === 'super_admin';
-        const filter = isSuperAdmin ? {} : { schoolCode };
+        const filter = isSuperAdmin ? {} : { schoolId: req.tenant?.schoolId || req.user?.schoolId };
 
         // Teacher assignment data is mandatory for a usable dashboard.
         const assignments = await TeacherAssignment.find({
@@ -112,7 +112,8 @@ exports.getTeacherDashboard = async (req, res) => {
             todaySchedule = await Routine.find({
                 ...filter,
                 schedule: { $elemMatch: { day: today, 'periods.teacherId': teacherId } }
-            }).populate('classId', 'className section')
+            }).select('classId schedule')
+              .populate('classId', 'className section')
               .populate('schedule.periods.subjectId', 'subjectName')
               .populate('schedule.periods.teacherId', 'name')
               .lean();
@@ -252,10 +253,12 @@ exports.getAttendanceRecords = async (req, res) => {
         }
 
         const attendanceRecords = await Attendance.find(query)
+            .select('date classId subjectId attendance records')
             .populate('classId', 'className section')
             .populate('subjectId', 'subjectName subjectCode')
             .populate('attendance.studentId', 'name rollNumber email')
-            .sort({ date: -1 });
+            .sort({ date: -1 })
+            .lean();
 
         res.status(200).json({
             success: true,
@@ -299,7 +302,7 @@ exports.inputResults = async (req, res) => {
         }
 
         // Get subject details for validation
-        const subject = await Subject.findById(subjectId);
+        const subject = await Subject.findOne({ _id: subjectId, schoolCode });
         if (!subject) {
             return res.status(404).json({
                 success: false,
@@ -371,10 +374,12 @@ exports.getResults = async (req, res) => {
         if (studentId) query.studentId = studentId;
 
         const results = await Result.find(query)
+            .select('examName examDate totalMarks gpa status classId subjectId studentId subjects')
             .populate('classId', 'className section')
             .populate('subjectId', 'subjectName subjectCode')
             .populate('studentId', 'name rollNumber email')
-            .sort({ examDate: -1 });
+            .sort({ examDate: -1 })
+            .lean();
 
         res.status(200).json({
             success: true,
@@ -645,7 +650,7 @@ exports.getMyClasses = async (req, res) => {
         const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
         const Class = require('../models/Class');
         const classDocs = classIds.length > 0
-            ? await Class.find({ _id: { $in: classIds } }).lean()
+            ? await Class.find({ _id: { $in: classIds }, schoolCode }).lean()
             : [];
 
         const classMap = new Map(classDocs.map((c) => [String(c._id), c]));
@@ -781,7 +786,7 @@ exports.getMySubjects = async (req, res) => {
         const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
         const Class = require('../models/Class');
         const classDocs = classIds.length > 0
-            ? await Class.find({ _id: { $in: classIds } }).lean()
+            ? await Class.find({ _id: { $in: classIds }, schoolCode }).lean()
             : [];
         const classMap = new Map(classDocs.map((c) => [String(c._id), c]));
 

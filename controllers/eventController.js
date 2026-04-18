@@ -8,6 +8,7 @@ exports.createEvent = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Access denied' });
         }
         const schoolCode = req.user.schoolCode;
+        const schoolId = req.tenant?.schoolId || req.user?.schoolId;
         const { title, description, type, startDate, endDate, allDay, location, targetRoles, targetClasses } = req.body;
 
         if (!title || !startDate) {
@@ -15,6 +16,7 @@ exports.createEvent = async (req, res) => {
         }
 
         const event = await SchoolEvent.create({
+            ...(schoolId ? { schoolId } : {}),
             schoolCode,
             title,
             description,

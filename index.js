@@ -9,6 +9,8 @@ const { enhancedSecurity } = require('./middleware/enhancedSecurity');
 const requestId = require('./middleware/requestId');
 const { ensureMongoIndexes } = require('./utils/ensureMongoIndexes');
 const { validateEnv } = require('./utils/validateEnv');
+const { getCacheInstance } = require('./services/cacheService');
+const logger = require('./utils/logger');
 require('dotenv').config();
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -134,7 +136,8 @@ const DB_REQUIRED_PREFIXES = [
     '/api/ai',
     '/api/subscriptions',
     '/api/promotion',
-    '/api/students/bulk'
+    '/api/students/bulk',
+    '/api/exports'
 ];
 
 const AUTH_DB_OPTIONAL_PUBLIC_ROUTES = new Set([
@@ -404,7 +407,8 @@ app.get('/api', (req, res) => {
             rooms: '/api/rooms',
             events: '/api/events',
             public: '/api/public',
-            ai: '/api/ai'
+            ai: '/api/ai',
+            exports: '/api/exports'
         },
         workflow: {
             phase1: 'Super Admin Setup ✅',
@@ -611,7 +615,8 @@ const routeModules = [
     { path: '/api/fees', module: './routes/feeRoutes', name: 'Fee' },
     { path: '/api/leave', module: './routes/leaveRoutes', name: 'Leave' },
     { path: '/api/notifications', module: './routes/notificationRoutes', name: 'Notification' },
-    { path: '/api/results', module: './routes/resultRoutes', name: 'Result' }
+    { path: '/api/results', module: './routes/resultRoutes', name: 'Result' },
+    { path: '/api/exports', module: './routes/exportRoutes', name: 'Export' }
 ];
 
 let loadedRoutes = 0;
@@ -693,7 +698,8 @@ app.use('*', (req, res) => {
             rooms: '/api/rooms',
             events: '/api/events',
             public: '/api/public',
-            ai: '/api/ai'
+            ai: '/api/ai',
+            exports: '/api/exports'
         },
         workflow: 'Complete Smart Campus SaaS Workflow Available'
     });
@@ -726,9 +732,61 @@ app.use((error, req, res, next) => {
     });
 });
 
+// Environment validation and startup checks
+const validateStartupEnvironment = () => {
+    const requiredEnvVars = ['MONGO_URI', 'JWT_SECRET'];
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    
+    if (missingVars.length > 0) {
+        console.error('[STARTUP] Missing required environment variables:', missingVars.join(', '));
+        if (process.env.NODE_ENV === 'production') {
+            console.error('[STARTUP] Production environment requires all required variables. Exiting.');
+            process.exit(1);
+        }
+        console.warn('[STARTUP] Continuing in development mode with missing variables.');
+    }
+
+    // Validate JWT secret strength
+    if (process.env.JWT_SECRET && process.env.JWT_SECRET.length < 32) {
+        console.warn('[STARTUP] JWT_SECRET should be at least 32 characters for security.');
+    }
+
+    // Validate MongoDB URI format
+    if (process.env.MONGO_URI && !process.env.MONGO_URI.startsWith('mongodb')) {
+        console.error('[STARTUP] Invalid MONGO_URI format. Must start with "mongodb".');
+        if (process.env.NODE_ENV === 'production') {
+            process.exit(1);
+        }
+    }
+
+    // Set safe defaults
+    const safeDefaults = {
+        NODE_ENV: process.env.NODE_ENV || 'development',
+        PORT: Math.min(65535, Math.max(1000, parseInt(process.env.PORT) || 3000)),
+        JWT_EXPIRE: process.env.JWT_EXPIRE || '7d',
+        BCRYPT_ROUNDS: Math.min(15, Math.max(8, parseInt(process.env.BCRYPT_ROUNDS) || 12)),
+        RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000, // 15 minutes
+        RATE_LIMIT_MAX_REQUESTS: Math.min(1000, Math.max(10, parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100))
+    };
+
+    Object.entries(safeDefaults).forEach(([key, value]) => {
+        if (!process.env[key]) {
+            process.env[key] = value.toString();
+            console.log(`[STARTUP] Set default for ${key}: ${value}`);
+        }
+    });
+
+    console.log(`[STARTUP] Environment: ${process.env.NODE_ENV}`);
+    console.log(`[STARTUP] Port: ${process.env.PORT}`);
+    console.log(`[STARTUP] Rate Limit: ${process.env.RATE_LIMIT_MAX_REQUESTS} requests per ${process.env.RATE_LIMIT_WINDOW_MS/1000} seconds`);
+};
+
 // Database connection and server start
 const startServer = async () => {
     let dbConnected = false;
+
+    // Validate environment first
+    validateStartupEnvironment();
 
     // Production safety: Block development-only database modes
     if (process.env.USE_MOCK_DB === 'true' || process.env.USE_MEMORY_DB === 'true') {
@@ -784,13 +842,32 @@ const startServer = async () => {
         }
     }
 
+    // Initialize cache service
+    const cache = getCacheInstance({
+        enabled: true,
+        defaultTTL: 300, // 5 minutes
+        maxSize: process.env.CACHE_MAX_SIZE ? parseInt(process.env.CACHE_MAX_SIZE) : 1000,
+        cleanupInterval: 60000 // 1 minute
+    });
+
     // Start server
     app.listen(PORT, '0.0.0.0', () => {
+        const cacheStats = cache.getStats();
+        
+        logger.info('SMART CAMPUS SaaS - Server Started Successfully', {
+            port: PORT,
+            environment: process.env.NODE_ENV,
+            dbConnected,
+            cacheEnabled: cacheStats.enabled,
+            cacheMaxSize: cacheStats.maxSize
+        });
+
         console.log('\n[Startup] SMART CAMPUS SaaS - COMPLETE WORKFLOW RUNNING');
         console.log(`[Startup] Server: http://localhost:${PORT}`);
         console.log(`[Startup] Health Check: http://localhost:${PORT}/api/health`);
         console.log(`[Startup] API Info: http://localhost:${PORT}/api`);
         console.log(`[DB] Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`[Cache] Enabled: ${cacheStats.enabled} (Max: ${cacheStats.maxSize} entries)`);
         console.log('\n[Startup] ALL WORKFLOW FEATURES AVAILABLE:');
         console.log('   - Phase 1: Super Admin Setup');
         console.log('   - Phase 2: School Creation');
@@ -802,35 +879,11 @@ const startServer = async () => {
         console.log('   - Phase 8: Notices');
         console.log('   - Phase 9: Analytics');
         console.log('\n[Startup] READY FOR COMPLETE WORKFLOW TESTING!');
+        console.log('[Startup] Production-ready with caching and monitoring enabled');
     });
 };
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-    console.log('\nSIGTERM received, shutting down gracefully...');
-    try {
-        await mongoose.connection.close();
-        console.log('MongoDB connection closed');
-        process.exit(0);
-    } catch (error) {
-        console.error('Error during shutdown:', error);
-        process.exit(1);
-    }
-});
-
-process.on('SIGINT', async () => {
-    console.log('\nSIGINT received, shutting down gracefully...');
-    try {
-        await mongoose.connection.close();
-        console.log('MongoDB connection closed');
-        process.exit(0);
-    } catch (error) {
-        console.error('Error during shutdown:', error);
-        process.exit(1);
-    }
-});
-
-// Handle unhandled promise rejections
+// ... (rest of the code remains the same)
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });

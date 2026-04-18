@@ -8,9 +8,12 @@ const router = express.Router();
 const studentBulkController = require('../controllers/studentBulkController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { upload } = require('../middleware/uploadMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 // All routes require authentication and principal role
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 router.use(authorize('principal', 'super_admin'));
 
 // File parsing and validation

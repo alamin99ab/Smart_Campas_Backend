@@ -6,6 +6,11 @@
 const mongoose = require('mongoose');
 
 const classSchema = new mongoose.Schema({
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
     schoolCode: {
         type: String,
         required: true,
@@ -85,6 +90,22 @@ const classSchema = new mongoose.Schema({
 
 // Compound index for unique class per school
 classSchema.index({ schoolCode: 1, className: 1, section: 1 }, { unique: true });
+classSchema.index({ schoolCode: 1, isActive: 1, classLevel: 1, section: 1 });
+classSchema.index({ schoolCode: 1, academicYear: 1, isActive: 1 });
+classSchema.index({ schoolId: 1, academicYear: 1, classLevel: 1, section: 1 });
+
+classSchema.pre('validate', function(next) {
+    if (typeof this.schoolCode === 'string') {
+        this.schoolCode = this.schoolCode.trim().toUpperCase();
+    }
+    if (typeof this.className === 'string') {
+        this.className = this.className.trim();
+    }
+    if (typeof this.section === 'string') {
+        this.section = this.section.trim().toUpperCase();
+    }
+    next();
+});
 
 // Virtual for full class name
 classSchema.virtual('fullClassName').get(function() {

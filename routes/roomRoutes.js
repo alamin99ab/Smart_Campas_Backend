@@ -7,8 +7,11 @@ const {
     deleteRoom
 } = require('../controllers/roomController');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 
 router.post('/', authorize('principal', 'admin', 'super_admin'), createRoom);
 router.get('/', authorize('principal', 'admin', 'teacher', 'super_admin'), getRooms);

@@ -4,6 +4,7 @@ const Notification = require('../models/Notification');
 const School = require('../models/School');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
+const { CacheHelpers } = require('../services/cacheService');
 
 const ACTIVE_NOTICE_STATUSES = ['active'];
 
@@ -16,6 +17,23 @@ const normalizeSchoolScope = (req) => {
         schoolId,
         schoolCode: schoolCodeRaw ? String(schoolCodeRaw).toUpperCase() : null
     };
+};
+
+const buildScopedNoticeIdQuery = (req, noticeId, { allowGlobalForTenant = true } = {}) => {
+    if (req.user?.role === 'super_admin') {
+        return { _id: noticeId };
+    }
+
+    const { schoolId } = normalizeSchoolScope(req);
+    if (!schoolId) {
+        return { _id: noticeId, schoolId: null };
+    }
+
+    if (allowGlobalForTenant) {
+        return { _id: noticeId, $or: [{ schoolId }, { isGlobal: true }] };
+    }
+
+    return { _id: noticeId, schoolId };
 };
 
 const toObjectIdStrings = (values = []) =>
@@ -274,6 +292,9 @@ exports.createNotice = async (req, res) => {
             userAgent: req.get('User-Agent')
         });
 
+        // Invalidate cache for notices and dashboard
+        await CacheHelpers.invalidateOnDataChange('notices', schoolId);
+
         res.status(201).json({
             success: true,
             code: 'NOTICE_CREATED',
@@ -311,6 +332,17 @@ exports.getNotices = async (req, res) => {
 
         let { schoolId } = normalizeSchoolScope(req);
         const { schoolCode: tenantSchoolCode } = normalizeSchoolScope(req);
+
+        // Check cache first
+        const cacheParams = { page: pageNum, limit: limitNum, category, priority, isActive };
+        const cachedData = await CacheHelpers.getCachedList('notices', schoolId, cacheParams);
+        if (cachedData) {
+            return res.status(200).json({
+                success: true,
+                ...cachedData,
+                cached: true
+            });
+        }
 
         if (req.user.role === 'super_admin' && schoolCode) {
             const school = await School.findOne({ schoolCode: schoolCode.toUpperCase(), isActive: true }).select('_id');
@@ -413,12 +445,15 @@ exports.getNotices = async (req, res) => {
             schoolCode: tenantSchoolCode
         };
 
+        // Cache the response for 3 minutes
+        await CacheHelpers.cacheList('notices', schoolId, cacheParams, payload, 180);
+
         res.json({
             success: true,
             code: 'NOTICE_LIST_FETCHED',
             message: 'Notices fetched successfully',
             data: payload,
-            ...payload // keep legacy shape
+            cached: false
         });
 
     } catch (error) {
@@ -458,7 +493,7 @@ exports.updateNotice = async (req, res) => {
             isActive
         } = req.body;
 
-        const notice = await Notice.findById(req.params.id);
+        const notice = await Notice.findOne(buildScopedNoticeIdQuery(req, req.params.id, { allowGlobalForTenant: false }));
 
         if (!notice) {
             return res.status(404).json({
@@ -557,7 +592,7 @@ exports.updateNotice = async (req, res) => {
 // @access  Private (Principal/Admin/Owner)
 exports.deleteNotice = async (req, res) => {
     try {
-        const notice = await Notice.findById(req.params.id);
+        const notice = await Notice.findOne(buildScopedNoticeIdQuery(req, req.params.id, { allowGlobalForTenant: false }));
 
         if (!notice) {
             return res.status(404).json({
@@ -775,7 +810,7 @@ exports.archiveExpiredNotices = async (req, res) => {
 // Add missing functions for route imports
 exports.acknowledgeNotice = async (req, res) => {
     try {
-        const notice = await Notice.findById(req.params.id);
+        const notice = await Notice.findOne(buildScopedNoticeIdQuery(req, req.params.id));
         if (!notice) {
             return res.status(404).json({ success: false, message: 'Notice not found' });
         }
@@ -794,7 +829,7 @@ exports.acknowledgeNotice = async (req, res) => {
 exports.addComment = async (req, res) => {
     try {
         const { comment } = req.body;
-        const notice = await Notice.findById(req.params.id);
+        const notice = await Notice.findOne(buildScopedNoticeIdQuery(req, req.params.id));
         
         if (!notice) {
             return res.status(404).json({ success: false, message: 'Notice not found' });
@@ -845,7 +880,7 @@ exports.getNoticeAnalytics = async (req, res) => {
 
 exports.pinNotice = async (req, res) => {
     try {
-        const notice = await Notice.findById(req.params.id);
+        const notice = await Notice.findOne(buildScopedNoticeIdQuery(req, req.params.id, { allowGlobalForTenant: false }));
         if (!notice) {
             return res.status(404).json({ success: false, message: 'Notice not found' });
         }
@@ -980,6 +1015,7 @@ exports.markNoticeAsRead = async (req, res) => {
                 title: 'Notice read',
                 body: `Read notice: ${notice.title}`,
                 type: 'notice',
+                ...(schoolId ? { schoolId } : {}),
                 schoolCode,
                 data: {
                     noticeId: String(id),
@@ -1010,11 +1046,9 @@ exports.markNoticeAsRead = async (req, res) => {
 exports.getNoticeById = async (req, res) => {
     try {
         const { id } = req.params;
-        const schoolId = req.tenant?.schoolId || req.user.schoolId;
+        const notice = await Notice.findOne(buildScopedNoticeIdQuery(req, id));
 
-        const notice = await Notice.findById(id);
-
-        if (!notice || (!notice.isGlobal && notice.schoolId?.toString() !== schoolId?.toString() && req.user.role !== 'super_admin')) {
+        if (!notice) {
             return res.status(404).json({
                 success: false,
                 code: 'NOTICE_NOT_FOUND',

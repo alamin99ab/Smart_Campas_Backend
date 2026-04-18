@@ -7,9 +7,12 @@ const express = require('express');
 const router = express.Router();
 const promotionController = require('../controllers/promotionController');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 // All routes require authentication
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 
 // Principal and Super Admin only
 router.get('/eligible', authorize('principal', 'super_admin'), promotionController.getEligibleStudents);

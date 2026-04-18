@@ -24,6 +24,11 @@ const sectionSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
     schoolCode: {
         type: String,
         required: true
@@ -40,5 +45,6 @@ const sectionSchema = new mongoose.Schema({
 // Index for better performance
 sectionSchema.index({ classId: 1, sectionName: 1 });
 sectionSchema.index({ schoolCode: 1 });
+sectionSchema.index({ schoolId: 1, classId: 1, sectionName: 1 });
 
 module.exports = mongoose.model('Section', sectionSchema);

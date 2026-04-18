@@ -31,6 +31,7 @@ const normalizeSingle = (payload) => {
         type: normalizeType(payload?.type),
         link: payload?.link || null,
         data: payload?.data || {},
+        schoolId: payload?.schoolId || null,
         schoolCode: payload?.schoolCode || null,
         read: payload?.read === true,
         readAt: payload?.readAt || null

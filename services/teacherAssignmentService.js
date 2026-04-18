@@ -104,6 +104,7 @@ const assignTeacherSubjectToClasses = async ({
     if (!schoolCode) {
         throw new AssignmentServiceError(400, 'SCHOOL_SCOPE_REQUIRED', 'School context is required');
     }
+    const schoolId = requester?.schoolId || null;
 
     if (!teacherId || !subjectId) {
         throw new AssignmentServiceError(400, 'VALIDATION_ERROR', 'teacherId and subjectId are required');
@@ -170,6 +171,7 @@ const assignTeacherSubjectToClasses = async ({
                 },
                 {
                     $set: {
+                        ...(schoolId ? { schoolId } : {}),
                         schoolCode,
                         teacher: teacher._id,
                         subject: subject._id,
@@ -356,6 +358,7 @@ const updateTeacherAssignment = async ({
     if (!schoolCode) {
         throw new AssignmentServiceError(400, 'SCHOOL_SCOPE_REQUIRED', 'School context is required');
     }
+    const schoolId = requester?.schoolId || null;
 
     if (!assignmentId || !isValidObjectId(assignmentId)) {
         throw new AssignmentServiceError(400, 'INVALID_ID', 'assignmentId is not a valid ObjectId');
@@ -482,6 +485,9 @@ const updateTeacherAssignment = async ({
             assignment.classes = targetClasses.map((doc) => doc._id);
             assignment.sections = [...new Set(targetClasses.map((doc) => doc.section).filter(Boolean))];
             assignment.academicYear = targetAcademicYear;
+            if (schoolId && !assignment.schoolId) {
+                assignment.schoolId = schoolId;
+            }
 
             if (normalizedPeriods !== undefined) {
                 assignment.periodsPerWeek = normalizedPeriods;

@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const schoolEventSchema = new mongoose.Schema({
+    schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
     schoolCode: { type: String, required: true, index: true },
     title: { type: String, required: true, trim: true, maxlength: 200 },
     description: { type: String, trim: true },
@@ -23,6 +24,7 @@ const schoolEventSchema = new mongoose.Schema({
 });
 
 schoolEventSchema.index({ schoolCode: 1, startDate: 1 });
+schoolEventSchema.index({ schoolId: 1, startDate: 1 });
 schoolEventSchema.pre('save', function () {
     this.updatedAt = Date.now();
 });

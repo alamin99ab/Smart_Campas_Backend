@@ -10,6 +10,9 @@ const userSchema = new mongoose.Schema({
     schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', required: function() { return this.role !== 'super_admin'; } },
     schoolCode: { type: String, required: function() { return this.role !== 'super_admin'; } },
     schoolName: String,
+    studentProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
+    teacherProfileId: { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher' },
+    parentStudentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Student' }],
     phone: String,
     address: String,
     profileImage: String,
@@ -62,6 +65,16 @@ userSchema.pre('save', async function() {
     if (this.isModified('email') && typeof this.email === 'string') {
         this.email = this.email.trim().toLowerCase();
     }
+    if (typeof this.schoolCode === 'string') {
+        this.schoolCode = this.schoolCode.trim().toUpperCase();
+    }
+    if (typeof this.section === 'string') {
+        this.section = this.section.trim().toUpperCase();
+    }
+    if (this.rollNumber !== undefined && this.rollNumber !== null) {
+        this.rollNumber = String(this.rollNumber).trim();
+    }
+    this.updatedAt = Date.now();
 
     if (!this.isModified('password')) return;
     const salt = await bcrypt.genSalt(12);
@@ -71,5 +84,14 @@ userSchema.pre('save', async function() {
 userSchema.methods.comparePassword = async function(candidatePassword) {
     return await bcrypt.compare(candidatePassword, this.password);
 };
+
+userSchema.index({ schoolCode: 1, role: 1, isActive: 1 });
+userSchema.index({ schoolId: 1, role: 1, isActive: 1 });
+userSchema.index({ schoolCode: 1, role: 1, classId: 1, section: 1 });
+userSchema.index({ schoolCode: 1, role: 1, isApproved: 1, isActive: 1 });
+userSchema.index({ 'sessions.token': 1 }, { sparse: true });
+userSchema.index({ resetPasswordToken: 1 }, { sparse: true });
+userSchema.index({ emailVerificationToken: 1 }, { sparse: true });
+userSchema.index({ parentStudentIds: 1 }, { sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

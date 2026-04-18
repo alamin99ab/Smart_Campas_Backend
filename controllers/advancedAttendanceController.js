@@ -626,7 +626,10 @@ exports.getStudentAttendanceReport = async (req, res) => {
             endDate
         );
 
-        const student = await Student.findById(targetStudentId).select('name roll studentClass section');
+        const student = await Student.findOne({
+            _id: targetStudentId,
+            schoolCode: req.user.schoolCode
+        }).select('name roll studentClass section');
 
         const totalStats = (report || []).reduce((acc, month) => ({
             totalDays: acc.totalDays + (month.totalDays || 0),
@@ -740,7 +743,10 @@ exports.getTeacherAttendanceReport = async (req, res) => {
         );
 
         // Get teacher details
-        const teacher = await User.findById(teacherId).select('name email');
+        const teacher = await User.findOne({
+            _id: teacherId,
+            schoolCode: req.user.schoolCode
+        }).select('name email');
 
         res.status(200).json({
             success: true,

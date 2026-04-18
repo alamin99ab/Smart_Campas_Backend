@@ -43,20 +43,20 @@ const writeToFile = (filename, message) => {
     }
 };
 
-// Logger functions
+// Logger functions with cache and performance monitoring
 const logger = {
     error: (message, meta = {}) => {
         const formatted = formatMessage(LOG_LEVELS.ERROR, message, meta);
         console.error(formatted);
         writeToFile('error.log', formatted);
     },
-
+    
     warn: (message, meta = {}) => {
         const formatted = formatMessage(LOG_LEVELS.WARN, message, meta);
         console.warn(formatted);
         writeToFile('warn.log', formatted);
     },
-
+    
     info: (message, meta = {}) => {
         const formatted = formatMessage(LOG_LEVELS.INFO, message, meta);
         console.log(formatted);
@@ -66,25 +66,54 @@ const logger = {
             writeToFile('info.log', formatted);
         }
     },
-
+    
     debug: (message, meta = {}) => {
         if (process.env.NODE_ENV !== 'production') {
             const formatted = formatMessage(LOG_LEVELS.DEBUG, message, meta);
-            console.log(formatted);
+            console.debug(formatted);
+            writeToFile('debug.log', formatted);
         }
     },
 
-    // HTTP request logging
-    http: (message, meta = {}) => {
-        const formatted = formatMessage('HTTP', message, meta);
-        writeToFile('http.log', formatted);
+    // Performance monitoring helpers
+    performance: (operation, duration, meta = {}) => {
+        const message = `Performance: ${operation} completed in ${duration}ms`;
+        logger.info(message, { ...meta, operation, duration });
     },
 
-    // Audit logging for security events
-    audit: (message, meta = {}) => {
-        const formatted = formatMessage('AUDIT', message, meta);
-        console.log(formatted);
-        writeToFile('audit.log', formatted);
+    cache: (operation, key, hit = null, meta = {}) => {
+        const message = `Cache ${operation}: ${key}${hit !== null ? ` (${hit ? 'HIT' : 'MISS'})` : ''}`;
+        logger.debug(message, { ...meta, operation, key, hit });
+    },
+
+    export: (operation, status, meta = {}) => {
+        const message = `Export ${operation}: ${status}`;
+        logger.info(message, { ...meta, operation, status });
+    },
+
+    audit: (action, userId, schoolId, meta = {}) => {
+        const message = `Audit: ${action} by user ${userId} in school ${schoolId}`;
+        logger.info(message, { ...meta, action, userId, schoolId });
+    },
+
+    // Structured error logging for production
+    structuredError: (error, context = {}) => {
+        const errorData = {
+            message: error.message,
+            stack: error.stack,
+            code: error.code,
+            statusCode: error.statusCode,
+            timestamp: new Date().toISOString(),
+            context
+        };
+        
+        // Don't log sensitive data
+        const sanitizedContext = { ...context };
+        delete sanitizedContext.password;
+        delete sanitizedContext.token;
+        delete sanitizedContext.secret;
+        
+        logger.error('Structured Error', errorData);
     }
 };
 

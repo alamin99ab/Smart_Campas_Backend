@@ -6,8 +6,11 @@ const {
     getSubstitutions
 } = require('../controllers/substituteController');
 const { protect, authorize } = require('../middleware/authMiddleware');
+const { ensureTenantIsolation, addSchoolScope } = require('../middleware/multiTenant');
 
 router.use(protect);
+router.use(ensureTenantIsolation);
+router.use(addSchoolScope);
 
 router.post('/assign', authorize('principal', 'admin'), assignSubstitute);
 router.get('/suggest', authorize('principal', 'admin', 'teacher'), suggestSubstitutes);

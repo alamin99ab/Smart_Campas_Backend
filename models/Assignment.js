@@ -85,6 +85,11 @@ const assignmentSchema = new mongoose.Schema({
     }],
     instructions: String,
     submissions: [submissionSchema],
+    schoolId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        index: true
+    },
     schoolCode: {
         type: String,
         required: true,
@@ -108,6 +113,9 @@ const assignmentSchema = new mongoose.Schema({
 assignmentSchema.index({ classId: 1, dueDate: -1 });
 assignmentSchema.index({ teacherId: 1, createdAt: -1 });
 assignmentSchema.index({ schoolCode: 1, isActive: 1 });
+assignmentSchema.index({ schoolId: 1, classId: 1, dueDate: -1 });
+assignmentSchema.index({ schoolId: 1, teacherId: 1, createdAt: -1 });
+assignmentSchema.index({ schoolId: 1, isActive: 1 });
 
 // Update the updatedAt field before saving
 assignmentSchema.pre('save', function(next) {

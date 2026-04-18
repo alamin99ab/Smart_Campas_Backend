@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const paymentHistorySchema = new mongoose.Schema({
+    schoolId: { type: mongoose.Schema.Types.ObjectId, ref: 'School', index: true },
     feeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Fee' },
     studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
     month: { type: Number, required: true },
@@ -17,5 +18,8 @@ const paymentHistorySchema = new mongoose.Schema({
 });
 
 paymentHistorySchema.index({ studentId: 1, createdAt: -1 });
+paymentHistorySchema.index({ schoolCode: 1, studentId: 1, createdAt: -1 });
+paymentHistorySchema.index({ schoolId: 1, studentId: 1, createdAt: -1 });
+paymentHistorySchema.index({ schoolId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('PaymentHistory', paymentHistorySchema);

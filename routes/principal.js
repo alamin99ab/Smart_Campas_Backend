@@ -48,6 +48,7 @@ const examController = require('../controllers/examController');
 // Import middleware
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { ensureTenantIsolation, checkFeatureAccess, addSchoolScope } = require('../middleware/multiTenant');
+const { validate, schemas, validateObjectId } = require('../middleware/validationMiddleware');
 
 // Authentication first, then tenant isolation
 router.use(protect);
@@ -175,11 +176,40 @@ router.patch('/attendance/alerts/:attendanceId/:alertId/acknowledge', acknowledg
  */
 
 // Exam Management
-router.post('/exams', checkFeatureAccess('exam'), examController.createExam);
+router.post('/exams', 
+    validate(schemas.exam.create), 
+    checkFeatureAccess('exam'), 
+    examController.createExam
+);
 router.get('/exams', examController.getExams);
-router.put('/exams/:id', examController.updateExam);
-router.delete('/exams/:id', examController.deleteExam);
-router.post('/exams/:id/publish', examController.publishExamResults);
+router.put('/exams/:id', 
+    validateObjectId('id'), 
+    validate(schemas.exam.update), 
+    examController.updateExam
+);
+router.delete('/exams/:id', 
+    validateObjectId('id'), 
+    examController.deleteExam
+);
+router.post('/exams/:id/publish', 
+    validateObjectId('id'), 
+    examController.publishExamResults
+);
+router.get('/exams/:id/schedules', 
+    validateObjectId('id'), 
+    examController.getExamSchedulesByExam
+);
+router.post('/exams/:id/schedules', 
+    validateObjectId('id'), 
+    checkFeatureAccess('exam'), 
+    examController.upsertExamSchedules
+);
+router.post('/class-tests', 
+    validate(schemas.exam.create), 
+    checkFeatureAccess('exam'), 
+    examController.createClassTest
+);
+router.get('/class-tests', examController.getClassTests);
 
 /**
  * 🔹 PHASE 7: FEES FLOW
