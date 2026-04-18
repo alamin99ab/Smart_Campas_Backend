@@ -41,7 +41,14 @@ function parseAllowedOrigins() {
         .map((o) => o.trim())
         .filter(Boolean);
     const frontendUrl = (process.env.FRONTEND_URL || '').trim();
-    const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
+    const normalizeOrigin = (origin) => {
+        const raw = origin.trim().replace(/^['"]|['"]$/g, '').replace(/\/+$/, '');
+        try {
+            return new URL(raw).origin;
+        } catch (error) {
+            return raw;
+        }
+    };
     const configured = [
         ...fromEnv,
         ...(frontendUrl ? [frontendUrl] : [])

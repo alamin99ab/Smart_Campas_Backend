@@ -31,7 +31,7 @@ router.get('/super-admin', authorize('super_admin'), dashboardController.getSupe
 /**
  * 🏫 Principal Dashboard
  */
-router.get('/principal', authorize('principal'), dashboardController.getPrincipalDashboard);
+router.get('/principal', authorize('principal', 'admin'), dashboardController.getPrincipalDashboard);
 
 /**
  * 👨‍🏫 Teacher Dashboard

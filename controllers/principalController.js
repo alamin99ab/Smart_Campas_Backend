@@ -1595,15 +1595,23 @@ exports.getStudents = async (req, res) => {
     try {
         const schoolCode = req.user.schoolCode;
         const { classId, section } = req.query;
+        const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+        const skip = (page - 1) * limit;
         
         const query = { schoolCode, role: 'student' };
         if (classId) query.classId = classId;
         if (section) query.section = section;
         
-        const students = await User.find(query)
-            .populate('classId', 'className section classLevel')
-            .select(USER_SAFE_RESPONSE_PROJECTION)
-            .sort({ createdAt: -1 });
+        const [students, total] = await Promise.all([
+            User.find(query)
+                .populate('classId', 'className section classLevel')
+                .select(USER_SAFE_RESPONSE_PROJECTION)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit),
+            User.countDocuments(query)
+        ]);
 
         const normalizedStudents = students.map((student) => {
             const studentData = sanitizeUserForResponse(student);
@@ -1617,7 +1625,13 @@ exports.getStudents = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: normalizedStudents
+            data: normalizedStudents,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.max(1, Math.ceil(total / limit))
+            }
         });
     } catch (error) {
         res.status(500).json({

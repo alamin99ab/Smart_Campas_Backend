@@ -61,8 +61,8 @@ router.use(addSchoolScope);
 
 // 👑 Step 3: Principal Login is handled by /api/auth/login (public endpoint), not by tenant-protected internal route
 
-// All other routes require principal authentication
-router.use(authorize('principal'));
+// All other routes require principal/school-admin authentication
+router.use(authorize('principal', 'admin'));
 
 /**
  * 📚 Step 4: Academic Setup

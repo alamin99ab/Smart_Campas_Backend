@@ -9,7 +9,24 @@ const validateEnv = () => {
     const useMemoryDb = process.env.USE_MEMORY_DB === 'true';
     const useMockDb = process.env.USE_MOCK_DB === 'true';
     const allowAllOrigins = process.env.ALLOW_ALL_ORIGINS === 'true';
-    const hasCorsOrigins = Boolean((process.env.ALLOWED_ORIGINS || '').trim() || (process.env.FRONTEND_URL || '').trim());
+    const normalizeOrigin = (origin) => {
+        const raw = origin.trim().replace(/^['"]|['"]$/g, '').replace(/\/+$/, '');
+        try {
+            return new URL(raw).origin;
+        } catch (error) {
+            return raw;
+        }
+    };
+
+    const configuredCorsOrigins = Array.from(new Set([
+        ...(process.env.ALLOWED_ORIGINS || '')
+            .split(',')
+            .map((origin) => origin.trim())
+            .filter(Boolean),
+        (process.env.FRONTEND_URL || '').trim()
+    ].filter(Boolean).map((origin) => normalizeOrigin(origin))));
+    const hasCorsOrigins = configuredCorsOrigins.length > 0;
+    const isLocalOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
     const forceSeedReset = process.env.FORCE_SEED_RESET === 'true' || process.env.AUTO_SEED_RESET_DATA === 'true';
 
     const required = {
@@ -37,6 +54,33 @@ const validateEnv = () => {
         }
         if (!hasCorsOrigins) {
             errors.push('ERROR Set FRONTEND_URL or ALLOWED_ORIGINS for production CORS');
+        }
+        if (hasCorsOrigins && configuredCorsOrigins.every((origin) => isLocalOrigin(origin))) {
+            errors.push('ERROR CORS origins are localhost-only in production. Set FRONTEND_URL/ALLOWED_ORIGINS to your deployed frontend origin(s).');
+        }
+
+        const invalidCorsOrigins = configuredCorsOrigins.filter((origin) => {
+            try {
+                const parsed = new URL(origin);
+                return !['http:', 'https:'].includes(parsed.protocol);
+            } catch (error) {
+                return true;
+            }
+        });
+        if (invalidCorsOrigins.length > 0) {
+            errors.push(`ERROR Invalid CORS origin(s): ${invalidCorsOrigins.join(', ')}`);
+        }
+
+        const insecureRemoteOrigins = configuredCorsOrigins.filter((origin) => {
+            if (isLocalOrigin(origin)) return false;
+            try {
+                return new URL(origin).protocol === 'http:';
+            } catch (error) {
+                return false;
+            }
+        });
+        if (insecureRemoteOrigins.length > 0) {
+            errors.push(`ERROR Non-HTTPS CORS origin(s) in production: ${insecureRemoteOrigins.join(', ')}`);
         }
         if (forceSeedReset) {
             errors.push('ERROR FORCE_SEED_RESET / AUTO_SEED_RESET_DATA cannot be true in production');

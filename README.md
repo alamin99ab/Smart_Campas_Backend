@@ -98,7 +98,7 @@ http://localhost:3001/api
 POST   /auth/login              - User login
 POST   /auth/register           - User registration
 POST   /auth/forgot-password     - Password reset
-POST   /auth/refresh-token      - Refresh JWT token
+POST   /auth/refresh            - Refresh JWT token
 ```
 
 ### User Role Endpoints

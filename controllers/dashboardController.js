@@ -61,35 +61,35 @@ exports.getPrincipalDashboard = async (req, res) => {
             classTrendRows,
             studentTrendRows
         ] = await Promise.all([
-            User.countDocuments({ schoolId, role: 'teacher' }).lean(),
-            User.countDocuments({ schoolId, role: 'student' }).lean(),
-            Class.countDocuments({ schoolCode: normalizedSchoolCode }).lean(),
-            Subject.countDocuments({ schoolCode: normalizedSchoolCode }).lean(),
+            User.countDocuments({ schoolId, role: 'teacher' }),
+            User.countDocuments({ schoolId, role: 'student' }),
+            Class.countDocuments({ schoolCode: normalizedSchoolCode }),
+            Subject.countDocuments({ schoolCode: normalizedSchoolCode }),
             Attendance.aggregate([
                 { $match: { schoolId, date: { $gte: today, $lt: tomorrow } } },
                 { $unwind: '$records' },
                 { $match: { 'records.status': { $in: ['Present', 'Absent', 'Late'] } } },
                 { $group: { _id: '$records.status', count: { $sum: 1 } } }
-            ]).lean(),
+            ]),
             require('../models/ClassRoutine').countDocuments({
                 schoolCode,
                 isPublished: true
-            }).lean(),
-            Notice.countDocuments({ $or: [{ schoolId }, { isGlobal: true }] }).lean(),
+            }),
+            Notice.countDocuments({ $or: [{ schoolId }, { isGlobal: true }] }),
             require('../models/PaymentHistory').aggregate([
                 { $match: { schoolId, createdAt: { $gte: startOfMonth } } },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]).lean(),
+            ]),
             Class.aggregate([
                 { $match: { schoolId, createdAt: { $gte: startOfTrend, $lt: tomorrow } } },
                 { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }, count: { $sum: 1 } } },
                 { $sort: { '_id.year': 1, '_id.month': 1 } }
-            ]).lean(),
+            ]),
             User.aggregate([
                 { $match: { schoolId, role: 'student', createdAt: { $gte: startOfTrend, $lt: tomorrow } } },
                 { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }, count: { $sum: 1 } } },
                 { $sort: { '_id.year': 1, '_id.month': 1 } }
-            ]).lean()
+            ])
         ]);
 
         const attendanceCounts = attendanceStatusRows.reduce((acc, row) => {
@@ -179,7 +179,7 @@ exports.getTeacherDashboard = async (req, res) => {
                 markedBy: teacherId,
                 date: { $gte: today, $lt: tomorrow },
                 attendanceType: 'student'
-            }).lean()
+            })
         ]);
 
         const classIds = [...new Set(assignments.flatMap(a => a.classes || []))];
@@ -223,7 +223,7 @@ exports.getTeacherDashboard = async (req, res) => {
                 const pendingCounts = await Result.aggregate([
                     { $match: { schoolCode, examId: { $in: examIds } } },
                     { $group: { _id: '$examId', count: { $sum: 1 } } }
-                ]).lean();
+                ]);
                 
                 const resultMap = new Map(pendingCounts.map(r => [r._id.toString(), r.count]));
                 
@@ -231,7 +231,7 @@ exports.getTeacherDashboard = async (req, res) => {
                 const studentCounts = await User.aggregate([
                     { $match: { schoolCode, role: 'student', classId: { $in: classIds } } },
                     { $group: { _id: '$classId', count: { $sum: 1 } } }
-                ]).lean();
+                ]);
                 
                 const studentMap = new Map(studentCounts.map(s => [s._id.toString(), s.count]));
                 
@@ -370,7 +370,7 @@ exports.getStudentDashboard = async (req, res) => {
         res.status(200).json({
             success: true,
             data: {
-                attendance: attendance || '—',
+                attendance: attendancePercentage || '—',
                 assignments: assignments || 0,
                 results: results || 0,
                 upcomingExams: upcomingExams || 0,
