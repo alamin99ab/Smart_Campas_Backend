@@ -9,12 +9,13 @@ const {
     publishRoutine,
     checkConflicts,
     autoGenerateRoutine,
-    getDailyRoutine,
-    getWeeklyRoutine,
-    getTeacherRoutine,
-    getStudentRoutine,
-    detectConflicts
+    getDailyRoutine
 } = require('../controllers/routineController');
+const {
+    getWeeklyRoutine,
+    getTeacherSchedule
+} = require('../controllers/advancedRoutineController');
+const { getMyRoutine } = require('../controllers/studentController');
 const {
     uploadAndParseRoutine,
     confirmRoutineImport,
@@ -48,9 +49,9 @@ router.post('/import/confirm',
 
 // Enhanced routine retrieval routes
 router.get('/weekly', getWeeklyRoutine);
-router.get('/teacher/schedule', authorize('teacher'), getTeacherRoutine);
-router.get('/student/schedule', authorize('student'), getStudentRoutine);
-router.post('/detect-conflicts', authorize('principal', 'admin', 'super_admin'), detectConflicts);
+router.get('/teacher/schedule', authorize('teacher'), getTeacherSchedule);
+router.get('/student/schedule', authorize('student'), getMyRoutine);
+router.post('/detect-conflicts', authorize('principal', 'admin', 'super_admin'), checkConflicts);
 
 router.post('/', authorize('principal', 'admin', 'super_admin'), createRoutine);
 router.get('/daily', getDailyRoutine);

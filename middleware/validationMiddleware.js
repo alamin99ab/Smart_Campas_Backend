@@ -9,15 +9,17 @@ const mongoose = require('mongoose');
 /**
  * Common validation patterns
  */
+const objectIdPattern = Joi.string().custom((value, helpers) => {
+    if (!mongoose.Types.ObjectId.isValid(value)) {
+        return helpers.error('objectId.invalid');
+    }
+    return value;
+}, 'ObjectId validation').messages({
+    'objectId.invalid': 'Invalid ID format'
+});
+
 const commonPatterns = {
-    objectId: Joi.string().custom((value, helpers) => {
-        if (!mongoose.Types.ObjectId.isValid(value)) {
-            return helpers.error('objectId.invalid');
-        }
-        return value;
-    }, 'ObjectId validation').messages({
-        'objectId.invalid': 'Invalid ID format'
-    }),
+    objectId: objectIdPattern,
     
     email: Joi.string().email().max(255),
     phone: Joi.string().pattern(/^[+]?[\d\s\-\(\)]+$/).max(20),
@@ -48,7 +50,7 @@ const commonPatterns = {
     array: {
         nonEmpty: Joi.array().min(1),
         optional: Joi.array().optional(),
-        ofObjectIds: Joi.array().items(commonPatterns.objectId)
+        ofObjectIds: Joi.array().items(objectIdPattern)
     }
 };
 

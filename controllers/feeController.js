@@ -491,7 +491,7 @@ exports.updateFee = async (req, res) => {
 
     if (!studentId || !period) return sendError(res, 400, 'studentId, month, and year are required', 'VALIDATION_ERROR');
     const due = toPositive(amountDue);
-    const paid = toPositive(amountPaid);
+    const paid = amountPaid === undefined ? 0 : toPositive(amountPaid);
     if (due === null || paid === null) return sendError(res, 400, 'amountDue and amountPaid must be non-negative', 'VALIDATION_ERROR');
 
     try {

@@ -161,14 +161,17 @@ const makeSchoolQuery = ({ schoolCode, schoolId }) => {
 const normalizeExamPayload = (payload = {}, { partial = false, existing = null } = {}) => {
     const normalized = {};
 
-    const rawName = payload.name ?? payload.examName;
+    const rawName = payload.name ?? payload.examName ?? payload.title;
     if (rawName !== undefined) normalized.name = String(rawName).trim();
 
-    if (payload.description !== undefined) {
-        normalized.description = String(payload.description || '').trim();
+    const rawDescription = payload.description ?? payload.instructions;
+    if (rawDescription !== undefined) {
+        normalized.description = String(rawDescription || '').trim();
     }
 
-    const rawExamType = payload.examType !== undefined ? payload.examType : (!partial ? 'Final' : undefined);
+    const rawExamType = payload.examType !== undefined
+        ? payload.examType
+        : (payload.type !== undefined ? payload.type : (!partial ? 'Final' : undefined));
     if (rawExamType !== undefined) {
         normalized.examType = normalizeExamTypeLabel(rawExamType);
     }
@@ -219,8 +222,8 @@ const normalizeExamPayload = (payload = {}, { partial = false, existing = null }
         normalized.duration = parsePositiveNumber(payload.duration);
     }
 
-    if (payload.totalMarks !== undefined) {
-        normalized.totalMarks = parsePositiveNumber(payload.totalMarks);
+    if (payload.totalMarks !== undefined || payload.maxMarks !== undefined) {
+        normalized.totalMarks = parsePositiveNumber(payload.totalMarks ?? payload.maxMarks);
     }
 
     if (payload.isActive !== undefined) {

@@ -968,7 +968,7 @@ const buildNoticeRows = async (scope, query) => {
     };
 };
 
-const buildFullSummaryRows = async (scope) => {
+const buildFullSchoolSummaryRows = async (scope) => {
     const studentScopeFilter = buildSchoolScopeFilter(scope);
     const userScopeFilter = buildSchoolScopeFilter(scope);
     const classScopeFilter = buildSchoolScopeFilter(scope);
@@ -1187,126 +1187,8 @@ const buildFullSummaryRows = async (scope) => {
                 rows: recentResultRows
             }
         ]
-    });
-}
-
-const [
-    attendanceAgg,
-    resultAgg,
-    feeAgg,
-    paymentAgg,
-    recentStudents,
-    recentTeachers,
-    recentResults
-] = await Promise.all([
-    Attendance.aggregate([
-        { $match: mergeFilters(attendanceScopeFilter, { date: { $gte: startOfTrend } }) },
-        { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]),
-    Result.aggregate([
-        { $match: mergeFilters(resultScopeFilter, { createdAt: { $gte: startOfTrend } }) },
-        {
-            $group: {
-                _id: null,
-                totalResults: { $sum: 1 },
-                publishedResults: { $sum: { $cond: ['$isPublished', 1, 0] } },
-                avgGpa: { $avg: '$gpa' }
-            }
-        }
-    ]),
-    Fee.aggregate([
-        { $match: mergeFilters(feeScopeFilter, { month, year }) },
-        {
-            $group: {
-                _id: null,
-                totalRows: { $sum: 1 },
-                totalDue: { $sum: '$amountDue' },
-                totalPaid: { $sum: '$amountPaid' },
-                totalOutstanding: { $sum: { $max: [0, { $subtract: ['$amountDue', '$amountPaid'] }] } }
-            }
-        }
-    ]),
-    PaymentHistory.aggregate([
-        { $match: mergeFilters(paymentScopeFilter, { month, year }) },
-        {
-            $group: {
-                _id: null,
-                paymentTransactions: { $sum: 1 },
-                paymentCollected: { $sum: '$amount' }
-            }
-        }
-    ]),
-    Student.find(studentScopeFilter)
-        .select('name roll studentClass section createdAt')
-        .sort({ createdAt: -1 })
-        .limit(FULL_SUMMARY_PREVIEW_LIMIT)
-        .lean(),
-    User.find(mergeFilters(userScopeFilter, { role: 'teacher' }))
-        .select('name email phone isActive createdAt')
-        .sort({ createdAt: -1 })
-        .limit(FULL_SUMMARY_PREVIEW_LIMIT)
-        .lean(),
-    Result.find(mergeFilters(resultScopeFilter, { isActive: true }))
-        .select('examName examDate studentClass section totalMarks gpa isPublished')
-        .sort({ examDate: -1, createdAt: -1 })
-        .limit(FULL_SUMMARY_PREVIEW_LIMIT)
-        .lean()
-]);
-
-const attendanceStatusMap = attendanceAgg.reduce((acc, row) => {
-    acc[row._id || 'Unknown'] = row.count;
-    return acc;
-}, {});
-const resultSummary = resultAgg[0] || { totalResults: 0, publishedResults: 0, avgGpa: 0 };
-const feeSummary = feeAgg[0] || { totalRows: 0, totalDue: 0, totalPaid: 0, totalOutstanding: 0 };
-const paymentSummary = paymentAgg[0] || { paymentTransactions: 0, paymentCollected: 0 };
-
-const overviewRows = [
-    { metric: 'Total Students', value: String(studentCount) },
-    { metric: 'Total Teachers', value: String(teacherCount) },
-    { metric: 'Total Classes', value: String(classCount) },
-    { metric: 'Total Sections', value: String(sectionCount) },
-    { metric: 'Total Subjects', value: String(subjectCount) },
-    { metric: 'Active Notices', value: String(noticeCount) },
-    { metric: 'Attendance Records (30 Days)', value: String(Object.values(attendanceStatusMap).reduce((sum, count) => sum + count, 0)) },
-    { metric: 'Results (90 Days)', value: String(resultSummary.totalResults || 0) },
-    { metric: 'Published Results (90 Days)', value: String(resultSummary.publishedResults || 0) },
-    { metric: 'Average GPA (90 Days)', value: Number(resultSummary.avgGpa || 0).toFixed(2) },
-    { metric: `Fee Rows (${monthLabel(month, year)})`, value: String(feeSummary.totalRows || 0) },
-    { metric: `Fee Due (${monthLabel(month, year)})`, value: Number(feeSummary.totalDue || 0).toFixed(2) },
-    { metric: `Fee Paid (${monthLabel(month, year)})`, value: Number(feeSummary.totalPaid || 0).toFixed(2) },
-    { metric: `Fee Outstanding (${monthLabel(month, year)})`, value: Number(feeSummary.totalOutstanding || 0).toFixed(2) },
-    { metric: `Payment Transactions (${monthLabel(month, year)})`, value: String(paymentSummary.paymentTransactions || 0) },
-    { metric: `Payments Collected (${monthLabel(month, year)})`, value: Number(paymentSummary.paymentCollected || 0).toFixed(2) }
-];
-
-const attendanceRows = Object.entries(attendanceStatusMap).map(([status, count]) => ({ status, count }));
-const recentStudentRows = recentStudents.map((student, index) => ({
-    sl: index + 1,
-    name: student.name || '',
-    roll: student.roll || '',
-    class: student.studentClass || '',
-    section: student.section || '',
-    createdAt: formatDate(student.createdAt)
-}));
-const recentTeacherRows = recentTeachers.map((teacher, index) => ({
-    sl: index + 1,
-    name: teacher.name || '',
-    email: teacher.email || '',
-    phone: teacher.phone || '',
-    status: teacher.isActive ? 'Active' : 'Inactive',
-    createdAt: formatDate(teacher.createdAt)
-}));
-const recentResultRows = recentResults.map((result, index) => ({
-    sl: index + 1,
-    exam: result.examName || '',
-    examDate: formatDate(result.examDate),
-    class: result.studentClass || '',
-    section: result.section || '',
-    totalMarks: Number(result.totalMarks || 0),
-    gpa: Number(result.gpa || 0).toFixed(2),
-    state: result.isPublished ? 'Published' : 'Draft'
-}));
+    };
+};
 
 const createExportPayload = async ({ exportType, format, user, tenant, query }) => {
     // Add timeout protection and memory monitoring
